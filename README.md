@@ -9,6 +9,15 @@ patch makes DSpark's persistent draft KV follow request identity instead of
 condensed batch-row position, and adds ragged mixed prefill/decode handling for
 real independent sessions.
 
+<p>
+<a href="https://x.com/MiaAI_lab" target="_blank">
+  <img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" />
+</a>
+</p>
+<p>
+<a href='https://ko-fi.com/Z8Z3SPLOD' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi6.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
+</p>
+
 The current local run profile is configured for:
 
 - `max_model_len=500000`
