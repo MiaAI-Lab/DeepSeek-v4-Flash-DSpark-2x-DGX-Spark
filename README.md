@@ -11,10 +11,10 @@ real independent sessions.
 
 The current local run profile is configured for:
 
-- `max_model_len=1048576`
-- `max_num_seqs=6`
+- `max_model_len=500000`
+- `max_num_seqs=12`
 - `kv_cache_dtype=nvfp4_ds_mla`
-- `gpu_memory_utilization=0.85`
+- `gpu_memory_utilization=0.84`
 - API bind address `127.0.0.1:8888`
 
 This repository also includes the original validated 2026-06-29 1M checkpoint
@@ -24,14 +24,14 @@ It also includes the Keys concurrency checkpoint in
 
 ## Current Profile
 
-The active local `.env.dspark` profile is a 1M-context, 6-sequence
+The active local `.env.dspark` profile is a 500k-context, 12-sequence
 configuration for the same Stage C NVFP4 runtime:
 
 ```env
-MAX_MODEL_LEN=1048576
-MAX_NUM_SEQS=6
+MAX_MODEL_LEN=500000
+MAX_NUM_SEQS=12
 DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c
-VLLM_USE_B12X_WO_PROJECTION=0
+VLLM_USE_B12X_WO_PROJECTION=1
 VLLM_HOST=127.0.0.1
 ```
 
@@ -39,20 +39,20 @@ The rendered vLLM command should include:
 
 ```text
 --kv-cache-dtype nvfp4_ds_mla
---max-model-len 1048576
---max-num-seqs 6
+--max-model-len 500000
+--max-num-seqs 12
 --master-port 25000
 ```
 
-The 6-sequence profile should be treated as an agent-serving target. It keeps a
-full 1M per-request ceiling while allowing six active sequences to share the KV
-pool. If it is unstable under your real workload, use the 500k/4 fallback below
-or reduce `MAX_NUM_SEQS` to `2`.
+The 12-sequence profile should be treated as an agent-serving target. It keeps a
+500k per-request ceiling while allowing twelve active sequences to share the KV
+pool. If it is unstable under your real workload, use the 1M/2 conservative
+profile below or reduce `MAX_NUM_SEQS` to `4`.
 
 > **Important:** The current profile is meant for real deep-context operation:
-> up to **1M tokens per separate session** with `MAX_NUM_SEQS=6`. The KV cache
-> is a shared pool, so six sessions do not each reserve 1M tokens up front.
-> Normal agent sessions can run concurrently while retaining the 1M ceiling for
+> up to **500k tokens per separate session** with `MAX_NUM_SEQS=12`. The KV cache
+> is a shared pool, so twelve sessions do not each reserve 500k tokens up front.
+> Normal agent sessions can run concurrently while retaining the 500k ceiling for
 > unusually long requests.
 
 > **Reported 1M/6 test:** A live 6-way run on the same recipe line reported
@@ -75,7 +75,7 @@ MAX_MODEL_LEN=500000
 MAX_NUM_SEQS=4
 ```
 
-That trades the current 1M/6 profile for lower per-request context and more KV
+That trades the current 500k/12 profile for lower per-request context and more KV
 headroom per active session.
 
 ## Keys Concurrency Patch
@@ -100,7 +100,7 @@ VLLM_USE_B12X_WO_PROJECTION=1
 
 Measured aggregate decode reached `315.1 tok/s` for static C16 and `205.0 tok/s`
 for staggered C16. Those numbers are benchmark evidence for the 200k/16 Keys
-profile, not for the current 1M/6 local profile.
+profile, not for the current 500k/8 local profile.
 
 ## High-Concurrency Mode
 
@@ -126,7 +126,7 @@ What changes:
   path used by the measured high-concurrency run.
 
 Use this mode when aggregate concurrency matters more than 500k/1M context per
-individual session. For deep-context agent work, keep the default 1M/6 profile
+individual session. For deep-context agent work, keep the default 500k/12 profile
 or use the 500k/4 fallback if your workload pushes the KV pool too hard.
 
 After starting the server, you can run the included concurrency probes:
@@ -140,6 +140,18 @@ python3 benchmarks/keys-concurrency/correctness_test.py http://127.0.0.1:8888
 If `VLLM_USE_B12X_WO_PROJECTION=1` is unstable on your runtime, set it back to
 `0` and retest. That is slower in some concurrency cases but usually safer for
 long-context NVFP4 operation.
+
+Changing `VLLM_USE_B12X_WO_PROJECTION` changes the runtime path. After changing
+it in `.env.dspark`, rebuild the runtime image before starting:
+
+```bash
+./build-dspark-vllm-runtime.sh
+./start-deepseek-v4-flash-dspark.sh
+```
+
+You do not need to re-download the model unless the Hugging Face cache is
+missing. On a fresh machine, run `./prepare-dspark-model-cache.sh` before
+starting.
 
 ## Original 1M Checkpoint
 
@@ -200,6 +212,10 @@ reproducible recipe.
 | `prepare-dspark-model-cache.sh` | downloads/verifies the model cache |
 | `start-deepseek-v4-flash-dspark.sh` | preflight checks, worker-first launch, and smoke test |
 | `stop-deepseek-v4-flash-dspark.sh` | stops/removes head and worker DSpark services |
+| `validate-dspark-config.sh` | prints the active env profile and rendered vLLM command |
+| `status-deepseek-v4-flash-dspark.sh` | shows head/worker Compose state, containers, images, port, and API status |
+| `logs-deepseek-v4-flash-dspark.sh` | prints head and worker DSpark logs |
+| `smoke-deepseek-v4-flash-dspark.sh` | runs a configurable concurrent API smoke test |
 | `PLANS.md` | script-hardening scope and validation notes |
 | `patches/keys-concurrency.patch` | vendored Keys DSpark concurrency patch |
 | `benchmarks/keys-concurrency/` | Keys concurrency benchmark scripts |
@@ -224,8 +240,8 @@ NCCL_IB_HCA=rocep1s0f1
 NCCL_SOCKET_IFNAME=enp1s0f1np1
 NCCL_IB_GID_INDEX=0
 HF_CACHE=/home/zurih/.cache/huggingface
-MAX_MODEL_LEN=1048576
-MAX_NUM_SEQS=6
+MAX_MODEL_LEN=500000
+MAX_NUM_SEQS=12
 ```
 
 For high-concurrency serving, use the `200000 / 16` profile described in
@@ -244,6 +260,12 @@ Build the base overlay and Stage C NVFP4 image:
 ./build-dspark-vllm-runtime.sh
 ```
 
+Check the active rendered configuration before launch:
+
+```bash
+./validate-dspark-config.sh
+```
+
 Prepare the model cache:
 
 ```bash
@@ -260,6 +282,25 @@ Stop the service:
 
 ```bash
 ./stop-deepseek-v4-flash-dspark.sh
+```
+
+Inspect status or logs:
+
+```bash
+./status-deepseek-v4-flash-dspark.sh
+./logs-deepseek-v4-flash-dspark.sh
+```
+
+Run a short six-way API smoke test after the server is up:
+
+```bash
+./smoke-deepseek-v4-flash-dspark.sh
+```
+
+Override smoke-test size when needed:
+
+```bash
+CONCURRENCY=3 MAX_TOKENS=16 ./smoke-deepseek-v4-flash-dspark.sh
 ```
 
 The API serves at:
@@ -286,6 +327,10 @@ The helper scripts are intentionally defensive:
   and verifies the worker image before remote cache preparation.
 - `stop-deepseek-v4-flash-dspark.sh` uses the same Compose project and falls
   back to removing Compose-labeled `vllm-dspark` containers on both nodes.
+- `validate-dspark-config.sh`, `status-deepseek-v4-flash-dspark.sh`, and
+  `logs-deepseek-v4-flash-dspark.sh` are read-only helpers.
+- `smoke-deepseek-v4-flash-dspark.sh` only sends OpenAI-compatible test
+  requests to the running API; it does not modify runtime configuration.
 
 ## Runtime Profile
 
@@ -296,16 +341,16 @@ Core vLLM flags for the current local profile:
 - `--nnodes 2`
 - `--kv-cache-dtype nvfp4_ds_mla`
 - `--block-size 256`
-- `--max-model-len 1048576`
-- `--max-num-seqs 6`
+- `--max-model-len 500000`
+- `--max-num-seqs 12`
 - `--max-num-batched-tokens 8192`
-- `--gpu-memory-utilization 0.85`
+- `--gpu-memory-utilization 0.84`
 - `--speculative-config '{"method":"dspark","num_speculative_tokens":5}'`
 
 Key runtime env:
 
 - `VLLM_USE_B12X_MOE=1`
-- `VLLM_USE_B12X_WO_PROJECTION=0`
+- `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_DSPARK_CONFIDENCE_SCHEDULER=off`
 - `VLLM_DSPARK_LOCAL_ARGMAX=1`
 - `VLLM_DSPARK_REPLICATE_MARKOV_W1=1`
@@ -335,7 +380,7 @@ curl -fsS http://127.0.0.1:8888/v1/models
 Confirm the returned model entry reports:
 
 ```json
-"max_model_len": 1048576
+"max_model_len": 500000
 ```
 
 Check logs:
