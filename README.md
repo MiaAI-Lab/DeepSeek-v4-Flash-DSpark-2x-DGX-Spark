@@ -26,11 +26,6 @@ The current local run profile is configured for:
 - `gpu_memory_utilization=0.84`
 - API bind address `0.0.0.0:8888`
 
-This repository also includes the original validated 2026-06-29 1M checkpoint
-evidence in [`benchmarks/20260629-dspark-nvfp4-1m-context-checkpoint.md`](benchmarks/20260629-dspark-nvfp4-1m-context-checkpoint.md).
-It also includes the Keys concurrency checkpoint in
-[`benchmarks/20260629-dspark-keys-concurrency-checkpoint.md`](benchmarks/20260629-dspark-keys-concurrency-checkpoint.md).
-
 ## Current Profile
 
 The active local `.env.dspark` profile is a 1M-context, 6-sequence
