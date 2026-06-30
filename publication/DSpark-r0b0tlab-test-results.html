@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>DSpark-r0b0tlab Test Results</title>
+<style>
+:root { --bg:#070a12; --panel:rgba(16,24,43,.72); --panel2:rgba(26,37,66,.74); --text:#eef6ff; --muted:#9fb0ca; --cyan:#3be7ff; --violet:#9a7cff; --green:#36f2a0; --amber:#ffd166; --red:#ff5b7a; --line:rgba(255,255,255,.14); }
+* { box-sizing:border-box } body { margin:0; color:var(--text); font:15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background: radial-gradient(circle at 18% -10%, rgba(59,231,255,.22), transparent 33%), radial-gradient(circle at 85% 0%, rgba(154,124,255,.27), transparent 31%), linear-gradient(135deg,#05070d,#0d1425 48%,#070a12); min-height:100vh; }
+body:before { content:""; position:fixed; inset:0; pointer-events:none; background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size:52px 52px; mask-image:linear-gradient(to bottom, rgba(0,0,0,.8), transparent 80%); }
+.wrap { max-width:1220px; margin:0 auto; padding:24px 14px 52px; position:relative; }
+.hero { display:grid; grid-template-columns:1fr; gap:16px; align-items:stretch; margin-bottom:18px; }
+.card { border:1px solid var(--line); background:linear-gradient(180deg,var(--panel),rgba(10,15,28,.82)); border-radius:28px; box-shadow:0 24px 80px rgba(0,0,0,.42), inset 0 1px rgba(255,255,255,.06); backdrop-filter: blur(14px); overflow:hidden; }
+.hero-main { padding:22px; position:relative; }
+.kicker { color:var(--cyan); letter-spacing:.18em; text-transform:uppercase; font-weight:800; font-size:12px; }
+h1 { margin:10px 0 12px; font-size:clamp(34px,13vw,76px); line-height:.95; letter-spacing:-.06em; }
+.subtitle { color:#c7d7ef; font-size:18px; max-width:820px; }
+.pillrow { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px } .pill { padding:9px 12px; border:1px solid var(--line); border-radius:999px; background:rgba(255,255,255,.055); color:#dceaff; font-weight:700; }
+.hero-side { padding:16px; display:grid; gap:12px; }
+.bigstat { padding:18px; border-radius:22px; background:linear-gradient(135deg,rgba(59,231,255,.12),rgba(154,124,255,.10)); border:1px solid var(--line); }
+.bigstat .n { font-size:34px; font-weight:900; letter-spacing:-.04em } .bigstat .l { color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.12em; }
+.grid { display:grid; grid-template-columns:1fr; gap:16px; } .span4,.span5,.span7,.span8,.span12{grid-column:1}
+.section { padding:16px; } h2 { margin:0 0 14px; font-size:26px; letter-spacing:-.03em; } h3 { margin:18px 0 8px; font-size:16px; color:#dfeaff } p { color:#c2d0e6; margin:8px 0; }
+.metric { display:flex; align-items:baseline; justify-content:space-between; gap:10px; padding:13px 0; border-bottom:1px solid rgba(255,255,255,.09); } .metric:last-child{border-bottom:0} .metric b{font-size:24px} .metric span{color:var(--muted)}
+table { width:100%; border-collapse:collapse; overflow:hidden; border-radius:18px; min-width:720px; } th,td { padding:12px 12px; border-bottom:1px solid rgba(255,255,255,.09); text-align:left; } th { color:#9fb0ca; font-size:12px; letter-spacing:.12em; text-transform:uppercase; font-weight:800; background:rgba(255,255,255,.04); } td { color:#edf5ff; } tr:hover td { background:rgba(255,255,255,.035); }
+.badge { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; font-size:12px; font-weight:900; letter-spacing:.06em } .pass{color:#062014;background:var(--green)} .fail{color:#fff;background:var(--red)}
+.barrow { display:grid; grid-template-columns:1fr; align-items:center; gap:6px; margin:12px 0; } .barlabel,.barvalue{ color:#b7c6dc; font-size:13px } .bartrack{ height:18px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; border:1px solid rgba(255,255,255,.09)} .bar{height:100%; border-radius:999px; box-shadow:0 0 24px currentColor} .cyan{background:linear-gradient(90deg,#0da4ff,var(--cyan)); color:var(--cyan)} .violet{background:linear-gradient(90deg,#6f65ff,var(--violet)); color:var(--violet)}
+.run { margin:12px 0; padding:14px; border-radius:18px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); } .run-title{font-weight:900;margin-bottom:8px} .mini{display:grid; grid-template-columns:38px 1fr 55px; gap:10px; align-items:center; margin:8px 0} .mini div{height:13px; background:rgba(255,255,255,.08); border-radius:999px; overflow:hidden} .mini i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--violet));border-radius:999px} .mini b{font-size:13px;text-align:right}
+.callout { border-left:4px solid var(--green); padding:14px 16px; background:rgba(54,242,160,.08); border-radius:16px; color:#dfffee } .warn{border-left-color:var(--amber); background:rgba(255,209,102,.08); color:#fff1c8}
+.strict-cards{display:grid;grid-template-columns:1fr;gap:12px}.strict-card{padding:15px;border-radius:20px;background:linear-gradient(135deg,rgba(59,231,255,.10),rgba(154,124,255,.08));border:1px solid rgba(255,255,255,.10)}.strict-card>div{display:flex;justify-content:space-between;align-items:center;gap:10px}.strict-card .depth{font-size:22px;font-weight:950;letter-spacing:-.03em}.strict-card>b{display:block;margin-top:10px;font-size:30px;line-height:1;letter-spacing:-.04em}.strict-card p{margin:4px 0 12px;color:var(--muted)}.strict-card dl{display:grid;grid-template-columns:1fr auto;gap:7px 12px;margin:0}.strict-card dt{color:var(--muted)}.strict-card dd{margin:0;font-weight:800;color:#edf5ff}.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:18px} .code { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; color:#cfe6ff; background:rgba(255,255,255,.055); border:1px solid rgba(255,255,255,.09); border-radius:16px; padding:13px; overflow:auto; }
+.footer { color:#8ea0b8; margin-top:22px; font-size:13px; }
+@media (min-width: 760px) { .strict-cards{grid-template-columns:repeat(3,1fr)} .wrap{padding:44px 26px 70px} .hero{grid-template-columns:1.25fr .75fr; gap:24px; margin-bottom:24px} .hero-main{padding:34px} .hero-side{padding:24px; gap:14px} .section{padding:24px} .grid{grid-template-columns:repeat(12,1fr); gap:18px} .span4{grid-column:span 4} .span5{grid-column:span 5} .span7{grid-column:span 7} .span8{grid-column:span 8} .span12{grid-column:span 12} .barrow{grid-template-columns:190px 1fr 115px; gap:12px} }
+@media print { body{background:white;color:#111} .card{background:white;color:#111;box-shadow:none} p,td{color:#222} th,.muted{color:#555} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <div class="card hero-main">
+      <div class="kicker">DSpark-r0b0tlab · evidence artifact</div>
+      <h1>1M Context Test Results</h1>
+      <p class="subtitle">DSpark-r0b0tlab validation: 1M server profile, strict long-context needle retrieval, throughput smoke tests, 384K publication ladder, and GSM8K smoke quality.</p>
+      <div class="pillrow"><span class="pill">model: deepseek-v4-flash-dspark</span><span class="pill">max_model_len: 1,048,576</span><span class="pill">strict 1M sweep: 3/3 pass</span><span class="pill">NVFP4 KV + DSpark draft head</span></div>
+    </div>
+    <div class="card hero-side">
+      <div class="bigstat"><div class="l">actual prompt proven</div><div class="n">902,922</div></div>
+      <div class="bigstat"><div class="l">1M depth coverage</div><div class="n">10 · 50 · 90%</div></div>
+      <div class="bigstat"><div class="l">KV capacity observed</div><div class="n">3,421,786 tokens</div></div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card section span8">
+      <h2>1M strict retrieval sweep</h2>
+      <p>After tightening the harness to request code-only exact retrieval, DSpark-r0b0tlab passed all tested depths near 903K actual prompt tokens.</p>
+      <div class="strict-cards">
+        <article class="strict-card"><div><span class="depth">10%</span><span class="badge pass">PASS</span></div><b>902,922</b><p>actual prompt tokens</p><dl><dt>Target</dt><dd>1,000,000</dd><dt>Acceptance</dt><dd>0.40</dd><dt>Accepted / draft</dt><dd>2.00</dd><dt>Completion</dt><dd>14 tok</dd><dt>Elapsed</dt><dd>888.3s</dd></dl></article>
+        <article class="strict-card"><div><span class="depth">50%</span><span class="badge pass">PASS</span></div><b>902,920</b><p>actual prompt tokens</p><dl><dt>Target</dt><dd>1,000,000</dd><dt>Acceptance</dt><dd>0.36</dd><dt>Accepted / draft</dt><dd>1.80</dd><dt>Completion</dt><dd>14 tok</dd><dt>Elapsed</dt><dd>882.8s</dd></dl></article>
+        <article class="strict-card"><div><span class="depth">90%</span><span class="badge pass">PASS</span></div><b>902,923</b><p>actual prompt tokens</p><dl><dt>Target</dt><dd>1,000,000</dd><dt>Acceptance</dt><dd>0.40</dd><dt>Accepted / draft</dt><dd>2.00</dd><dt>Completion</dt><dd>14 tok</dd><dt>Elapsed</dt><dd>882.2s</dd></dl></article>
+      </div>
+    </div>
+    <div class="card section span4">
+      <h2>1M runtime</h2>
+      <div class="metric"><span>Server max context</span><b>1,048,576</b></div>
+      <div class="metric"><span>KV memory</span><b>23.89 GiB</b></div>
+      <div class="metric"><span>KV tokens</span><b>3,421,786</b></div>
+      <div class="metric"><span>1M max concurrency</span><b>None</b></div>
+      <div class="metric"><span>Mean strict acceptance</span><b>0.39</b></div>
+      <p class="callout">Evidence-backed claim: ~903K actual-prompt exact-code retrieval passes at 10%, 50%, and 90% depths under the strict-code-only harness.</p>
+    </div>
+
+    <div class="card section span12">
+      <h2>Prompt-token scale</h2>
+      <p>Actual prompt tokens achieved in the 384K repeat and the 1M strict sweep.</p>
+      <div class="barrow"><div class="barlabel">384K / 300K target · d10</div><div class="bartrack"><div class="bar cyan" style="width:30.0%"></div></div><div class="barvalue">270,974 tok</div></div><div class="barrow"><div class="barlabel">384K / 300K target · d50</div><div class="bartrack"><div class="bar cyan" style="width:30.0%"></div></div><div class="barvalue">270,973 tok</div></div><div class="barrow"><div class="barlabel">384K / 300K target · d90</div><div class="bartrack"><div class="bar cyan" style="width:30.0%"></div></div><div class="barvalue">270,975 tok</div></div><div class="barrow"><div class="barlabel">1M strict / 1M target · d10</div><div class="bartrack"><div class="bar violet" style="width:100.0%"></div></div><div class="barvalue">902,922 tok</div></div><div class="barrow"><div class="barlabel">1M strict / 1M target · d50</div><div class="bartrack"><div class="bar violet" style="width:100.0%"></div></div><div class="barvalue">902,920 tok</div></div><div class="barrow"><div class="barlabel">1M strict / 1M target · d90</div><div class="bartrack"><div class="bar violet" style="width:100.0%"></div></div><div class="barvalue">902,923 tok</div></div>
+    </div>
+
+    <div class="card section span5">
+      <h2>1M smoke tests</h2>
+      <div class="metric"><span>c1 aggregate throughput</span><b>59.2 tok/s</b></div>
+      <div class="metric"><span>c1 best draft acceptance</span><b>0.65</b></div>
+      <div class="metric"><span>staggered c2 requests</span><b>2/2 ok, 0 errors</b></div>
+      <div class="metric"><span>staggered c2 aggregate</span><b>70.2 tok/s</b></div>
+      <div class="metric"><span>staggered c2 acceptance</span><b>0.56</b></div>
+      <p class="callout">PASS (no errors, ragged/staggered works)</p>
+    </div>
+
+    <div class="card section span7">
+      <h2>384K publication ladder</h2>
+      <p>Three repeat runs at c1/c2/c4 on the 384K candidate. Best c4 values remained above the original 200K c4 baseline.</p>
+      <div><div class="run"><div class="run-title">Run 1</div><div class="mini"><span>x1</span><div><i style="width:36.5%"></i></div><b>57.8</b></div><div class="mini"><span>x2</span><div><i style="width:55.6%"></i></div><b>88.2</b></div><div class="mini"><span>x4</span><div><i style="width:100.0%"></i></div><b>158.5</b></div></div><div class="run"><div class="run-title">Run 2</div><div class="mini"><span>x1</span><div><i style="width:36.5%"></i></div><b>57.8</b></div><div class="mini"><span>x2</span><div><i style="width:56.5%"></i></div><b>89.5</b></div><div class="mini"><span>x4</span><div><i style="width:90.9%"></i></div><b>144.1</b></div></div><div class="run"><div class="run-title">Run 3</div><div class="mini"><span>x1</span><div><i style="width:35.3%"></i></div><b>55.9</b></div><div class="mini"><span>x2</span><div><i style="width:53.4%"></i></div><b>84.6</b></div><div class="mini"><span>x4</span><div><i style="width:88.8%"></i></div><b>140.7</b></div></div></div>
+      <div class="table-scroll"><table><thead><tr><th>Run</th><th>Concurrency</th><th>Aggregate tok/s</th><th>Tok/s per stream</th><th>Acceptance</th></tr></thead><tbody><tr><td>Run 1</td><td>x1</td><td>57.8</td><td>57.8</td><td>0.629</td></tr><tr><td>Run 1</td><td>x2</td><td>88.2</td><td>44.1</td><td>0.595</td></tr><tr><td>Run 1</td><td>x4</td><td>158.5</td><td>39.6</td><td>0.622</td></tr><tr><td>Run 2</td><td>x1</td><td>57.8</td><td>57.8</td><td>0.639</td></tr><tr><td>Run 2</td><td>x2</td><td>89.5</td><td>44.7</td><td>0.619</td></tr><tr><td>Run 2</td><td>x4</td><td>144.1</td><td>36.0</td><td>0.633</td></tr><tr><td>Run 3</td><td>x1</td><td>55.9</td><td>55.9</td><td>0.613</td></tr><tr><td>Run 3</td><td>x2</td><td>84.6</td><td>42.3</td><td>0.566</td></tr><tr><td>Run 3</td><td>x4</td><td>140.7</td><td>35.2</td><td>0.607</td></tr></tbody></table></div>
+      <p class="callout">c4 repeat range: 140.7–158.5 tok/s aggregate.</p>
+    </div>
+
+    <div class="card section span7">
+      <h2>384K deep-context repeat</h2>
+      <p>300K target, ~271K actual-prompt needle retrieval repeated at 10/50/90% depths.</p>
+      <div class="table-scroll"><table><thead><tr><th>Depth</th><th>Target</th><th>Actual prompt</th><th>Result</th><th>Acceptance</th><th>Accepted / draft</th><th>Elapsed</th></tr></thead><tbody><tr><td>10%</td><td>300,000</td><td>270,974</td><td><span class="badge pass">PASS</span></td><td>0.33</td><td>1.65</td><td>3.5s</td></tr><tr><td>50%</td><td>300,000</td><td>270,973</td><td><span class="badge pass">PASS</span></td><td>0.49</td><td>2.43</td><td>3.2s</td></tr><tr><td>90%</td><td>300,000</td><td>270,975</td><td><span class="badge pass">PASS</span></td><td>0.35</td><td>1.77</td><td>3.6s</td></tr></tbody></table></div>
+    </div>
+
+    <div class="card section span5">
+      <h2>Quality smoke</h2>
+      <div class="metric"><span>GSM8K c1</span><b>50/50</b></div>
+      <div class="metric"><span>GSM8K c4</span><b>49/50</b></div>
+      <div class="metric"><span>c1/c4 agreement</span><b>49/50</b></div>
+      <div class="metric"><span>384K staggered c4</span><b>87.3 tok/s</b></div>
+      <div class="metric"><span>staggered c4 requests</span><b>4/4 ok, 0 errors</b></div>
+      <p class="warn">GSM8K is a 50-item smoke, not full benchmark certification. It is included as corruption/regression evidence.</p>
+    </div>
+
+    <div class="card section span12">
+      <h2>What this artifact does and does not claim</h2>
+      <div class="grid">
+        <div class="span7"><p class="callout">1M serving is operational and all-depth strict exact retrieval passed at ~903K actual prompt tokens. Host capacity and DSpark/NVFP4 native path are validated by the live profile and logs.</p></div>
+        <div class="span5"><p class="warn">This is an evidence report over existing benchmark artifacts, not a canonical suite green. The old explanatory 1M d50 harness failed; the strict-code-only harness is the current passing retrieval criterion.</p></div>
+      </div>
+      <h3>Source artifact IDs</h3>
+      <div class="code">one_million_strict_sweep_20260630_124058<br>one_million_profile_20260630_102324<br>publication_ladder_384k_20260630_093518<br>publication_quality_384k_20260630_093950 / needle_300k_repeat<br>publication_gsm8k_384k_20260630_094051</div>
+      <div class="footer">Generated: 2026-06-30T15:37:28-05:00 · Project: DSpark-r0b0tlab · Static HTML, no external assets.</div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

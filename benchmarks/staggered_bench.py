@@ -5,7 +5,7 @@ delay between each so they overlap at different phases. Measures server-side
 aggregate tok/s + draft acceptance, and verifies every request succeeds (200)."""
 import json, time, urllib.request, sys, re, threading
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://10.100.10.2:8888"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8888"
 N    = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 STAGGER = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
 MODEL = "deepseek-v4-flash-dspark"

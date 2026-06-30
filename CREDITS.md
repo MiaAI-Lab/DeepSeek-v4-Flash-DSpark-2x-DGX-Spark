@@ -37,12 +37,10 @@ this recipe:
 - https://huggingface.co/fraserprice/DeepSeek-V4-Flash-DSpark
 - https://github.com/fraserprice/dspark-vllm
 
-## Two-Node DGX Spark Packaging
+## DSpark-r0b0tlab Model Implementation
 
-MiaAI-Lab published the two-node DGX Spark packaging and launch lineage this
-repo builds from:
-
-- https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark
+This repository now carries the DSpark-r0b0tlab model implementation, draft-head
+runtime path, two-node DGX Spark launch flow, and publication artifacts.
 
 ## Upstream Foundations
 

@@ -12,7 +12,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 DSPARK_VLLM_IMAGE="${DSPARK_VLLM_IMAGE:-vllm-dspark-runtime:dspark-nvfp4-stage-c}"
-DSPARK_BASE_IMAGE="${DSPARK_BASE_IMAGE:-vllm-dspark-runtime:mia-raf-pr1}"
+DSPARK_BASE_IMAGE="${DSPARK_BASE_IMAGE:-vllm-dspark-runtime:dspark-r0b0tlab-overlay}"
 WORKER_BUILD="${WORKER_BUILD:-1}"
 
 "$SCRIPT_DIR/scripts/verify-overlay-sources.sh"

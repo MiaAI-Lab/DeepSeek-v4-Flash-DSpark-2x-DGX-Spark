@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=vllm-dspark-runtime:mia-raf-pr1-nvfp4-a
+ARG BASE_IMAGE=vllm-dspark-runtime:dspark-r0b0tlab-overlay-nvfp4-a
 FROM ${BASE_IMAGE}
 
 RUN /opt/env/bin/python - <<'PY'

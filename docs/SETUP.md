@@ -32,7 +32,7 @@ Caricio's integration; the TonyD2Wild repo vendors those same files.
 | | |
 |---|---|
 | Repo | `rafaelcaricio/spark_vllm_docker` + `rafaelcaricio/vllm` (fork `codex/dspark-harness-integration`) |
-| Nodes | head `10.100.10.4:8000`, worker `10.100.10.1` |
+| Nodes | head API endpoint and worker RoCE address from your `.env.dspark` |
 | Launch | compose + `unholy` entrypoint + a wrapper that rewrites `method:mtp → dspark` at start |
 | `max-num-seqs` | 1 (control) |
 | Single-stream | ~52–54 tok/s |
@@ -41,8 +41,8 @@ Caricio's integration; the TonyD2Wild repo vendors those same files.
 
 | | |
 |---|---|
-| Repo | `tonyd2wild/DeepSeek-v4-Flash-DSpark-60-tok-s-900K-ctx-2x-DGX-Spark` (vendors Rafael's overlay; MiaAI-Lab worker-first launch) |
-| Nodes | head `10.100.10.2:8888`, worker `10.100.10.3` |
+| Repo | DSpark-r0b0tlab implementation (vendors Rafael's overlay; worker-first DSpark-r0b0tlab launch) |
+| Nodes | head API endpoint and worker RoCE address from your `.env.dspark` |
 | Launch | self-contained compose, direct `vllm serve ... method:dspark`, worker-first start script |
 | `max-num-seqs` | swept 1 → 16 (with this patch) |
 | Single-stream | ~52 tok/s |

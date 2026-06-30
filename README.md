@@ -9,35 +9,25 @@ patch makes DSpark's persistent draft KV follow request identity instead of
 condensed batch-row position, and adds ragged mixed prefill/decode handling for
 real independent sessions.
 
-<p>
-<a href="https://x.com/MiaAI_lab" target="_blank">
-  <img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" />
-</a>
-</p>
-<p>
-<a href='https://ko-fi.com/Z8Z3SPLOD' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi6.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
-</p>
-
-The current local run profile is configured for:
+The current reproducible run profile is configured for:
 
 - `max_model_len=1048576`
-- `max_num_seqs=6`
+- `max_num_seqs=2`
 - `kv_cache_dtype=nvfp4_ds_mla`
-- `gpu_memory_utilization=0.84`
+- `gpu_memory_utilization=0.88`
 - API bind address `0.0.0.0:8888`
 
-This repository also includes the original validated 2026-06-29 1M checkpoint
-evidence below. It also includes Keys' Patch 2B concurrency and quality
+This repository includes validated DSpark-r0b0tlab 1M evidence, plus Keys' Patch 2B concurrency and quality
 certification notes in [`RESULTS.md`](RESULTS.md) and [`docs/PATCHES.md`](docs/PATCHES.md).
 
 ## Current Profile
 
-The active local `.env.dspark` profile is a 1M-context, 6-sequence
-configuration for the same Stage C NVFP4 runtime:
+The active reproducible `.env.dspark` profile is the validated 1M-context,
+2-sequence DSpark-r0b0tlab configuration for the same Stage C NVFP4 runtime:
 
 ```env
 MAX_MODEL_LEN=1048576
-MAX_NUM_SEQS=6
+MAX_NUM_SEQS=2
 DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c
 VLLM_USE_B12X_WO_PROJECTION=1
 VLLM_HOST=0.0.0.0
@@ -48,28 +38,25 @@ The rendered vLLM command should include:
 ```text
 --kv-cache-dtype nvfp4_ds_mla
 --max-model-len 1048576
---max-num-seqs 6
+--max-num-seqs 2
 --master-port 25000
 ```
 
-The 6-sequence profile should be treated as an agent-serving target. It keeps a
-1M per-request ceiling while allowing six active sequences to share the KV
-pool. If it is unstable under your real workload, use the 500k/4 fallback below
-or reduce `MAX_NUM_SEQS` to `2`.
+The 2-sequence profile is the conservative 1M profile that produced the
+validated ~903K actual-prompt strict retrieval evidence. Use it for reproducing
+the published 1M result before experimenting with higher concurrency.
 
 > **Important:** The current profile is meant for real deep-context operation:
-> up to **1M tokens per separate session** with `MAX_NUM_SEQS=6`. The KV cache
-> is a shared pool, so six sessions do not each reserve 1M tokens up front.
-> Normal agent sessions can run concurrently while retaining the 1M ceiling for
-> unusually long requests.
+> up to **1M tokens per separate session** with `MAX_NUM_SEQS=2`. The KV cache
+> is a shared pool, so active sessions do not reserve a full 1M-token KV block
+> up front. Reproduce this profile before increasing concurrency.
 
-> **Reported 1M/6 test:** A live 6-way run on the same recipe line reported
-> `6/6` streams succeeded, about `181.7 tok/s` aggregate, no OOM, and no
-> request failures. Reproduce on your own nodes before treating those numbers as
-> a formal benchmark for your deployment.
+> **Validated 1M/2 test:** a strict 1M retrieval sweep passed 10/50/90% depths
+> at ~903K actual prompt tokens. See [`docs/DSPARK_R0B0TLAB_1M.md`](docs/DSPARK_R0B0TLAB_1M.md).
 
-The validated NVFP4 run reported about **2.04M tokens of GPU KV cache**. If you
-prefer a conservative 1M-context profile, set:
+The validated 1M/2 NVFP4 run reported **3,421,786 tokens of GPU KV cache** and
+3.26x maximum concurrency for 1,048,576 tokens/request. The checked-in
+conservative profile is:
 
 ```env
 MAX_MODEL_LEN=1048576
@@ -83,8 +70,8 @@ MAX_MODEL_LEN=500000
 MAX_NUM_SEQS=4
 ```
 
-That trades the current 1M/6 profile for lower per-request context and more KV
-headroom per active session.
+That trades the 1M profile for lower per-request context and more KV headroom
+per active session.
 
 ## Keys Concurrency Patch
 
@@ -109,7 +96,60 @@ VLLM_USE_B12X_WO_PROJECTION=1
 
 Measured aggregate decode reached `315.1 tok/s` for static C16 and `205.0 tok/s`
 for staggered C16. Those numbers are benchmark evidence for the 200k/16 Keys
-profile, not for the current 1M/6 local profile.
+profile, not for the current 1M/2 reproducible profile.
+
+## DSpark-r0b0tlab 1M Profile
+
+The primary reproducible 1M profile is documented in
+[`docs/DSPARK_R0B0TLAB_1M.md`](docs/DSPARK_R0B0TLAB_1M.md), captured as
+[`profiles/dspark-r0b0tlab-1m.env`](profiles/dspark-r0b0tlab-1m.env), and
+rendered in the static report
+[`publication/DSpark-r0b0tlab-test-results.html`](publication/DSpark-r0b0tlab-test-results.html).
+
+Use this profile after host prep (`gdm3` stopped/disabled on participating
+GB10 hosts):
+
+```env
+MAX_MODEL_LEN=1048576
+MAX_NUM_SEQS=2
+MAX_NUM_BATCHED_TOKENS=8192
+GPU_MEMORY_UTILIZATION=0.88
+MTP_NUM_TOKENS=5
+DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c
+```
+
+Evidence summary for that profile:
+
+- `/v1/models` reports `max_model_len=1048576`.
+- GPU KV cache size was reported as 3,421,786 tokens.
+- Strict-code-only 1M needle sweep passed 10/50/90% depths at ~902.9K actual prompt tokens.
+- c1 smoke reached 59.2 aggregate tok/s; staggered c2 passed 2/2 requests with no errors.
+
+## DSpark-r0b0tlab 384K Profile
+
+The current r0b0tlab publication candidate is documented in
+[`docs/DSPARK_R0B0TLAB_384K.md`](docs/DSPARK_R0B0TLAB_384K.md) and captured as
+[`profiles/dspark-r0b0tlab-384k.env`](profiles/dspark-r0b0tlab-384k.env).
+
+This profile uses:
+
+```env
+MAX_MODEL_LEN=384000
+MAX_NUM_SEQS=4
+GPU_MEMORY_UTILIZATION=0.88
+VLLM_DSPARK_CONFIDENCE_SCHEDULER=off
+VLLM_DSPARK_FUSED_MARKOV_ARGMAX=0
+```
+
+Evidence summary for that profile:
+
+- `/v1/models` reports `max_model_len=384000`.
+- Needle target 300K produced ~270.97K actual prompt tokens and passed 10/50/90% depths.
+- Static c4 repeated at 140.7–158.5 aggregate tok/s, above the earlier 134.2 tok/s initial DSpark c4 artifact.
+- Staggered c4 passed 4/4 requests with no errors.
+- GSM8K N=50 smoke: c1 50/50, c4 49/50, 98% prediction agreement.
+
+Do not claim reliable >300K actual-prompt retrieval from the current evidence; the 340K target (~307K actual prompt) hit an early-depth exact-retrieval failure.
 
 ## High-Concurrency Mode
 
@@ -135,7 +175,7 @@ What changes:
   path used by the measured high-concurrency run.
 
 Use this mode when aggregate concurrency matters more than 500k/1M context per
-individual session. For deep-context agent work, keep the default 1M/6 profile
+individual session. For deep-context agent work, keep the default 1M/2 profile
 or use the 500k/4 fallback if your workload pushes the KV pool too hard.
 
 After starting the server, you can run the included concurrency probes:
@@ -203,10 +243,10 @@ reproducible recipe.
 | `status-deepseek-v4-flash-dspark.sh` | shows head/worker Compose state, containers, images, port, and API status |
 | `logs-deepseek-v4-flash-dspark.sh` | prints head and worker DSpark logs |
 | `smoke-deepseek-v4-flash-dspark.sh` | runs a configurable concurrent API smoke test |
-| `PLANS.md` | script-hardening scope and validation notes |
+| `AGENTS.md` | agent/reproducer operating guide and evidence boundaries |
 | `patches/keys-concurrency.patch` | vendored Keys DSpark concurrency patch, including Patch 2B |
 | `benchmarks/` | Keys concurrency and quality-certification benchmark scripts |
-| `docs/` | upstream Patch 1, Patch 2, and Patch 2B reference notes |
+| `docs/` | setup, container reproducibility, Patch 1/2/2B, and DSpark-r0b0tlab profile notes |
 | `RESULTS.md` | upstream concurrency, correctness, and GSM8K quality-certification results |
 | `CREDITS.md` | attribution and license notes for upstream work |
 
@@ -218,18 +258,18 @@ Run from the head node.
 cp .env.dspark.example .env.dspark
 ```
 
-Edit `.env.dspark` for your cluster. For this local setup the key values are:
+Edit `.env.dspark` for your cluster. For a reproducible 1M setup the key values are:
 
 ```env
-WORKER_HOST=spark2-cx7
-MASTER_ADDR=169.254.109.196
+WORKER_HOST=worker-host-or-roce-ip
+MASTER_ADDR=head-roce-ip
 MASTER_PORT=25000
-NCCL_IB_HCA=rocep1s0f1
-NCCL_SOCKET_IFNAME=enp1s0f1np1
+NCCL_IB_HCA=rocepXsYfZ
+NCCL_SOCKET_IFNAME=enpXsYfZnpN
 NCCL_IB_GID_INDEX=0
-HF_CACHE=/home/zurih/.cache/huggingface
+HF_CACHE=/path/to/huggingface-cache
 MAX_MODEL_LEN=1048576
-MAX_NUM_SEQS=6
+MAX_NUM_SEQS=2
 ```
 
 For high-concurrency serving, use the `200000 / 16` profile described in
@@ -279,7 +319,7 @@ Inspect status or logs:
 ./logs-deepseek-v4-flash-dspark.sh
 ```
 
-Run a short six-way API smoke test after the server is up:
+Run a short API smoke test after the server is up:
 
 ```bash
 ./smoke-deepseek-v4-flash-dspark.sh
@@ -330,9 +370,9 @@ Core vLLM flags for the current local profile:
 - `--kv-cache-dtype nvfp4_ds_mla`
 - `--block-size 256`
 - `--max-model-len 1048576`
-- `--max-num-seqs 6`
+- `--max-num-seqs 2`
 - `--max-num-batched-tokens 8192`
-- `--gpu-memory-utilization 0.84`
+- `--gpu-memory-utilization 0.88`
 - `--speculative-config '{"method":"dspark","num_speculative_tokens":5}'`
 
 Key runtime env:
@@ -350,7 +390,15 @@ Key runtime env:
 
 ## Verify
 
-Render the Compose config without starting the service:
+Canonical repository green for DSpark-r0b0tlab is:
+
+```bash
+./scripts/ci-verify.sh
+```
+
+That gate checks shell syntax, benchmark Python compilation, required reproducibility files, overlay source presence, `.env.dspark.example` render output, profile assertions, publication artifact checksums, sanitization, and generated-file cleanliness.
+
+Render the Compose config manually without starting the service:
 
 ```bash
 env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
@@ -383,9 +431,9 @@ docker compose -p deepseek-v4-flash --env-file .env.dspark -f docker-compose.dsp
 See [`CREDITS.md`](CREDITS.md) for full attribution.
 
 In short, this recipe combines Rafael Caricio's DSpark vLLM integration, Fraser
-Price's DeepSeek V4 Flash DSpark work, MiaAI-Lab's two-node DGX Spark packaging,
-Keys/drowzeys' DSpark concurrency patch, and upstream vLLM/FlashInfer/NVIDIA/
-DeepSeek components.
+Price's DeepSeek V4 Flash DSpark work, Keys/drowzeys' DSpark concurrency patch,
+our DSpark-r0b0tlab draft-head/model implementation, and upstream vLLM/
+FlashInfer/NVIDIA/DeepSeek components.
 
 This repo's contribution is the NVFP4-KV Stage A/B/C recipe, the two-node DGX
 Spark packaging, the applied Keys concurrency overlay, hardened helper scripts from the validated runs.

@@ -4,7 +4,7 @@
 if the patch is quality-neutral, accuracy matches AND per-question answers agree."""
 import json, os, re, sys, time, urllib.request, threading
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://10.100.10.2:8888"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8888"
 N    = int(sys.argv[2]) if len(sys.argv) > 2 else 200
 CONC = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 OUT  = sys.argv[4] if len(sys.argv) > 4 else "/tmp/gsm8k_run.json"

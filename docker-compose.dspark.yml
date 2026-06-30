@@ -92,9 +92,9 @@ services:
         --kv-cache-dtype nvfp4_ds_mla
         --block-size 256
         --max-model-len ${MAX_MODEL_LEN:-1048576}
-        --max-num-seqs ${MAX_NUM_SEQS:-1}
+        --max-num-seqs ${MAX_NUM_SEQS:-2}
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
-        --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
+        --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.88}
         --enable-prefix-caching
         --speculative-config '{"method":"dspark","num_speculative_tokens":5}'
         --tokenizer-mode deepseek_v4

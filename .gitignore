@@ -10,3 +10,7 @@ __pycache__/
 vllm-cache/
 /models/
 PLANS.md
+benchmark-results/
+.hermes/
+*.tmp
+/tmp/

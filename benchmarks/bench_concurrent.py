@@ -3,7 +3,7 @@
 per-stream decode tok/s + server-side aggregate tok/s + draft acceptance."""
 import json, time, urllib.request, sys, re, threading
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://10.100.10.2:8888"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8888"
 MODEL= sys.argv[3] if len(sys.argv) > 3 else "deepseek-v4-flash-dspark"
 MAXT = 256
 

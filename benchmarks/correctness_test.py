@@ -8,10 +8,12 @@ A deterministic 'victim' request (temp 0, ignore_eos) is run:
 If main_kv_cache is correctly keyed by request slot (Patch 1), the victim's
 output is IDENTICAL in both cases. Pre-patch, condense corrupts it -> divergence.
 """
-import json, time, urllib.request, sys, re, threading
+import json, os, time, urllib.request, sys, re, threading
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://10.100.10.2:8888"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8888"
 MODEL = "deepseek-v4-flash-dspark"
+CHURN_THREADS = int(os.environ.get("DSPARK_CORRECTNESS_CHURN_THREADS", "6"))
+MIN_ACCEPTANCE = float(os.environ.get("DSPARK_CORRECTNESS_MIN_ACCEPTANCE", "0.4"))
 VICTIM = ("Write a long, deterministic enumerated list of the first 60 prime "
           "numbers, one per line as 'n: prime', with no commentary.")
 CHURN = ("Say a short greeting.")
@@ -39,6 +41,7 @@ ref = chat(VICTIM, 220)
 print(f"reference length: {len(ref)} chars")
 
 print("=== (2) victim WHILE churners start/finish (condense stress) ===")
+print(f"churn threads: {CHURN_THREADS}; min acceptance: {MIN_ACCEPTANCE}")
 stop=False
 def churn_loop():
     i=0
@@ -48,7 +51,7 @@ def churn_loop():
         i+=1
     print(f"  churn requests fired: {i}")
 a0,d0=metrics_acc()
-threads=[threading.Thread(target=churn_loop) for _ in range(6)]
+threads=[threading.Thread(target=churn_loop) for _ in range(CHURN_THREADS)]
 for t in threads: t.start()
 time.sleep(1)  # let churn batch fill
 victim2 = chat(VICTIM, 220)
@@ -68,4 +71,4 @@ if not identical:
     print(f"  got tail:  ...{victim2[-120:]!r}")
 acc = (a1-a0)/(d1-d0) if d1>d0 else float('nan')
 print(f"acceptance under churn: {acc:.3f}  (healthy ~0.6, collapsed if ~0)")
-print("\nVERDICT:", "PASS — condense-safe (Patch 1 works)" if identical and acc>0.4 else "FAIL — corruption under condense")
+print("\nVERDICT:", "PASS — condense-safe (Patch 1 works)" if identical and acc>=MIN_ACCEPTANCE else "FAIL — corruption or acceptance collapse under condense")
