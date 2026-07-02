@@ -1,17 +1,17 @@
 # DeepSeek V4 Flash DSpark C12 NVFP4 KV on 2x DGX Spark
 
 Self-contained two-node DGX Spark recipe for serving `DeepSeek-V4-Flash-DSpark`
-with vLLM TP=2, DSpark speculative decoding, and a 1.5M-token max model length
+with vLLM TP=2, DSpark speculative decoding, and a 1M-token max model length
 using the experimental `nvfp4_ds_mla` KV-cache path.
 
 This repo captures the validated Stage C NVFP4 runtime, the 2026-06-30
 agent-stability refresh, and the 2026-07-02 Keys C12 checkpoint:
 
-- `max_model_len=1500000`
+- `max_model_len=1000000`
 - `max_num_seqs=12`
 - `kv_cache_dtype=nvfp4_ds_mla`
 - reported KV pool: `3,225,280 tokens`
-- reported max concurrency for 1.5M requests: `2.15x`
+- configured active sequence slots: `12`
 - single-stream decode stayed above `50 tok/s`
 - deterministic direct prompts completed with no Chinese drift or repeated junk
 - 2/4/6/12 concurrent code-gate prompts completed cleanly
@@ -26,7 +26,7 @@ profile; it does not switch production to fp8 or a smaller fallback model.
 
 ## Result
 
-### 2026-07-02 Keys C12 1.5M NVFP4 Checkpoint
+### 2026-07-02 Keys C12 NVFP4 Checkpoint
 
 The current high-concurrency lane keeps Tony's known-good Stage C NVFP4 image
 and applies Keys' C12 serving profile.
@@ -38,7 +38,7 @@ Runtime:
 - image: `vllm-dspark-runtime:dspark-nvfp4-stage-c`
 - model path: `/cache/huggingface/fraserprice/DeepSeek-V4-Flash-DSpark`
 - `kv_cache_dtype=nvfp4_ds_mla`
-- `max_model_len=1500000`
+- `max_model_len=1000000`
 - `max_num_seqs=12`
 - `max_num_batched_tokens=8192`
 - `gpu_memory_utilization=0.85`
@@ -53,7 +53,7 @@ Boot evidence:
 
 ```text
 GPU KV cache size: 3,225,280 tokens
-Maximum concurrency for 1,500,000 tokens per request: 2.15x
+Maximum concurrency for 1,000,000 tokens per request: ~3.2x
 Application startup complete.
 ```
 
@@ -449,7 +449,7 @@ NCCL_SOCKET_IFNAME=enp1s0f1np1
 Keep these agent-serving defaults unless you are deliberately experimenting:
 
 - `VLLM_HOST=0.0.0.0` if Hermes/OpenClaw or another machine must reach the API
-- `MAX_MODEL_LEN=1500000`
+- `MAX_MODEL_LEN=1000000`
 - `MAX_NUM_SEQS=12`
 - `GPU_MEMORY_UTILIZATION=0.85`
 - `MTP_NUM_TOKENS=5`
@@ -500,7 +500,7 @@ Core vLLM flags:
 - `--nnodes 2`
 - `--kv-cache-dtype nvfp4_ds_mla`
 - `--block-size 256`
-- `--max-model-len 1500000`
+- `--max-model-len 1000000`
 - `--max-num-seqs 12`
 - `--max-num-batched-tokens 8192`
 - `--gpu-memory-utilization 0.85`
@@ -559,7 +559,7 @@ curl -fsS http://127.0.0.1:8888/v1/models
 Confirm the returned model entry reports:
 
 ```json
-"max_model_len": 1500000
+"max_model_len": 1000000
 ```
 
 Then check logs:
@@ -573,7 +573,7 @@ Expected C12 checkpoint values are around:
 
 ```text
 GPU KV cache size: 3.2M tokens
-Maximum concurrency for 1,500,000 tokens per request: 2.1x
+Maximum concurrency for 1,000,000 tokens per request: ~3.2x
 ```
 
 Before pointing an agent harness at the endpoint, run the direct sanity bench:
@@ -601,8 +601,8 @@ scripts/capture_runtime.sh runtime-after-change
 - The high-concurrency benchmark is aggregate throughput and was validated at
   `max_model_len=200000`, not full 1M context.
 - Full context and high concurrency compete for the same KV pool. The C12
-  1.5M profile is intended for normal agent traffic where most sessions sit far
-  below the 1.5M ceiling; it is not twelve simultaneous full-1.5M requests.
+  1M profile is intended for normal agent traffic where most sessions sit far
+  below the 1M ceiling; it is not twelve simultaneous full-1M requests.
 - To combine DSpark concurrency with longer context, pick a lower context
   target first, then raise concurrency slowly while watching boot logs, KV
   allocation, acceptance, and request errors.
@@ -612,7 +612,7 @@ scripts/capture_runtime.sh runtime-after-change
 - The measured probes were p256/p512 with g64/g256. Rebenchmark if you change
   sampling, batching, context length, WO projection, compressed MLA, or the
   confidence scheduler.
-- The current validated agent-serving profile is `MAX_MODEL_LEN=1500000`,
+- The current configured agent-serving profile is `MAX_MODEL_LEN=1000000`,
   `MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`,
   `MTP_NUM_TOKENS=5`, `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`,
   `VLLM_USE_B12X_WO_PROJECTION=1`, deterministic generation overrides, and
