@@ -3,6 +3,20 @@
 This repo combines several public efforts. Please credit the upstream authors
 when reusing the recipe, the patch, or benchmark numbers.
 
+## Special Thanks
+
+**[drowzeys ("Keys")](https://github.com/drowzeys/)** — special thanks for
+publishing the work that made real DSpark concurrency possible on DGX Spark.
+Keys' public repos and patches provided:
+
+- the in-server DSpark concurrency patch used in this overlay
+- request-stable DSpark main-KV slot mapping for `max_num_seqs > 1`
+- ragged `query_start_loc` handling for mixed prefill/decode batches
+- early `nvfp4_ds_mla` KV-cache recipe wiring on Spark hardware
+
+This repo's concurrency results, overlay proposer, and NVFP4 launch path all
+depend directly on that contribution.
+
 ## DSpark Concurrency Patch
 
 The in-server DSpark concurrency breakthrough comes from Keys / drowzeys:
@@ -52,11 +66,19 @@ This work also relies on:
 - DeepSeek V4 Flash
 - DeepSeek-AI DeepSpec / DSpark speculative decoding research
 
-## TonyD2Wild Contribution
+## TonyD2Wild NVFP4 Recipe Lineage
 
-This repo contributes the validated 2x DGX Spark NVFP4-KV recipe, Stage A/B/C
-runtime packaging, sanitized two-node launch flow, application of Keys'
-concurrency patch to the NVFP4 profile, and benchmark artifacts from the
+TonyD2Wild's public NVFP4 recipe work informed this fork's garble-fix launcher
+defaults, runtime documentation, and the non-uniform batch guard merged into the
+bind-mounted `dspark_proposer.py`.
+
+- https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark
+
+## MiaAI-Lab Contribution
+
+MiaAI-Lab maintains this fork's validated 2x DGX Spark NVFP4-KV recipe, Stage
+A/B/C runtime packaging, sanitized two-node launch flow, Keys concurrency patch
+integration, runtime proposer bind-mount, and benchmark artifacts from the
 validated runs.
 
 ## License Notes
