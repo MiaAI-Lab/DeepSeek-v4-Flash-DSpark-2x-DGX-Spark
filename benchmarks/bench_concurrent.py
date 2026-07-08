@@ -4,7 +4,7 @@ per-stream decode tok/s + server-side aggregate tok/s + draft acceptance."""
 import json, time, urllib.request, sys, re, threading
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://10.100.10.2:8888"
-MODEL= sys.argv[3] if len(sys.argv) > 3 else "deepseek-v4-flash-dspark"
+MODEL= sys.argv[3] if len(sys.argv) > 3 else "MiMo-V2.5-NVFP4"
 MAXT = 256
 
 PROMPT = ("Complete this Python module with many conventional CRUD methods, "

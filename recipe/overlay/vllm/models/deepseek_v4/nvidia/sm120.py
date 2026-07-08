@@ -315,6 +315,7 @@ class DeepseekV4SM120SparseImpl(DeepseekV4SparseMLAAttentionImpl):
                     attn_metadata.block_table[:num_decodes],
                     block_size,
                     is_valid,
+                    kv_cache.shape[0],
                 )
                 topk_indices = global_indices.view(num_decode_tokens, 1, -1)
             else:
@@ -447,6 +448,7 @@ class DeepseekV4SM120SparseImpl(DeepseekV4SparseMLAAttentionImpl):
                 attn_metadata.block_table,
                 block_size,
                 swa_metadata.is_valid_token[prefill_token_slice],
+                compressed_k_cache.shape[0],
             )
 
         assert swa_metadata.prefill_swa_indices is not None

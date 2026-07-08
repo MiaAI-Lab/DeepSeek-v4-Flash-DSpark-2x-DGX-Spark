@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-gb10-hybrid-nvfp4"
+version = "0.1.0"
+description = "Experimental GB10/sm_121 NVFP4 vLLM quantization plugin: Marlin for small-M decode, CUTLASS W4A4 for large-M prefill."
+requires-python = ">=3.10"
+
+[project.entry-points."vllm.general_plugins"]
+gb10_hybrid_nvfp4 = "vllm_gb10_hybrid_nvfp4:register"
+
+[tool.setuptools.packages.find]
+include = ["vllm_gb10_hybrid_nvfp4*"]

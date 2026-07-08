@@ -10,6 +10,9 @@ CHAT_URL="${CHAT_URL:-http://127.0.0.1:8888/v1/chat/completions}"
 WAIT_ATTEMPTS="${WAIT_ATTEMPTS:-100}"
 WAIT_SECONDS="${WAIT_SECONDS:-15}"
 PORT="${PORT:-8888}"
+ENABLE_VLLM_GB10_PATCH="${ENABLE_VLLM_GB10_PATCH:-0}"
+VLLM_GB10_PATCH_DIR="${VLLM_GB10_PATCH_DIR:-$SCRIPT_DIR/vllm_patch_gb10}"
+DSPARK_PROPOSER_FILE="${DSPARK_PROPOSER_FILE:-$SCRIPT_DIR/recipe/vllm/v1/spec_decode/dspark_proposer.py}"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing $ENV_FILE. Copy .env.dspark.example to .env.dspark and edit node-specific values." >&2
@@ -40,6 +43,7 @@ WORKER_HF_CACHE="${WORKER_HF_CACHE:-${HF_CACHE:-}}"
 REMOTE_WORKER_DIR="$(printf '%q' "$WORKER_DIR")"
 REMOTE_COMPOSE_FILE="$REMOTE_WORKER_DIR/docker-compose.dspark.yml"
 REMOTE_ENV_FILE="$REMOTE_WORKER_DIR/.env.dspark"
+REMOTE_VLLM_GB10_PATCH_DIR="$REMOTE_WORKER_DIR/vllm_patch_gb10"
 REMOTE_COMPOSE="cd $REMOTE_WORKER_DIR && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS COMPOSE_DISABLE_ENV_FILE=1"
 STARTUP_LOG_SINCE=""
 
@@ -59,6 +63,9 @@ compose_base() {
     NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME" \
     NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX:-}" \
     VLLM_HOST_IP="$VLLM_HOST_IP" \
+    ENABLE_VLLM_GB10_PATCH="$ENABLE_VLLM_GB10_PATCH" \
+    VLLM_GB10_PATCH_DIR="$VLLM_GB10_PATCH_DIR" \
+    GB10_HYBRID_NVFP4_M_THRESHOLD="${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}" \
     NODE_RANK="$1" \
     HEADLESS="$2" \
     docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "${@:3}"
@@ -123,19 +130,39 @@ print_resolved_profile() {
   echo "  worker host/ip: $WORKER_HOST / $WORKER_VLLM_HOST_IP"
   echo "  worker dir: $WORKER_DIR"
   echo "  worker cache: ${WORKER_HF_CACHE:-${HF_CACHE:-}}"
+  echo "  GB10 vLLM patch: $ENABLE_VLLM_GB10_PATCH"
+  if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
+    echo "  GB10 vLLM patch dir: $VLLM_GB10_PATCH_DIR"
+    echo "  GB10 hybrid NVFP4 M threshold: ${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}"
+  fi
 }
 
 validate_compose() {
   echo "Validating head compose config..."
   compose_base 0 "" config --quiet
   echo "Validating worker compose config..."
-  remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml config --quiet"
+  remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml config --quiet"
 }
 
 need_cmd docker
 need_cmd ssh
 need_cmd scp
 need_cmd curl
+
+if [ "$ENABLE_VLLM_GB10_PATCH" != "0" ] && [ "$ENABLE_VLLM_GB10_PATCH" != "1" ]; then
+  echo "ENABLE_VLLM_GB10_PATCH must be 0 or 1." >&2
+  exit 1
+fi
+
+if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ] && [ ! -d "$VLLM_GB10_PATCH_DIR" ]; then
+  echo "Missing GB10 vLLM patch directory: $VLLM_GB10_PATCH_DIR" >&2
+  exit 1
+fi
+
+if [ ! -f "$DSPARK_PROPOSER_FILE" ]; then
+  echo "Missing DSpark proposer bind-mount source: $DSPARK_PROPOSER_FILE" >&2
+  exit 1
+fi
 
 docker compose version >/dev/null
 docker image inspect "$DSPARK_VLLM_IMAGE" >/dev/null || {
@@ -174,10 +201,20 @@ echo "Syncing DSpark deployment files to ${WORKER_HOST}:${WORKER_DIR}"
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR"
 scp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_COMPOSE_FILE}"
 scp "$ENV_FILE" "${WORKER_HOST}:${REMOTE_ENV_FILE}"
+ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
+scp "$DSPARK_PROPOSER_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
+if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
+  echo "Syncing GB10 vLLM patch to ${WORKER_HOST}:${WORKER_DIR}/vllm_patch_gb10"
+  tar -C "$VLLM_GB10_PATCH_DIR" \
+    --exclude='*.egg-info' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    -cf - . | ssh "$WORKER_HOST" "mkdir -p $REMOTE_VLLM_GB10_PATCH_DIR && tar -C $REMOTE_VLLM_GB10_PATCH_DIR --no-overwrite-dir -xf -"
+fi
 validate_compose
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."
-remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
+remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
 
 echo "Starting DSpark head..."
 compose_base 0 "" up -d

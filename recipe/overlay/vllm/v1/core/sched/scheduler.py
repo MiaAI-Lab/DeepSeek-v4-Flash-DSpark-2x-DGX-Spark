@@ -1487,6 +1487,11 @@ class Scheduler(SchedulerInterface):
             elif (
                 draft_token_lengths is not None
                 and self.scheduler_config.async_scheduling
+                # Only resize spec placeholders for decode steps. Prefill chunks
+                # do not have speculative placeholders installed by async scheduling.
+                and new_token_ids
+                and not request.is_prefill_chunk
+                and request.status == RequestStatus.RUNNING
             ):
                 # Async speculative scheduling normally installs a fixed
                 # placeholder list before the worker proposes the next draft.

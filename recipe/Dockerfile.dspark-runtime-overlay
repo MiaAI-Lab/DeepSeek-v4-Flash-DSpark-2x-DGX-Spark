@@ -16,6 +16,7 @@ COPY vllm/v1/outputs.py /opt/env/lib/python3.12/site-packages/vllm/v1/outputs.py
 COPY vllm/v1/core/sched/scheduler.py /opt/env/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py
 COPY vllm/models/deepseek_v4/__init__.py /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/__init__.py
 COPY vllm/models/deepseek_v4/nvidia/model.py /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/model.py
+COPY vllm/models/deepseek_v4/common/ops/cache_utils.py /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/common/ops/cache_utils.py
 COPY vllm/models/deepseek_v4/nvidia/sm120.py /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/sm120.py
 COPY vllm/models/deepseek_v4/nvidia/dspark.py /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/dspark.py
 COPY vllm/models/deepseek_v4/nvidia/dspark_kernels.py /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/dspark_kernels.py
@@ -29,6 +30,7 @@ RUN /opt/env/bin/python -m py_compile \
     /opt/env/lib/python3.12/site-packages/vllm/envs.py \
     /opt/env/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/b12x_moe.py \
     /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/model.py \
+    /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/common/ops/cache_utils.py \
     /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/sm120.py \
     /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/dspark.py \
     /opt/env/lib/python3.12/site-packages/vllm/models/deepseek_v4/nvidia/dspark_kernels.py \

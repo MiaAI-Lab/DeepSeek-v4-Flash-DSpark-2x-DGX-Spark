@@ -62,6 +62,51 @@ from .model import (
 
 logger = init_logger(__name__)
 
+
+# Kill switch for A/B diagnosis: DSPARK_SLOT_CLAMP=0 reverts the protective
+# clamp (detect+log only, return the index unchanged) so operators can verify
+# the clamp is load-bearing on their rig. Default on = the fix. Read once at
+# import (fixed per container start).
+_SLOT_CLAMP_ENABLED = os.environ.get("DSPARK_SLOT_CLAMP", "1") != "0"
+
+
+def _guard_slot_index(
+    slot_index: torch.Tensor | None, num_rows: int, site: str
+) -> torch.Tensor | None:
+    """Bounds-check DSpark ring-buffer slot ids before a KV gather.
+
+    A stale/out-of-range ``slot_index`` (observed after request condensation at
+    long context) gathering row >= ``num_rows`` triggers a device-side
+    ``indexSelectSmallIndex`` assert (``srcIndex < srcSelectDimSize``) that kills
+    the worker. Clamp into range on-device so the gather degrades to a rejected
+    speculation instead of a crash: this is the draft path only, so a clamped
+    (wrong) slot yields a bad draft token that the target model simply rejects
+    at verification — it cannot corrupt output.
+
+    The clamp is graph-safe (pure device op, baked into the captured graph and
+    active at replay). The loud host-side value log requires a device sync,
+    which is illegal mid CUDA-graph-capture, so it only runs on eager paths
+    (``is_current_stream_capturing()`` is a driver query, no sync).
+    """
+    if slot_index is None or slot_index.numel() == 0:
+        return slot_index
+    clamped = slot_index.clamp(0, num_rows - 1)
+    if not torch.cuda.is_current_stream_capturing():
+        hi = int(slot_index.max())
+        lo = int(slot_index.min())
+        if hi >= num_rows or lo < 0:
+            logger.error(
+                "DSPARK_STALE_SLOT_INDEX site=%s num_rows=%d min=%d max=%d "
+                "slot_index=%s",
+                site,
+                num_rows,
+                lo,
+                hi,
+                slot_index.tolist(),
+            )
+    return clamped if _SLOT_CLAMP_ENABLED else slot_index
+
+
 _EXPERT_SCALE_RE = re.compile(r"\.experts\.\d+\.w[123]\.scale$")
 
 
@@ -324,6 +369,16 @@ class DeepSeekV4DSparkAttention(nn.Module):
                 continue
             slots = seg_positions.remainder(self.window_size)
             row = i if slot_index is None else int(slot_index[i])
+            num_rows = self.main_kv_cache.shape[0]
+            if slot_index is not None and not 0 <= row < num_rows:
+                logger.error(
+                    "DSPARK_STALE_SLOT_INDEX site=ragged row=%d num_rows=%d i=%d",
+                    row,
+                    num_rows,
+                    i,
+                )
+                if _SLOT_CLAMP_ENABLED:
+                    row = min(max(row, 0), num_rows - 1)
             cache_row = self.main_kv_cache[row]
             values = seg_kv
             if rejected is not None:
@@ -374,6 +429,9 @@ class DeepSeekV4DSparkAttention(nn.Module):
         if slot_index is None:
             cache_rows = self.main_kv_cache[:batch_size]
         else:
+            slot_index = _guard_slot_index(
+                slot_index, self.main_kv_cache.shape[0], "store_main_kv"
+            )
             cache_rows = self.main_kv_cache.index_select(0, slot_index)
         if num_rejected_tokens is not None:
             rejected = num_rejected_tokens.to(
@@ -441,6 +499,9 @@ class DeepSeekV4DSparkAttention(nn.Module):
         if slot_index is None:
             main_kv_cache = self.main_kv_cache
         else:
+            slot_index = _guard_slot_index(
+                slot_index, self.main_kv_cache.shape[0], "forward_dspark"
+            )
             main_kv_cache = self.main_kv_cache.index_select(0, slot_index)
 
         out = dspark_sparse_attention(

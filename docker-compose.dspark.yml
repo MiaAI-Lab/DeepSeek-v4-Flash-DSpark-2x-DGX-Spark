@@ -16,6 +16,8 @@ services:
 
     volumes:
       - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      - ./recipe/vllm/v1/spec_decode/dspark_proposer.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark_proposer.py:ro
+      - ${VLLM_GB10_PATCH_DIR:-./vllm_patch_gb10}:/opt/vllm-gb10-hybrid-nvfp4
 
     environment:
       HF_HOME: /cache/huggingface
@@ -23,6 +25,9 @@ services:
       TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-0}"
       HF_HUB_DISABLE_XET: "${HF_HUB_DISABLE_XET:-1}"
       VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
+      # Long-context crash fix kill-switch: 1 (default) clamps stale DSpark
+      # draft-KV slot ids; 0 = detect+log only.
+      DSPARK_SLOT_CLAMP: "${DSPARK_SLOT_CLAMP:-1}"
       VLLM_HOST_IP: "${VLLM_HOST_IP:-}"
 
       VLLM_ALLOW_LONG_MAX_MODEL_LEN: "${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-1}"
@@ -30,12 +35,10 @@ services:
       VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "${VLLM_SPARSE_INDEXER_MAX_LOGITS_MB:-256}"
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "${VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:-0}"
       VLLM_SKIP_INIT_MEMORY_CHECK: "${VLLM_SKIP_INIT_MEMORY_CHECK:-1}"
+      ENABLE_VLLM_GB10_PATCH: "${ENABLE_VLLM_GB10_PATCH:-0}"
+      GB10_HYBRID_NVFP4_M_THRESHOLD: "${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}"
 
-      GENERATION_TEMPERATURE: "${GENERATION_TEMPERATURE:-0.0}"
-      GENERATION_TOP_P: "${GENERATION_TOP_P:-1.0}"
-      GENERATION_TOP_K: "${GENERATION_TOP_K:-40}"
-      GENERATION_REPETITION_PENALTY: "${GENERATION_REPETITION_PENALTY:-1.05}"
-      GENERATION_MAX_TOKENS: "${GENERATION_MAX_TOKENS:-384000}"
+      VLLM_USE_FLASHINFER_SAMPLER: "${VLLM_USE_FLASHINFER_SAMPLER:-1}"
 
       VLLM_USE_B12X_MOE: "${VLLM_USE_B12X_MOE:-1}"
       VLLM_USE_B12X_WO_PROJECTION: "${VLLM_USE_B12X_WO_PROJECTION:-1}"
@@ -79,7 +82,7 @@ services:
       HEADLESS: "${HEADLESS:-}"
       MASTER_ADDR: "${MASTER_ADDR}"
       MASTER_PORT: "${MASTER_PORT:-25000}"
-      MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-5}"
+      MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-3}"
 
     command:
       - bash
@@ -90,22 +93,31 @@ services:
         export CUDA_PATH="$${CUDA_PATH:-$${CUDA_HOME}}";
         export CUDAToolkit_ROOT="$${CUDAToolkit_ROOT:-$${CUDA_HOME}}";
         export LD_LIBRARY_PATH="/opt/env/lib:/opt/env/targets/sbsa-linux/lib:$${LD_LIBRARY_PATH:-}";
-        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5}}";
-        GENERATION_CONFIG_JSON="{\"temperature\":$${GENERATION_TEMPERATURE:-0.0},\"top_p\":$${GENERATION_TOP_P:-1.0},\"top_k\":$${GENERATION_TOP_K:-40},\"repetition_penalty\":$${GENERATION_REPETITION_PENALTY:-1.05},\"max_tokens\":$${GENERATION_MAX_TOKENS:-384000}}";
+        VLLM_QUANTIZATION_ARGS="";
+        if [ "$${ENABLE_VLLM_GB10_PATCH:-0}" = "1" ]; then
+          /opt/env/bin/python -m pip install -e /opt/vllm-gb10-hybrid-nvfp4 --no-deps;
+          export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";
+          VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
+        fi;
+        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-3},\"draft_sample_method\":\"probabilistic\"}";
         exec /opt/env/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}
         --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}
         --host ${VLLM_HOST:-127.0.0.1}
         --port 8888
         --trust-remote-code
+        $${VLLM_QUANTIZATION_ARGS}
         --tensor-parallel-size 2
         --pipeline-parallel-size 1
         --kv-cache-dtype nvfp4_ds_mla
         --block-size 256
-        --max-model-len ${MAX_MODEL_LEN:-1000000}
-        --max-num-seqs ${MAX_NUM_SEQS:-12}
+        --max-model-len ${MAX_MODEL_LEN:-1048576}
+        --max-num-seqs ${MAX_NUM_SEQS:-6}
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
+        --max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-3} + 1) ))
         --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
         --enable-prefix-caching
+        --async-scheduling
+        --enable-chunked-prefill
         --speculative-config "$${SPECULATIVE_CONFIG}"
         --tokenizer-mode deepseek_v4
         --distributed-executor-backend mp
@@ -115,7 +127,6 @@ services:
         --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
         --default-chat-template-kwargs '{"thinking":false}'
         --generation-config vllm
-        --override-generation-config "$${GENERATION_CONFIG_JSON}"
         --enable-flashinfer-autotune
         --nnodes 2
         --node-rank ${NODE_RANK}
