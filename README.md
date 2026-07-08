@@ -700,6 +700,11 @@ scripts/capture_runtime.sh runtime-after-change
   now validates rendered compose on both nodes before starting containers.
 - Requires matching images on both nodes, correct NCCL/RoCE settings, and a
   two-node Blackwell-class/DGX Spark setup.
+- It is recommended to **disable earlyoom** on the DGX Spark hosts (`sudo systemctl stop earlyoom && sudo systemctl disable earlyoom`).
+  The earlyoom daemon can OOM-kill vLLM worker or head processes under high GPU
+  memory pressure (e.g., during concurrent deep-context workloads), even when the
+  system has available swap or the OOM is transient. Disabling it avoids spurious
+  process termination and service disruption.
 - The API binds to `127.0.0.1` by default; exposing it is a deliberate security
   choice.
 - The next max-sequence ladder to try is approximately 1.25M, 1.5M, then
