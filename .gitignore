@@ -1,11 +1,17 @@
 .env.dspark
+.env.dspark.works
 .env
 .secrets/
 *.pem
 *.key
 id_*
 __pycache__/
+*.py[cod]
 .DS_Store
 *.log
+nohup.out
+*.egg-info/
 vllm-cache/
 /models/
+bench-results/
+benchmarks/bench_results_prefill/
