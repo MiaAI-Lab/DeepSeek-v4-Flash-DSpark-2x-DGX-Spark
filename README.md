@@ -466,10 +466,7 @@ usage terms.
 | `patches/keys-concurrency.patch` | full path-adjusted Keys concurrency patch reference |
 | `vllm_patch_gb10/` | optional experimental GB10 hybrid NVFP4 vLLM plugin |
 | `docs/PATCHES.md` | plain-English Patch 1 / Patch 2 / Patch 2b concurrency explanation |
-| `UPSTREAM_V024_STATUS.md` | current vLLM v0.24.0 vs DSpark PR #46995 upgrade notes |
-| `scripts/agent_sanity_bench.py` | direct OpenAI-compatible 1/2/4/6 concurrency and garble check |
-| `scripts/capture_runtime.sh` | captures head/worker Docker inspect, ps, and log tails before/after changes |
-| `benchmarks/` | local benchmark scripts retained from this checkout; upstream benchmark artifacts were intentionally not imported |
+| `scripts/verify-overlay-sources.sh` | checks overlay sources before image build |
 
 ## Quick Start
 
@@ -610,15 +607,6 @@ concurrency patch and set:
 - `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
 
-This checkout intentionally does not import upstream's `benchmarks/keys-concurrency/`
-folder. Use the retained local benchmark scripts if you need ad hoc checks:
-
-```bash
-python3 benchmarks/bench_concurrent.py http://127.0.0.1:8888 1,4,8,16
-python3 benchmarks/staggered_bench.py http://127.0.0.1:8888 16 0.4
-python3 benchmarks/correctness_test.py http://127.0.0.1:8888
-```
-
 ### 1M Single-Stream Legacy Profile
 
 For conservative single-stream testing, set `MAX_NUM_SEQS=1` and
@@ -654,24 +642,15 @@ GPU KV cache size: approximately 2M tokens
 Maximum concurrency for 1,048,576 tokens per request: approximately 1.9x
 ```
 
-Before pointing an agent harness at the endpoint, run the direct sanity bench:
+Before pointing an agent harness at the endpoint, run the included smoke test:
 
 ```bash
-DSPARK_BASE_URL=http://HEAD_NODE_IP:8888/v1 \
-CONCURRENCY=1,2,4,6 \
-python3 scripts/agent_sanity_bench.py
+./smoke-deepseek-v4-flash-dspark.sh
 ```
 
-Every row should report `bad_outputs: 0`. If this direct test is clean but an
-agent still garbles, investigate the agent session, fallback list, or harness
-prompt replay before blaming the DSpark weights.
-
-Capture runtime evidence before and after any fix:
-
-```bash
-scripts/capture_runtime.sh runtime-before-change
-scripts/capture_runtime.sh runtime-after-change
-```
+If direct OpenAI-compatible prompts are clean but an agent still garbles,
+investigate the agent session, fallback list, or harness prompt replay before
+blaming the DSpark weights.
 
 ## Notes
 

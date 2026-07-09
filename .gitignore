@@ -14,4 +14,7 @@ nohup.out
 vllm-cache/
 /models/
 bench-results/
-benchmarks/bench_results_prefill/
+benchmarks/
+RESULTS.md
+scripts/agent_sanity_bench.py
+scripts/capture_runtime.sh

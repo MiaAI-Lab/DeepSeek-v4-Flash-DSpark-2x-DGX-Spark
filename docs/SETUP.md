@@ -73,11 +73,10 @@ Caricio's integration; the TonyD2Wild repo vendors those same files.
 
 5. **Restart worker-first**, wait for `/v1/models` → 200 (~5 min: load + cudagraph).
 
-6. **Verify** (scripts in `benchmarks/`):
+6. **Verify** with the included smoke test (or any OpenAI-compatible client):
    ```bash
-   python3 benchmarks/correctness_test.py http://<head>:<port>        # must print OUTPUT IDENTICAL: True
-   python3 benchmarks/staggered_bench.py  http://<head>:<port> 16 0.4 # 16/16 ok, acceptance ~0.55
-   python3 benchmarks/bench_concurrent.py http://<head>:<port> 1,2,4,8,16
+   ./smoke-deepseek-v4-flash-dspark.sh
+   curl -fsS http://<head>:<port>/v1/models
    ```
 
 7. **Scale out (optional):** run a second patched TP=2 replica and put a
