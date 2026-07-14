@@ -392,13 +392,8 @@ quality tradeoff.
 ### Known issue: output corruption under concurrent decode with MTP enabled
 
 With speculative decoding active and more than one request decoding
-concurrently, the DSpark proposer can misalign flattened hidden-state rows
-against scheduled positions. The detectable subset is caught by the guard in
-`dspark_proposer.py` (`non-uniform flattened batch ... skipping speculation`
-— logged once per boot, at which point speculation for that step is safely
-skipped). Undetected cases silently draft from the wrong request's hidden
-states and corrupt committed tokens. Observed symptoms in long agentic
-sessions (seen at batch sizes 2-3 on a 2x DGX Spark, upstream `bb75f33`):
+concurrently, output can be silently corrupted. Observed in long agentic
+sessions (batch sizes 2-3 on a 2x DGX Spark, upstream `bb75f33`):
 
 - isolated garbage tokens inside otherwise coherent output (random
   CJK/Greek/rare-vocabulary tokens);
@@ -409,13 +404,28 @@ sessions (seen at batch sizes 2-3 on a 2x DGX Spark, upstream `bb75f33`):
 - DSML tool-call markup leaking as plain text instead of parsed
   `tool_calls`.
 
-`draft_sample_method=greedy` does not help (the misalignment is upstream of
-sampling). Workaround until the proposer is fixed: disable speculation by
-setting `MTP_NUM_TOKENS=0` in `.env.dspark` — the launcher then omits
-`--speculative-config` entirely — at the cost of the MTP decode speedup.
-When validating any fix, use a fresh client session: a session whose
-history already contains leaked markers keeps imitating them even against
-a healthy server.
+What the bisection establishes: a server-side sampling default override did
+not help, `draft_sample_method=greedy` did not help, and setting
+`MTP_NUM_TOKENS=0` removed the corruption completely (confirmed over long
+multi-turn agentic sessions). So the trigger is speculation itself under
+concurrent decode, not the draft sampling method.
+
+We have not confirmed the mechanism against the proposer code, so treat this
+as a hypothesis rather than a diagnosis: the proposer's own guard logs
+`dspark_proposer.py: non-uniform flattened batch ... skipping speculation`
+(seen at batch_size 2 and 3 on separate boots; it logs only the first
+occurrence), which would be consistent with hidden-state/position
+misalignment under concurrent batches, where cases the guard does not catch
+could draft from the wrong request's rows. Happy to run diagnostics if that
+would help narrow it down.
+
+Workaround until this is fixed: disable speculation with `MTP_NUM_TOKENS=0`
+in `.env.dspark` — the launcher then omits `--speculative-config` entirely —
+at the cost of the MTP decode speedup.
+
+When validating any fix, use a fresh client session: a session whose history
+already contains leaked markers keeps imitating them even against a healthy
+server.
 
 ## Important Caveat
 
