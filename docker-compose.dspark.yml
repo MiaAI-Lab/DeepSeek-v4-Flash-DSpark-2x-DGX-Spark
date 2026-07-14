@@ -83,6 +83,7 @@ services:
       MASTER_ADDR: "${MASTER_ADDR}"
       MASTER_PORT: "${MASTER_PORT:-25000}"
       MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-3}"
+      DRAFT_SAMPLE_METHOD: "${DRAFT_SAMPLE_METHOD:-probabilistic}"
 
     command:
       - bash
@@ -99,7 +100,11 @@ services:
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";
           VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
         fi;
-        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-3},\"draft_sample_method\":\"probabilistic\"}";
+        if [ "$${MTP_NUM_TOKENS:-3}" = "0" ]; then
+          SPECULATIVE_ARGS="";
+        else
+          SPECULATIVE_ARGS="--speculative-config {\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-3},\"draft_sample_method\":\"$${DRAFT_SAMPLE_METHOD:-probabilistic}\"}";
+        fi;
         exec /opt/env/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}
         --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}
         --host ${VLLM_HOST:-127.0.0.1}
@@ -118,7 +123,7 @@ services:
         --enable-prefix-caching
         --async-scheduling
         --enable-chunked-prefill
-        --speculative-config "$${SPECULATIVE_CONFIG}"
+        $${SPECULATIVE_ARGS}
         --tokenizer-mode deepseek_v4
         --distributed-executor-backend mp
         --tool-call-parser deepseek_v4

@@ -93,7 +93,9 @@ Runtime:
 - `max_num_seqs=6`
 - `max_num_batched_tokens=8192`
 - `gpu_memory_utilization=0.85`
-- `MTP_NUM_TOKENS=3`
+- `MTP_NUM_TOKENS=3` (set `0` to disable speculative decoding entirely; see
+  the known issue on concurrent-decode corruption below)
+- `DRAFT_SAMPLE_METHOD=probabilistic` (or `greedy`)
 - `VLLM_USE_FLASHINFER_SAMPLER=1`
 - `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
@@ -386,6 +388,34 @@ MTP3 probabilistic draft sampling active
 This keeps NVFP4 KV and MTP3. Do not switch to fp8 or drop to a smaller fallback
 model just to hide the symptom unless you intentionally accept the context and
 quality tradeoff.
+
+### Known issue: output corruption under concurrent decode with MTP enabled
+
+With speculative decoding active and more than one request decoding
+concurrently, the DSpark proposer can misalign flattened hidden-state rows
+against scheduled positions. The detectable subset is caught by the guard in
+`dspark_proposer.py` (`non-uniform flattened batch ... skipping speculation`
+— logged once per boot, at which point speculation for that step is safely
+skipped). Undetected cases silently draft from the wrong request's hidden
+states and corrupt committed tokens. Observed symptoms in long agentic
+sessions (seen at batch sizes 2-3 on a 2x DGX Spark, upstream `bb75f33`):
+
+- isolated garbage tokens inside otherwise coherent output (random
+  CJK/Greek/rare-vocabulary tokens);
+- `<|begin_of_sentence|>` emitted as literal text followed by replays of
+  stale earlier answers (with prefix caching on, one corrupted token
+  poisons the session's cached prefix for all later turns);
+- generation jumping mid-sentence into verbatim copies of earlier context;
+- DSML tool-call markup leaking as plain text instead of parsed
+  `tool_calls`.
+
+`draft_sample_method=greedy` does not help (the misalignment is upstream of
+sampling). Workaround until the proposer is fixed: disable speculation by
+setting `MTP_NUM_TOKENS=0` in `.env.dspark` — the launcher then omits
+`--speculative-config` entirely — at the cost of the MTP decode speedup.
+When validating any fix, use a fresh client session: a session whose
+history already contains leaked markers keeps imitating them even against
+a healthy server.
 
 ## Important Caveat
 
