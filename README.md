@@ -135,34 +135,36 @@ Application startup complete.
 Direct API smoke: `/v1/models` HTTP 200 and OpenAI-compatible chat completions
 returned non-empty assistant content on both head and worker ranks.
 
-Concurrency code-prompt bench on the live Anemll lane (`max_tokens=256`,
-temperature 0; streaming client; unique nonce per request; 5 trials per
-concurrency; table = **median trial by aggregate tok/s**). Aggregate =
-total completion tokens / max request wall (all streams started together).
-Mean per-stream = average client **decode** rate (completion tokens / time
-after first token).
+### Real-life decode speed (after first token)
 
-| Concurrency | Success | Batch wall (s) | Completion tokens | Aggregate tok/s | Mean per-stream tok/s |
+Streaming decode-only bench on the live Anemll lane with **agent / file-writing**
+prompts (`max_tokens=512`, temperature 0, unique nonce per request, 3 trials,
+median by aggregate). Prefill and the first token are **excluded**.
+
+| Metric | Formula |
+| --- | --- |
+| Per-stream decode tok/s | `(completion_tokens − 1) / (t_last − t_first)` |
+| Aggregate decode tok/s | `sum(completion_tokens − 1) / (max t_last − min t_first)` |
+
+| Concurrency | Success | Agg decode tok/s | Mean stream decode tok/s | Decode window (s) | Decode tokens |
 | ---: | :---: | ---: | ---: | ---: | ---: |
-| 1 | 1/1 | 4.48 | 256 | 57.2 | 76.6 |
-| 2 | 2/2 | 6.13 | 512 | 83.6 | 57.8 |
-| 3 | 3/3 | 9.23 | 768 | 83.3 | 37.9 |
-| 4 | 4/4 | 8.36 | 1024 | 122.6 | 41.1 |
-| 5 | 5/5 | 10.29 | 1280 | 124.4 | 33.6 |
-| 6 | 6/6 | 9.68 | 1536 | 158.7 | 35.6 |
+| 1 | 1/1 | 66.6 | 66.6 | 7.67 | 511 |
+| 2 | 2/2 | 93.3 | 47.2 | 10.95 | 1022 |
+| 3 | 3/3 | 92.8 | 31.9 | 16.52 | 1533 |
+| 4 | 4/4 | 123.8 | 32.8 | 16.51 | 2044 |
+| 5 | 5/5 | 121.1 | 25.7 | 21.11 | 2555 |
+| 6 | 6/6 | 153.7 | 26.8 | 19.94 | 3066 |
 
-Trial aggregates (tok/s): C1 `[57.2, 59.5, 58.0, 55.1, 57.1]`, C2
-`[81.4, 86.5, 79.5, 83.6, 85.5]`, C3 `[81.4, 85.5, 83.3, 76.1, 93.9]`, C4
-`[122.6, 109.7, 126.1, 128.1, 111.6]`, C5 `[126.5, 129.5, 105.8, 121.2, 124.4]`,
-C6 `[158.7, 159.9, 141.7, 155.3, 166.4]`.
+Trial aggregates (decode tok/s): C1 `[66.5, 69.4, 66.6]`, C2 `[92.1, 95.6, 93.3]`,
+C3 `[89.4, 92.8, 93.5]`, C4 `[129.1, 123.8, 121.7]`, C5 `[125.0, 121.1, 111.6]`,
+C6 `[153.7, 148.8, 157.0]`.
 
-**Why C3 ≈ C2 and C5 ≈ C4:** not a bad measurement. End-to-end aggregate is
-total tokens over the slowest stream’s wall, and that wall includes **TTFT /
-prefill** which steps up under multi-request contention (median TTFT ~1.1s →
-1.5s → 2.2s → 1.9s → 2.4s → 2.2s). At C3 and C5 the extra prefill cost offsets
-the extra streams, so e2e aggregate plateaus while per-stream decode falls.
-Decode-only aggregate (tokens / post-TTFT window) still trends up with load
-(~77 → 114 → 110 → 162 → 162 → 208 tok/s at the same median trials).
+**Agg decode** is fleet generation after first tokens; **mean stream** is what
+one concurrent chat feels like once tokens start (~67 tok/s alone, ~27 at C=6).
+C3 ≈ C2 and C5 ≈ C4 on aggregate under multi-stream contention while per-stream
+decode falls.
+
+Light-themed chart + table: [`docs/decode-speed-results.html`](docs/decode-speed-results.html).
 
 ### 2026-07-02 Keys C12 NVFP4 Checkpoint (historical Stage C)
 

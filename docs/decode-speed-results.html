@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tok-decode · real-life decode speeds</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --bg-accent: #e8f1ff;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --agg: #0284c7;
+      --agg-soft: #e0f2fe;
+      --stream: #7c3aed;
+      --stream-soft: #ede9fe;
+      --warm: #d97706;
+      --warm-soft: #fef3c7;
+      --ok: #059669;
+      --shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+      --radius: 24px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 500px at 10% -10%, #dbeafe 0%, transparent 55%),
+        radial-gradient(700px 400px at 100% 0%, #ede9fe 0%, transparent 50%),
+        radial-gradient(600px 300px at 50% 100%, #fef3c7 0%, transparent 45%),
+        var(--bg);
+      padding: 48px 24px 64px;
+    }
+
+    .wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 20px;
+      align-items: flex-end;
+      margin-bottom: 28px;
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--agg);
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      font-size: clamp(1.75rem, 3vw, 2.35rem);
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 10px;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 1rem;
+      max-width: 40rem;
+      line-height: 1.55;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .badge {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .badge strong { color: var(--ink); font-weight: 600; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 22px 22px 18px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; top: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--agg), var(--stream), #f59e0b);
+      opacity: 0.85;
+    }
+
+    .card h2 {
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    .chart-wrap {
+      position: relative;
+      height: 340px;
+    }
+
+    canvas { width: 100%; height: 100%; display: block; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 14px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .legend i {
+      display: inline-block;
+      width: 18px;
+      height: 3px;
+      border-radius: 2px;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    .legend .agg { background: var(--agg); box-shadow: 0 0 0 3px var(--agg-soft); }
+    .legend .stream { background: var(--stream); box-shadow: 0 0 0 3px var(--stream-soft); }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    th {
+      text-align: left;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      padding: 0 8px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th.num, td.num { text-align: right; }
+
+    td {
+      padding: 14px 8px;
+      border-bottom: 1px solid #f1f5f9;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 14px;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    td.c {
+      font-family: "DM Sans", sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    td.agg { color: var(--agg); font-weight: 600; }
+    td.stream { color: var(--stream); font-weight: 600; }
+    td.muted { color: var(--muted); font-size: 13px; }
+
+    tr.highlight td {
+      background: linear-gradient(90deg, #fff7ed, transparent 70%);
+    }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin: 20px 0 0;
+    }
+
+    @media (max-width: 700px) {
+      .kpi-row { grid-template-columns: 1fr; }
+    }
+
+    .kpi {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px 18px 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .kpi .label {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .kpi .value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      font-family: "JetBrains Mono", monospace;
+    }
+
+    .kpi .hint { margin-top: 6px; font-size: 13px; color: var(--muted); line-height: 1.4; }
+    .kpi.a .value { color: var(--agg); }
+    .kpi.b .value { color: var(--stream); }
+    .kpi.c .value { color: var(--warm); }
+
+    .note {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+
+    .note strong { color: var(--ink); }
+
+    footer {
+      margin-top: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
+    footer code {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 4px 8px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <div class="eyebrow">tok-decode.py · decode after first token</div>
+        <h1>Real-life decode speeds · C=1–6</h1>
+        <p class="sub">
+          DeepSeek V4 Flash DSpark on 2× DGX Spark (TP=2). Agent / file-writing prompts,
+          <strong>max_tokens=512</strong>, 3 trials, median by aggregate decode.
+          First token excluded from clock and token count.
+        </p>
+      </div>
+      <div class="badges">
+        <span class="badge">model <strong>deepseek-v4-flash</strong></span>
+        <span class="badge">mode <strong>real</strong></span>
+        <span class="badge">trials <strong>3</strong></span>
+        <span class="badge">image <strong>gx10:0.1.1</strong></span>
+      </div>
+    </header>
+
+    <div class="kpi-row">
+      <div class="kpi a">
+        <div class="label">Single-stream decode</div>
+        <div class="value">66.6</div>
+        <div class="hint">tok/s at C=1 after first token</div>
+      </div>
+      <div class="kpi b">
+        <div class="label">Peak fleet decode</div>
+        <div class="value">153.7</div>
+        <div class="hint">aggregate tok/s at C=6</div>
+      </div>
+      <div class="kpi c">
+        <div class="label">Per-chat at C=6</div>
+        <div class="value">26.8</div>
+        <div class="hint">mean stream decode tok/s</div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 20px;">
+      <section class="card">
+        <h2>Throughput vs concurrency</h2>
+        <div class="chart-wrap">
+          <canvas id="chart" width="700" height="340"></canvas>
+        </div>
+        <div class="legend">
+          <span><i class="agg"></i>Aggregate decode tok/s (fleet)</span>
+          <span><i class="stream"></i>Mean stream decode tok/s (per chat)</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Results table</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>C</th>
+              <th class="num">Agg decode</th>
+              <th class="num">Mean stream</th>
+              <th class="num">Window</th>
+              <th class="num">Dec. tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="c">1</td>
+              <td class="num agg">66.6</td>
+              <td class="num stream">66.6</td>
+              <td class="num muted">7.67s</td>
+              <td class="num muted">511</td>
+            </tr>
+            <tr>
+              <td class="c">2</td>
+              <td class="num agg">93.3</td>
+              <td class="num stream">47.2</td>
+              <td class="num muted">10.95s</td>
+              <td class="num muted">1022</td>
+            </tr>
+            <tr class="highlight">
+              <td class="c">3</td>
+              <td class="num agg">92.8</td>
+              <td class="num stream">31.9</td>
+              <td class="num muted">16.52s</td>
+              <td class="num muted">1533</td>
+            </tr>
+            <tr>
+              <td class="c">4</td>
+              <td class="num agg">123.8</td>
+              <td class="num stream">32.8</td>
+              <td class="num muted">16.51s</td>
+              <td class="num muted">2044</td>
+            </tr>
+            <tr class="highlight">
+              <td class="c">5</td>
+              <td class="num agg">121.1</td>
+              <td class="num stream">25.7</td>
+              <td class="num muted">21.11s</td>
+              <td class="num muted">2555</td>
+            </tr>
+            <tr>
+              <td class="c">6</td>
+              <td class="num agg">153.7</td>
+              <td class="num stream">26.8</td>
+              <td class="num muted">19.94s</td>
+              <td class="num muted">3066</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          <strong>Agg decode</strong> = fleet generation after first tokens.
+          <strong>Mean stream</strong> = average per-chat feel once streaming.
+          C3 ≈ C2 and C5 ≈ C4 on aggregate: extra streams add load, but packing /
+          contention can plateau total decode briefly while per-stream falls.
+        </p>
+      </section>
+    </div>
+
+    <footer>
+      <span>Per stream: <code>(n−1) / (t_last − t_first)</code> · Aggregate: <code>sum(n−1) / (max t_last − min t_first)</code></span>
+      <span><code>~/models/tok-decode.py --mode real</code></span>
+    </footer>
+  </div>
+
+  <script>
+    const data = {
+      c: [1, 2, 3, 4, 5, 6],
+      agg: [66.6, 93.3, 92.8, 123.8, 121.1, 153.7],
+      stream: [66.6, 47.2, 31.9, 32.8, 25.7, 26.8],
+    };
+
+    const canvas = document.getElementById("chart");
+    const ctx = canvas.getContext("2d");
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = canvas.clientWidth || 700;
+    const cssH = canvas.clientHeight || 340;
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    ctx.scale(dpr, dpr);
+
+    const W = cssW, H = cssH;
+    const pad = { l: 48, r: 16, t: 20, b: 40 };
+    const plotW = W - pad.l - pad.r;
+    const plotH = H - pad.t - pad.b;
+    const maxY = 180;
+
+    function xAt(i) {
+      return pad.l + (i / (data.c.length - 1)) * plotW;
+    }
+    function yAt(v) {
+      return pad.t + plotH * (1 - v / maxY);
+    }
+
+    // grid
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.lineWidth = 1;
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "12px JetBrains Mono, monospace";
+    for (let t = 0; t <= maxY; t += 30) {
+      const y = yAt(t);
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(W - pad.r, y);
+      ctx.stroke();
+      ctx.textAlign = "right";
+      ctx.fillText(String(t), pad.l - 10, y + 4);
+    }
+
+    // soft fill under aggregate
+    const grad = ctx.createLinearGradient(0, pad.t, 0, H - pad.b);
+    grad.addColorStop(0, "rgba(2, 132, 199, 0.18)");
+    grad.addColorStop(1, "rgba(2, 132, 199, 0.01)");
+    ctx.beginPath();
+    data.agg.forEach((v, i) => {
+      const x = xAt(i), y = yAt(v);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.lineTo(xAt(data.c.length - 1), H - pad.b);
+    ctx.lineTo(xAt(0), H - pad.b);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    function drawLine(vals, color, width) {
+      ctx.beginPath();
+      vals.forEach((v, i) => {
+        const x = xAt(i), y = yAt(v);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+      vals.forEach((v, i) => {
+        const x = xAt(i), y = yAt(v);
+        ctx.beginPath();
+        ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+      });
+    }
+
+    drawLine(data.agg, "#0284c7", 3.2);
+    drawLine(data.stream, "#7c3aed", 3.0);
+
+    // x labels
+    ctx.fillStyle = "#64748b";
+    ctx.font = "600 13px DM Sans, sans-serif";
+    ctx.textAlign = "center";
+    data.c.forEach((c, i) => {
+      ctx.fillText("C=" + c, xAt(i), H - 14);
+    });
+
+    // plateau marks
+    function callout(i, label) {
+      const x = xAt(i), y = yAt(data.agg[i]) - 26;
+      ctx.font = "600 11px DM Sans, sans-serif";
+      const tw = ctx.measureText(label).width + 14;
+      const h = 20;
+      ctx.fillStyle = "rgba(254, 243, 199, 0.95)";
+      ctx.strokeStyle = "rgba(217, 119, 6, 0.35)";
+      ctx.lineWidth = 1;
+      roundRect(ctx, x - tw / 2, y - h / 2, tw, h, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#b45309";
+      ctx.textAlign = "center";
+      ctx.fillText(label, x, y + 4);
+    }
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+    callout(2, "≈ C2");
+    callout(4, "≈ C4");
+  </script>
+</body>
+</html>
