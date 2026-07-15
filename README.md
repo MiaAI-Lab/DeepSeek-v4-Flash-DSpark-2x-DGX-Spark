@@ -164,8 +164,6 @@ one concurrent chat feels like once tokens start (~67 tok/s alone, ~27 at C=6).
 C3 ≈ C2 and C5 ≈ C4 on aggregate under multi-stream contention while per-stream
 decode falls.
 
-Light-themed chart + table: [`docs/decode-speed-results.html`](docs/decode-speed-results.html).
-
 ### 2026-07-02 Keys C12 NVFP4 Checkpoint (historical Stage C)
 
 Earlier high-concurrency lane on Tony's Stage C NVFP4 image with Keys' C12
