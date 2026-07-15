@@ -1,20 +1,43 @@
 # DeepSeek V4 Flash DSpark C12 NVFP4 KV on 2x DGX Spark
 
 Self-contained two-node DGX Spark recipe for serving `DeepSeek-V4-Flash-DSpark`
-with vLLM TP=2, DSpark speculative decoding, and a 1M-token max model length
-using the experimental `nvfp4_ds_mla` KV-cache path.
+with vLLM TP=2, DSpark speculative decoding, and a **1M-token** default max
+model length using the experimental `nvfp4_ds_mla` KV-cache path.
 
-This repo includes Keys' DSpark concurrency patch in the vLLM overlay. That
-patch makes DSpark's persistent draft KV follow request identity instead of
-condensed batch-row position, and adds ragged mixed prefill/decode handling for
-real independent sessions.
+## Current runtime (this checkout)
 
-The live launcher also bind-mounts
-`recipe/vllm/v1/spec_decode/dspark_proposer.py` over the image proposer. That
-runtime copy carries Keys' `req_ids` slot mapping plus a non-uniform batch
-guard: when async scheduling mixes prefill and decode in one step, the proposer
-skips speculation instead of raising and killing the worker. The start script
-syncs this file to the worker before `docker compose up`.
+The default Docker image is the prebuilt Anemll GX10/DGX Spark port of vLLM
+0.25 with native DSpark / NVFP4 DS-MLA / b12x MoE support:
+
+```text
+ghcr.io/anemll/dspark-vllm-gx10:0.1.1
+```
+
+Source: [Anemll/dspark-vllm-gx10](https://github.com/Anemll/dspark-vllm-gx10).
+Pull on **both** nodes before first start:
+
+```bash
+docker pull ghcr.io/anemll/dspark-vllm-gx10:0.1.1
+```
+
+`docker-compose.dspark.yml` is aligned with that image layout:
+
+- entrypoint cleared; command uses `/usr/local/bin/vllm serve`
+- CUDA under `/usr/local/cuda` (not Stage-C `/opt/env`)
+- `--moe-backend flashinfer_b12x`
+- DSpark is **built into the image** (no Stage-C bind-mount of
+  `dspark_proposer.py` over `/opt/env/...`)
+- optional `vllm_patch_gb10/` mount remains for experimental hybrid NVFP4
+- HF cache at `/cache/huggingface`; prefer `HF_HUB_OFFLINE=1` once both nodes
+  have a full local hub cache (online re-download can fill worker disks)
+
+Alternative: set `DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c`
+and run `./build-dspark-vllm-runtime.sh` for the historical multi-stage Stage-C
+overlay build. Stage-C recipes and overlay sources remain under `recipe/`.
+
+This repo still vendors Keys' DSpark concurrency patch and Stage-C overlay
+sources for local image builds and documentation. With the Anemll image, that
+logic ships inside the image rather than as a host bind-mount.
 
 <p>
 <a href="https://x.com/MiaAI_lab" target="_blank">
@@ -25,13 +48,20 @@ syncs this file to the worker before `docker compose up`.
 <a href='https://ko-fi.com/Z8Z3SPLOD' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi6.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
 </p>
 
-The current local run profile is configured for:
+**Default agent-serving profile** (`.env.dspark.example` and README defaults):
 
-- `max_model_len=1048576`
+- image: `ghcr.io/anemll/dspark-vllm-gx10:0.1.1`
+- model: `deepseek-ai/DeepSeek-V4-Flash-DSpark` (HF hub id; resolved offline from cache when `HF_HUB_OFFLINE=1`)
+- `max_model_len=1048576` (**1M** — keep this as the documented default)
 - `max_num_seqs=6`
+- `max_num_batched_tokens=8192`
 - `kv_cache_dtype=nvfp4_ds_mla`
 - `gpu_memory_utilization=0.85`
+- `MTP_NUM_TOKENS=3`
 - API bind address `0.0.0.0:8888`
+
+Local `.env.dspark` may lower `MAX_MODEL_LEN` (for example `512000`) for a
+specific cluster without changing the recipe default.
 
 > [!IMPORTANT]
 > This profile is meant for real deep-context agent serving: up to **1M tokens
@@ -50,20 +80,17 @@ The current local run profile is configured for:
 > GPU_MEMORY_UTILIZATION=0.87
 > ```
 
-This repo captures the validated Stage C NVFP4 runtime, the 2026-06-30
-agent-stability refresh, and the 2026-07-02 Keys C12 checkpoint:
+This repo documents the validated 1M NVFP4 agent profile, historical Stage-C
+checkpoints, and the current Anemll prebuilt runtime:
 
-- `max_model_len=1048576`
-- `max_num_seqs=6`
-- `kv_cache_dtype=nvfp4_ds_mla`
-- reported KV pool: `3,225,280 tokens`
-- configured active sequence slots: `6`
-- single-stream decode stayed above `50 tok/s`
+- default `max_model_len=1048576` (1M), `max_num_seqs=6`, `kv_cache_dtype=nvfp4_ds_mla`
+- default image `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` (~2.8M-token KV pool on this cluster)
+- historical Stage-C C12 pool: `3,225,280 tokens`
+- single-stream decode stayed above `50 tok/s` on validated C12 gates
 - deterministic direct prompts completed with no Chinese drift or repeated junk
-- 2/4/6 concurrent code-gate prompts completed cleanly
-- DSpark in-server concurrency patch validated at `max_model_len=200000`,
-  `max_num_seqs=16`, with static C16 at `315.1 tok/s` aggregate and
-  staggered C16 at `205.0 tok/s` aggregate
+- 2/4/6 concurrent code-gate prompts completed cleanly (Stage-C C12)
+- DSpark concurrency patch validated at `max_model_len=200000`, `max_num_seqs=16`
+  (static C16 `315.1` / staggered C16 `205.0` tok/s aggregate)
 
 If you already deployed an older copy and saw agent garble, loops, Chinese
 drift, or prompt/tool XML leaking into replies, keep the C12 NVFP4 profile and
@@ -77,10 +104,41 @@ path does not switch production to fp8 or a smaller fallback model.
 
 ## Result
 
-### 2026-07-02 Keys C12 NVFP4 Checkpoint
+### Live Anemll image lane (this checkout)
 
-The current high-concurrency lane keeps Tony's known-good Stage C NVFP4 image
-and applies Keys' C12 serving profile.
+Validated worker-first launch with the prebuilt Anemll image and this repo's
+compose/start scripts (TP=2, two nodes).
+
+Runtime:
+
+- image: `ghcr.io/anemll/dspark-vllm-gx10:0.1.1`
+- model id: `deepseek-ai/DeepSeek-V4-Flash-DSpark` (HF cache under `HF_CACHE`)
+- served model name: configurable via `SERVED_MODEL_NAME` (example: `deepseek-v4-flash`)
+- `kv_cache_dtype=nvfp4_ds_mla`
+- default recipe: `max_model_len=1048576`, `max_num_seqs=6`,
+  `max_num_batched_tokens=8192`, `gpu_memory_utilization=0.85`, `MTP_NUM_TOKENS=3`
+- `--moe-backend flashinfer_b12x`
+- `VLLM_USE_FLASHINFER_SAMPLER=1`, `VLLM_USE_B12X_WO_PROJECTION=1`
+- `HF_HUB_OFFLINE=1` recommended after both nodes have a complete hub cache
+- fabric: explicit `VLLM_HOST_IP` / `WORKER_VLLM_HOST_IP`, plus matching
+  `NCCL_SOCKET_IFNAME` / `TP_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME`
+
+Boot evidence on this cluster (Anemll image, 1M max-model-len profile):
+
+```text
+Available KV cache memory: 19.03 GiB
+GPU KV cache size: 2,826,378 tokens
+Maximum concurrency for 1,048,576 tokens per request: 2.70x
+Application startup complete.
+```
+
+Direct API smoke: `/v1/models` HTTP 200 and OpenAI-compatible chat completions
+returned non-empty assistant content on both head and worker ranks.
+
+### 2026-07-02 Keys C12 NVFP4 Checkpoint (historical Stage C)
+
+Earlier high-concurrency lane on Tony's Stage C NVFP4 image with Keys' C12
+serving profile (kept for comparison; not the current default image).
 
 Runtime:
 
@@ -299,8 +357,8 @@ Three independent knobs, often confused:
 
 | knob | what it is | this build |
 | --- | --- | --- |
-| **KV cache pool** | total shared KV memory in tokens, sized from `gpu_memory_utilization` after weights load | about 3.2M tokens in the C12 checkpoint |
-| `max_model_len` | per-request **ceiling** — how long any one request may grow | 1,048,576 (1M) |
+| **KV cache pool** | total shared KV memory in tokens, sized from `gpu_memory_utilization` after weights load | ~2.8M tokens on Anemll image (this checkout); ~3.2M on historical Stage-C C12 |
+| `max_model_len` | per-request **ceiling** — how long any one request may grow | **1,048,576 (1M)** default |
 | `max_num_seqs` | **concurrency cap** — max active sequences the scheduler runs at once | 6 |
 
 The pool is **shared and allocated on demand**: PagedAttention hands KV blocks
@@ -316,18 +374,19 @@ Worked examples at 1M ceiling / 6 slots:
 
 ```
 6 requests x  50k tokens =  300k   fits easily
-6 requests x 200k tokens =  1.2M   fits in the C12 checkpoint pool
-6 requests x 500k tokens =  3.0M   ~near the C12 checkpoint pool
-3 requests x 1M   tokens =  3.0M   ~near the C12 checkpoint pool
+6 requests x 200k tokens =  1.2M   fits in the Anemll / C12 pools
+6 requests x 500k tokens =  3.0M   near pool capacity depending on image
+3 requests x 1M   tokens =  3.0M   near pool capacity depending on image
 6 requests x 1M   tokens =  6.0M   impossible — excess requests queue/preempt
 ```
 
-The boot log's `Maximum concurrency for 1,048,576 tokens per request: ~1.9x`
-only means about two *simultaneous full-1M* requests fit. But agent turns are
-almost never near 1M, so six normal-length sessions share the pool while the
-1M ceiling stays available for the rare long one. That is exactly why
-`1M + max_num_seqs=6` is useful: you are not reserving 6×1M, you are sharing
-one pool across short requests under a high ceiling.
+The boot log's `Maximum concurrency for 1,048,576 tokens per request: ~2.7x`
+(Anemll image on this cluster) only means a few *simultaneous full-1M*
+requests fit. Agent turns are almost never near 1M, so six normal-length
+sessions share the pool while the 1M ceiling stays available for the rare long
+one. That is exactly why `1M + max_num_seqs=6` is useful: you are not
+reserving 6×1M, you are sharing one pool across short requests under a high
+ceiling.
 
 ## Gotcha: gibberish, loops, Chinese drift, or prompt/XML leakage
 
@@ -342,21 +401,16 @@ or Telegram-visible junk, do not assume the weights are bad.
 
 On this deployment there are three checks to make before blaming the weights:
 
-1. **Runtime concurrency safety:** make sure the bind-mounted proposer at
-   `recipe/vllm/v1/spec_decode/dspark_proposer.py` is present on both nodes.
-   It must keep Keys' `req_ids` slot mapping and Patch 2b ragged
-   `query_start_loc` handling, and it must include the non-uniform batch guard
-   at `propose()` entry. Without the guard, mixed prefill/decode steps under
-   `--async-scheduling` and `--enable-chunked-prefill` can raise
-   `ValueError: DSpark currently requires uniform flattened per-request inputs`
-   and kill the engine at concurrency >= 2. The baked-in overlay copy in
-   `recipe/overlay/vllm/v1/spec_decode/dspark_proposer.py` is the image-build
-   source; the bind-mounted `recipe/vllm/...` copy is what the live compose
-   file overrides at runtime.
-2. **Runtime image provenance:** make sure the image really contains the current
-   DSpark overlay. A reused local tag named `vllm-dspark-runtime:clean` caused
-   misleading failures even though a nearby PR-head image worked. Rebuild from
-   the intended overlay commit when in doubt.
+1. **Runtime image + DSpark path:** with the Anemll image, confirm both nodes
+   run the same tag (`docker image inspect $DSPARK_VLLM_IMAGE`) and that compose
+   uses `/usr/local/bin/vllm` (not a Stage-C `/opt/env` path). For historical
+   Stage-C builds, also ensure the Keys proposer path under
+   `recipe/vllm/v1/spec_decode/dspark_proposer.py` and overlay sources are
+   consistent with the image you built.
+2. **Model cache on both nodes:** a full offline HF hub cache for
+   `deepseek-ai/DeepSeek-V4-Flash-DSpark` must exist on head **and** worker
+   (`HF_HUB_OFFLINE=1` once complete). Incomplete caches or online re-downloads
+   have filled worker disks and broken TP=2 start.
 3. **Decode/fallback safety:** for long OpenAI-compatible agent prompts, avoid
    unstable sampling and hidden fallback transitions. The server keeps
    `--generation-config vllm` and does not install a server-side
@@ -426,14 +480,18 @@ foundation.
   [dspark-vllm](https://github.com/fraserprice/dspark-vllm)
 - **MiaAI-Lab** — two-node DGX Spark packaging and worker-first launch runbook:
   [DeepSeek-v4-Flash-DSpark-2x-DGX-Spark](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark)
+- **[Anemll](https://github.com/Anemll/dspark-vllm-gx10)** — prebuilt
+  `ghcr.io/anemll/dspark-vllm-gx10` vLLM 0.25 image for two-node GB10 / DGX Spark
+  with NVFP4 DS-MLA and b12x MoE
 - **Upstream foundations** — vLLM, FlashInfer, NVIDIA Blackwell/CUDA/NCCL
   tooling, DeepSeek V4 Flash, and DeepSeek-AI DeepSpec / DSpark research
 
 ### MiaAI-Lab contribution
 
 MiaAI-Lab maintains this fork's validated 1M NVFP4-KV recipe, Stage A/B/C
-runtime packaging, sanitized two-node launch flow, Keys patch integration,
-runtime proposer bind-mount, and benchmark artifacts from the validated runs.
+runtime packaging, sanitized two-node launch flow, Keys patch integration, and
+compose/start tooling. This checkout defaults to the Anemll prebuilt image while
+keeping Stage-C build scripts for optional local rebuilds.
 
 ## License Notes
 
@@ -447,26 +505,23 @@ usage terms.
 
 | path | purpose |
 | --- | --- |
-| `recipe/overlay/` | base DSpark vLLM overlay files baked into the runtime image |
-| `recipe/vllm/v1/spec_decode/dspark_proposer.py` | runtime bind-mount for Keys + non-uniform-batch guard; synced to worker on start |
-| `recipe/Dockerfile.dspark-runtime-overlay` | builds the base DSpark runtime overlay |
-| `recipe/nvfp4/Dockerfile.stage-a` | adds `nvfp4_ds_mla` dtype plumbing |
-| `recipe/nvfp4/Dockerfile.stage-b` | enables DeepSeek V4 `nvfp4_ds_mla` probe path |
-| `recipe/nvfp4/Dockerfile.stage-c` | switches DeepSeek V4 NVFP4 to the validated 584-byte padded envelope |
-| `docker-compose.dspark.yml` | two-node vLLM/DSpark service |
-| `.env.dspark.example` | sanitized cluster configuration template |
-| `build-dspark-vllm-runtime.sh` | builds the Stage C image locally and on the worker |
-| `prepare-dspark-model-cache.sh` | downloads/verifies the model cache |
-| `start-deepseek-v4-flash-dspark.sh` | worker-first launch and smoke test; honors worker path/cache/IP overrides |
+| `docker-compose.dspark.yml` | two-node vLLM/DSpark service (Anemll image layout by default) |
+| `.env.dspark.example` | sanitized cluster template; default image Anemll `0.1.1`, **1M** context |
+| `start-deepseek-v4-flash-dspark.sh` | worker-first launch and smoke test; image must exist on both nodes |
 | `stop-deepseek-v4-flash-dspark.sh` | stops head and worker services |
 | `status-deepseek-v4-flash-dspark.sh` | shows head/worker container state |
 | `logs-deepseek-v4-flash-dspark.sh` | tails head/worker DSpark logs |
 | `smoke-deepseek-v4-flash-dspark.sh` | direct concurrent OpenAI-compatible smoke test |
 | `validate-dspark-config.sh` | renders and checks the local DSpark compose/env config |
+| `prepare-dspark-model-cache.sh` | downloads/verifies the model cache |
+| `build-dspark-vllm-runtime.sh` | optional Stage-C local image build (not required for Anemll) |
+| `recipe/overlay/` | Stage-C DSpark vLLM overlay sources for local image builds |
+| `recipe/vllm/v1/spec_decode/dspark_proposer.py` | Stage-C/proposer reference; start script may sync to worker |
+| `recipe/nvfp4/Dockerfile.stage-*` | Stage A/B/C NVFP4 image layers for local builds |
 | `patches/keys-concurrency.patch` | full path-adjusted Keys concurrency patch reference |
 | `vllm_patch_gb10/` | optional experimental GB10 hybrid NVFP4 vLLM plugin |
 | `docs/PATCHES.md` | plain-English Patch 1 / Patch 2 / Patch 2b concurrency explanation |
-| `scripts/verify-overlay-sources.sh` | checks overlay sources before image build |
+| `scripts/verify-overlay-sources.sh` | checks overlay sources before Stage-C image build |
 
 ## Quick Start
 
@@ -488,7 +543,7 @@ Edit these values for your cluster:
 - `WORKER_HF_CACHE` if the worker cache path differs from the head
 - `VLLM_HOST_IP` and `WORKER_VLLM_HOST_IP` for each node's fabric IP
 
-For this local setup the key values are:
+Example cluster fabric values (edit for your nodes):
 
 ```env
 WORKER_HOST=10.0.0.2
@@ -498,27 +553,41 @@ WORKER_VLLM_HOST_IP=10.0.0.2
 MASTER_PORT=25000
 NCCL_IB_HCA=rocep1s0f1
 NCCL_SOCKET_IFNAME=enp1s0f1np1
+TP_SOCKET_IFNAME=enp1s0f1np1
+GLOO_SOCKET_IFNAME=enp1s0f1np1
+DSPARK_VLLM_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1
 ```
 
-Keep these agent-serving defaults unless you are deliberately experimenting:
+Keep these **default** agent-serving knobs unless you are deliberately
+experimenting (do not treat a temporary local `MAX_MODEL_LEN` override as the
+recipe default):
 
 - `VLLM_HOST=0.0.0.0` if Hermes/OpenClaw or another machine must reach the API
-- `MAX_MODEL_LEN=1048576`
+- `MAX_MODEL_LEN=1048576` (**1M**)
 - `MAX_NUM_SEQS=6`
+- `MAX_NUM_BATCHED_TOKENS=8192`
 - `GPU_MEMORY_UTILIZATION=0.85`
 - `MTP_NUM_TOKENS=3`
+- `HF_HUB_OFFLINE=1` after both nodes have a full model cache
 - `VLLM_USE_FLASHINFER_SAMPLER=1`
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
 - `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`
 
-Build the base overlay and Stage C NVFP4 image:
+Pull the default runtime image on **head and worker**:
+
+```bash
+docker pull ghcr.io/anemll/dspark-vllm-gx10:0.1.1
+```
+
+Optional: build the historical Stage-C image instead:
 
 ```bash
 ./build-dspark-vllm-runtime.sh
+# then set DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c
 ```
 
-Prepare the model cache:
+Prepare the model cache on both nodes (or rsync a verified hub snapshot):
 
 ```bash
 ./prepare-dspark-model-cache.sh
@@ -542,11 +611,11 @@ both containers, installs it with `pip install -e --no-deps`, sets
 `--quantization modelopt_gb10_hybrid`. The default is disabled. Tune the
 dispatcher threshold with `GB10_HYBRID_NVFP4_M_THRESHOLD`; the default is `128`.
 
-The start script prints the resolved non-secret runtime profile, syncs the
-compose/env files and the bind-mounted `dspark_proposer.py` to the worker path,
-validates rendered Docker Compose on both nodes, starts the worker first, then
-starts the head and follows startup logs while waiting for the API. If startup
-fails, it prints recent head and worker logs before exiting.
+The start script prints the resolved non-secret runtime profile, syncs
+compose/env (and related files) to the worker path, validates rendered Docker
+Compose on both nodes, starts the worker first, then starts the head and
+follows startup logs while waiting for the API. If startup fails, it prints
+recent head and worker logs before exiting.
 
 The API serves at:
 
@@ -560,20 +629,23 @@ access at the network/firewall layer.
 
 ## Runtime Profile
 
-### C12 Agent-Serving Profile
+### C12 Agent-Serving Profile (default: 1M context)
 
-Core vLLM flags:
+Core vLLM flags (from `docker-compose.dspark.yml`):
 
+- image: `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` (override with `DSPARK_VLLM_IMAGE`)
+- `/usr/local/bin/vllm serve …`
 - `--tensor-parallel-size 2`
 - `--distributed-executor-backend mp`
 - `--nnodes 2`
 - `--kv-cache-dtype nvfp4_ds_mla`
 - `--block-size 256`
-- `--max-model-len 1048576`
+- `--max-model-len 1048576` (**default 1M**)
 - `--max-num-seqs 6`
 - `--max-num-batched-tokens 8192`
 - `--max-cudagraph-capture-size 24` (`max_num_seqs * (MTP_NUM_TOKENS + 1)` → `6 * 4`)
 - `--gpu-memory-utilization 0.85`
+- `--moe-backend flashinfer_b12x`
 - `--async-scheduling`
 - `--enable-chunked-prefill`
 - `--speculative-config '{"method":"dspark","num_speculative_tokens":${MTP_NUM_TOKENS:-3},"draft_sample_method":"probabilistic"}'`
@@ -581,6 +653,8 @@ Core vLLM flags:
 
 Key runtime env:
 
+- `DSPARK_VLLM_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1`
+- `HF_HUB_OFFLINE=1` when hub caches are complete on both nodes
 - `ENABLE_VLLM_GB10_PATCH=0` by default; set to `1` to load the optional
   `vllm_patch_gb10/` plugin and add `--quantization modelopt_gb10_hybrid`
 - `GB10_HYBRID_NVFP4_M_THRESHOLD=128`
@@ -596,6 +670,7 @@ Key runtime env:
 - `VLLM_DSV4_B12X_COMPRESSED_MLA=0`
 - `VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE=0`
 - `B12X_W4A16_TC_DECODE=0`
+- `DG_JIT_NVCC_COMPILER=/usr/local/cuda/bin/nvcc`
 
 ### 200k Concurrency Profile
 
@@ -635,12 +710,15 @@ docker compose --env-file .env.dspark -f docker-compose.dspark.yml logs vllm-dsp
   | grep -E "GPU KV cache size|Maximum concurrency"
 ```
 
-Expected C12 checkpoint values are around:
+On the Anemll image at 1M max-model-len / 0.85 GPU util, expect roughly:
 
 ```text
-GPU KV cache size: approximately 2M tokens
-Maximum concurrency for 1,048,576 tokens per request: approximately 1.9x
+GPU KV cache size: approximately 2.8M tokens
+Maximum concurrency for 1,048,576 tokens per request: approximately 2.7x
 ```
+
+Historical Stage-C C12 boots reported ~2–3.2M tokens and ~1.9–3.2x depending on
+image and util; always trust the live boot log for your node.
 
 Before pointing an agent harness at the endpoint, run the included smoke test:
 
@@ -669,14 +747,16 @@ blaming the DSpark weights.
 - The measured probes were p256/p512 with g64/g256. Rebenchmark if you change
   sampling, batching, context length, WO projection, compressed MLA, or the
   confidence scheduler.
-- The current configured agent-serving profile is `MAX_MODEL_LEN=1048576`,
-  `MAX_NUM_SEQS=6`, `GPU_MEMORY_UTILIZATION=0.85`,
-  `MTP_NUM_TOKENS=3`, `VLLM_USE_FLASHINFER_SAMPLER=1`,
-  `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`,
+- The **default** agent-serving profile is `MAX_MODEL_LEN=1048576` (1M),
+  `MAX_NUM_SEQS=6`, `MAX_NUM_BATCHED_TOKENS=8192`,
+  `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3`,
+  `DSPARK_VLLM_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1`,
+  `VLLM_USE_FLASHINFER_SAMPLER=1`, `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`,
   `VLLM_USE_B12X_WO_PROJECTION=1`, no generation override, and
-  `VLLM_DSV4_B12X_COMPRESSED_MLA=0`.
+  `VLLM_DSV4_B12X_COMPRESSED_MLA=0`. Local `.env.dspark` may temporarily lower
+  context (for example 512k) without changing that recipe default.
 - Worker-first startup avoids a race during multi-node `mp` initialization and
-  now validates rendered compose on both nodes before starting containers.
+  validates rendered compose on both nodes before starting containers.
 - Requires matching images on both nodes, correct NCCL/RoCE settings, and a
   two-node Blackwell-class/DGX Spark setup.
 - It is recommended to **disable earlyoom** on the DGX Spark hosts (`sudo systemctl stop earlyoom && sudo systemctl disable earlyoom`).
@@ -684,8 +764,9 @@ blaming the DSpark weights.
   memory pressure (e.g., during concurrent deep-context workloads), even when the
   system has available swap or the OOM is transient. Disabling it avoids spurious
   process termination and service disruption.
-- The API binds to `127.0.0.1` by default; exposing it is a deliberate security
-  choice.
+- The example template binds to `0.0.0.0:8888` for multi-host agents; set
+  `VLLM_HOST=127.0.0.1` for head-only testing and control exposure at the
+  firewall.
 - The next max-sequence ladder to try is approximately 1.25M, 1.5M, then
   1.75M, with the same boot/log/speed gates. Raw KV math alone is not enough
   because DeepSeek V4 sparse MLA also allocates max-length-dependent workspaces.

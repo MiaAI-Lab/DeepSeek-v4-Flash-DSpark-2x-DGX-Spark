@@ -166,7 +166,8 @@ fi
 
 docker compose version >/dev/null
 docker image inspect "$DSPARK_VLLM_IMAGE" >/dev/null || {
-  echo "Missing local Docker image $DSPARK_VLLM_IMAGE. Run ./build-dspark-vllm-runtime.sh first." >&2
+  echo "Missing local Docker image $DSPARK_VLLM_IMAGE." >&2
+  echo "Pull it (e.g. docker pull $DSPARK_VLLM_IMAGE) or run ./build-dspark-vllm-runtime.sh for a local Stage-C build." >&2
   exit 1
 }
 
@@ -176,7 +177,8 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "true" >/dev/null || {
 }
 
 ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
-  echo "Missing worker Docker image $DSPARK_VLLM_IMAGE. Run ./build-dspark-vllm-runtime.sh first." >&2
+  echo "Missing worker Docker image $DSPARK_VLLM_IMAGE." >&2
+  echo "Pull it on the worker (e.g. docker pull $DSPARK_VLLM_IMAGE) or run ./build-dspark-vllm-runtime.sh." >&2
   exit 1
 }
 
