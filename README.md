@@ -135,17 +135,19 @@ Application startup complete.
 Direct API smoke: `/v1/models` HTTP 200 and OpenAI-compatible chat completions
 returned non-empty assistant content on both head and worker ranks.
 
-Concurrency code-prompt bench (`max_tokens=256`, temperature 0; aggregate =
-total completion tokens / batch wall):
+Concurrency code-prompt bench on the live Anemll lane (`max_tokens=256`,
+temperature 0; unique nonce per request; 3 trials per concurrency; table shows
+the **median trial by aggregate tok/s**; aggregate = total completion tokens /
+batch wall):
 
 | Concurrency | Success | Batch wall (s) | Completion tokens | Aggregate tok/s | Mean per-stream tok/s |
 | ---: | :---: | ---: | ---: | ---: | ---: |
-| 1 | 1/1 | 4.62 | 256 | 55.4 | 55.5 |
-| 2 | 2/2 | 6.10 | 512 | 84.0 | 43.1 |
-| 3 | 3/3 | 15.55 | 768 | 49.4 | 16.6 |
-| 4 | 4/4 | 14.55 | 1024 | 70.4 | 17.8 |
-| 5 | 5/5 | 19.93 | 1280 | 64.2 | 13.0 |
-| 6 | 6/6 | 8.84 | 1536 | 173.7 | 29.9 |
+| 1 | 1/1 | 4.75 | 256 | 53.8 | 53.8 |
+| 2 | 2/2 | 5.80 | 512 | 88.2 | 44.9 |
+| 3 | 3/3 | 9.17 | 768 | 83.7 | 28.0 |
+| 4 | 4/4 | 8.63 | 1024 | 118.6 | 30.5 |
+| 5 | 5/5 | 10.82 | 1280 | 118.3 | 24.4 |
+| 6 | 6/6 | 10.64 | 1536 | 144.4 | 25.2 |
 
 ### 2026-07-02 Keys C12 NVFP4 Checkpoint (historical Stage C)
 
