@@ -135,6 +135,18 @@ Application startup complete.
 Direct API smoke: `/v1/models` HTTP 200 and OpenAI-compatible chat completions
 returned non-empty assistant content on both head and worker ranks.
 
+Concurrency code-prompt bench (`max_tokens=256`, temperature 0; aggregate =
+total completion tokens / batch wall):
+
+| Concurrency | Success | Batch wall (s) | Completion tokens | Aggregate tok/s | Mean per-stream tok/s |
+| ---: | :---: | ---: | ---: | ---: | ---: |
+| 1 | 1/1 | 4.62 | 256 | 55.4 | 55.5 |
+| 2 | 2/2 | 6.10 | 512 | 84.0 | 43.1 |
+| 3 | 3/3 | 15.55 | 768 | 49.4 | 16.6 |
+| 4 | 4/4 | 14.55 | 1024 | 70.4 | 17.8 |
+| 5 | 5/5 | 19.93 | 1280 | 64.2 | 13.0 |
+| 6 | 6/6 | 8.84 | 1536 | 173.7 | 29.9 |
+
 ### 2026-07-02 Keys C12 NVFP4 Checkpoint (historical Stage C)
 
 Earlier high-concurrency lane on Tony's Stage C NVFP4 image with Keys' C12
