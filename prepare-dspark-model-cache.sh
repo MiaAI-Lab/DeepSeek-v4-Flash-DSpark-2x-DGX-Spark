@@ -19,6 +19,8 @@ fi
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
+# Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
+: "${IMAGE_PYTHON:=/usr/bin/python3}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -54,7 +56,7 @@ run_download() {
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
     -e DSPARK_MODEL="$DSPARK_MODEL" \
     -e HF_DOWNLOAD_WORKERS="$HF_DOWNLOAD_WORKERS" \
-    --entrypoint /opt/env/bin/python \
+    --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
     -c 'from huggingface_hub import snapshot_download; import os; print(snapshot_download(os.environ["DSPARK_MODEL"], max_workers=int(os.environ.get("HF_DOWNLOAD_WORKERS", "1"))))'
 }
@@ -67,7 +69,7 @@ verify_cache() {
     -e TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-0}" \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
     -e DSPARK_MODEL="$DSPARK_MODEL" \
-    --entrypoint /opt/env/bin/python \
+    --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
     - <<'PY'
 import json
