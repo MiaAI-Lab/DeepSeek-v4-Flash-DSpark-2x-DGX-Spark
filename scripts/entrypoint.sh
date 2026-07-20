@@ -4,20 +4,35 @@ set -euo pipefail
 AUDIT_BIN=/usr/local/bin/audit_runtime.py
 
 reject_non_nvfp4_kv() {
-  local previous=""
-  for arg in "$@"; do
-    if [[ "$previous" == "--kv-cache-dtype" && "$arg" != "nvfp4_ds_mla" ]]; then
-      echo "production DSpark requires --kv-cache-dtype nvfp4_ds_mla" >&2
-      exit 64
-    fi
-    if [[ "$arg" == --kv-cache-dtype=* && "${arg#*=}" != "nvfp4_ds_mla" ]]; then
-      echo "production DSpark requires --kv-cache-dtype nvfp4_ds_mla" >&2
-      exit 64
-    fi
-    previous="$arg"
-  done
-  if [[ -n "${KV_CACHE_DTYPE:-}" && "${KV_CACHE_DTYPE}" != "nvfp4_ds_mla" ]]; then
+  local joined=" $* "
+  local command_name="${1##*/}"
+  local kv_flag_count
+
+  if [[ "${KV_CACHE_DTYPE:-}" != "nvfp4_ds_mla" ]]; then
     echo "production DSpark requires KV_CACHE_DTYPE=nvfp4_ds_mla" >&2
+    exit 64
+  fi
+  if [[ "${command_name}" == "vllm" ]]; then
+    [[ " ${*:2} " == *" serve "* ]] || {
+      echo "production image requires the vLLM serve subcommand" >&2
+      exit 64
+    }
+  elif [[ "${command_name}" == "bash" && "${2:-}" == "-lc" ]]; then
+    [[ "${3:-}" == *"VLLM_BIN"*" serve "* ]] || {
+      echo "production image rejects a shell command that is not the audited vLLM launcher" >&2
+      exit 64
+    }
+  else
+    echo "production image accepts only an explicit vLLM serve command or the audit subcommand" >&2
+    exit 64
+  fi
+  kv_flag_count="$(grep -o -- '--kv-cache-dtype' <<<"${joined}" | wc -l || true)"
+  if [[ "${kv_flag_count}" != "1" ]]; then
+    echo "production DSpark requires exactly one explicit --kv-cache-dtype argument" >&2
+    exit 64
+  fi
+  if [[ ! "${joined}" =~ --kv-cache-dtype(=|[[:space:]])[\"\']?nvfp4_ds_mla[\"\']?([^[:alnum:]_]|$) ]]; then
+    echo "production DSpark requires an explicit --kv-cache-dtype nvfp4_ds_mla argument" >&2
     exit 64
   fi
 }

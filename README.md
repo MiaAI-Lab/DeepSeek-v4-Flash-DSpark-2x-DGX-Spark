@@ -87,6 +87,7 @@ appear healthy.
 ```bash
 git clone https://github.com/r0b0tlab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark.git
 cd DeepSeek-v4-Flash-DSpark-2x-DGX-Spark
+git checkout v0.25.2-production-dspark-k5-r1
 ./scripts/ci-verify.sh
 ./scripts/build-production-image.sh
 
@@ -111,20 +112,31 @@ cp .env.dspark.example .env.dspark
 Set at least:
 
 ```dotenv
-DSPARK_WORKER_HOST=worker-host-or-ip
-HEAD_IP=head-roce-ip
-WORKER_IP=worker-roce-ip
-HEAD_IFACE=head-roce-interface
-WORKER_IFACE=worker-roce-interface
-NCCL_IB_HCA=roce-device
+WORKER_HOST=worker-host-or-roce-ip
+MASTER_ADDR=head-roce-ip
+HEAD_ETH_IF=head-socket-interface
+WORKER_ETH_IF=worker-socket-interface
+HEAD_IB_HCA=head-roce-device
+WORKER_IB_HCA=worker-roce-device
 NCCL_IB_GID_INDEX=gid-index
 DSPARK_MODEL_DIR=/absolute/model/path
 DSPARK_VLLM_IMAGE=dspark-r0b0tlab:production-candidate
 ```
 
-Verify the model revision and image ID on both nodes before launch. The launcher
-starts the worker first, then the head, and runs the runtime audit on each rank
-before vLLM.
+Download model revision `913f0657a874f76844e2e91cbe706dbcaceeb6d7`, then
+record the immutable revision in the snapshot before mounting it read-only:
+
+```bash
+printf '%s\n' 913f0657a874f76844e2e91cbe706dbcaceeb6d7 \
+  > "$DSPARK_MODEL_DIR/.r0b0tlab-model-revision"
+python3 scripts/verify_model_checkpoint.py "$DSPARK_MODEL_DIR"
+```
+
+The launcher repeats the structural 48-shard/model-revision check on both
+nodes, requires identical image IDs, and for the native lane verifies the
+image's source/model/KV/speculative labels before it removes or starts any
+container. It then starts the worker first and the head second; the image
+entrypoint runs the runtime audit before vLLM.
 
 ## Launch profiles
 
@@ -132,9 +144,10 @@ Production throughput lane:
 
 ```bash
 set -a
-source profiles/dspark-r0b0tlab-production.env
 source .env.dspark
+source profiles/dspark-r0b0tlab-production.env
 set +a
+DSPARK_PREFLIGHT_ONLY=1 ./run-dspark-dual-gb10.sh
 ./run-dspark-dual-gb10.sh
 ```
 
@@ -142,14 +155,18 @@ One-million-token compatibility/capacity lane (legacy Stage-C runtime):
 
 ```bash
 set -a
-source profiles/dspark-r0b0tlab-1m.env
 source .env.dspark
+source profiles/dspark-r0b0tlab-1m.env
 set +a
+DSPARK_PREFLIGHT_ONLY=1 ./run-dspark-dual-gb10.sh
 ./run-dspark-dual-gb10.sh
 ```
 
-Both profile files keep `KV_CACHE_DTYPE=nvfp4_ds_mla`. The v0.25 production
-entrypoint rejects attempts to override it with another dtype. The two-node
+All profiles keep `KV_CACHE_DTYPE=nvfp4_ds_mla`. The v0.25 production
+entrypoint rejects a missing, conflicting, or duplicate cache-dtype argument.
+The native launcher accepts the qualified 200K/16/16K/0.84/K5 profile by
+default; non-release tuning requires explicit `ALLOW_EXPERIMENTAL_PROFILE=1`.
+The two-node
 launcher scopes Stage-C-only environment variables to
 `DSPARK_RUNTIME_LANE=legacy-stage-c`; they are never exported into the native
 v0.25 lane. `docker-compose.dspark.yml` represents the native production lane
@@ -160,7 +177,7 @@ only. Do not mix 1M Stage-C results into the v0.25 production performance table.
 ```bash
 python3 scripts/runtime_gate.py \
   --base-url http://127.0.0.1:8888 \
-  --worker-host "$DSPARK_WORKER_HOST" \
+  --worker-host "$WORKER_HOST" \
   --output results/production-candidate/runtime-gate.json
 ```
 

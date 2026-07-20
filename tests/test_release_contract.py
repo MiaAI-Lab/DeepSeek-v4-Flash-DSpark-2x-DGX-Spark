@@ -53,6 +53,28 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("private-hostname", result.stdout)
 
+    def test_release_verifier_requires_image_unless_source_only(self) -> None:
+        without_image = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/verify_release.py"), "--allow-dirty"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(without_image.returncode, 0)
+        self.assertIn("requires --image", without_image.stdout)
+        source_only = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/verify_release.py"),
+                "--allow-dirty",
+                "--source-only",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(source_only.returncode, 0, source_only.stdout + source_only.stderr)
+
     def test_launch_profile_is_native_nvfp4_and_no_marlin(self) -> None:
         text = (ROOT / "run-dspark-dual-gb10.sh").read_text()
         self.assertIn('KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-nvfp4_ds_mla}"', text)
@@ -71,11 +93,28 @@ class ReleaseContractTests(unittest.TestCase):
             "MAX_NUM_BATCHED_TOKENS=16384",
         ):
             self.assertIn(needle, production)
+        self.assertIn("DSPARK_RUNTIME_LANE=native-v025", production)
         self.assertIn("MAX_MODEL_LEN=1048576", long_context)
         self.assertIn("MAX_NUM_SEQS=2", long_context)
         self.assertIn("KV_CACHE_DTYPE=nvfp4_ds_mla", long_context)
         self.assertIn("DSPARK_RUNTIME_LANE=legacy-stage-c", long_context)
         self.assertIn("DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c", long_context)
+
+    def test_readme_environment_names_match_launcher_contract(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        launcher = (ROOT / "run-dspark-dual-gb10.sh").read_text()
+        for name in (
+            "WORKER_HOST",
+            "MASTER_ADDR",
+            "HEAD_ETH_IF",
+            "WORKER_ETH_IF",
+            "HEAD_IB_HCA",
+            "WORKER_IB_HCA",
+        ):
+            self.assertIn(name, readme)
+            self.assertIn(name, launcher)
+        self.assertNotIn("DSPARK_WORKER_HOST", readme)
+        self.assertIn("verify_model_checkpoint.py", readme)
 
     def test_production_runtime_source_contract_is_v025_native(self) -> None:
         audit = (ROOT / "scripts/audit_runtime.py").read_text()

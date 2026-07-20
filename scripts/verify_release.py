@@ -107,10 +107,31 @@ def verify_image(image: str, expected_revision: str, errors: list[str]) -> None:
         errors.append("image entrypoint bypasses the audited entrypoint")
 
 
-def verify(summary_path: Path, image: str | None, allow_dirty: bool) -> list[str]:
+def verify(
+    summary_path: Path, image: str | None, allow_dirty: bool, source_only: bool
+) -> list[str]:
     errors: list[str] = []
     manifest = load_json(ROOT / "docker/runtime-manifest.production.json")
     summary = load_json(summary_path)
+
+    entrypoint_text = (ROOT / "scripts/entrypoint.sh").read_text(encoding="utf-8")
+    launcher_text = (ROOT / "run-dspark-dual-gb10.sh").read_text(encoding="utf-8")
+    for marker in (
+        "requires an explicit --kv-cache-dtype nvfp4_ds_mla argument",
+        "requires exactly one explicit --kv-cache-dtype argument",
+        "accepts only an explicit vLLM serve command",
+    ):
+        if marker not in entrypoint_text:
+            errors.append(f"entrypoint lost fail-closed marker: {marker}")
+    for marker in (
+        "verify_model_checkpoint.py",
+        "Head/worker image IDs differ",
+        "native-v025 cannot use the legacy Stage-C image",
+        "legacy-stage-c requires DSPARK_VLLM_IMAGE",
+        "DSPARK_DUAL_NODE_PREFLIGHT_PASS",
+    ):
+        if marker not in launcher_text:
+            errors.append(f"launcher lost preflight/lane marker: {marker}")
 
     base_image = str(manifest.get("base_image", ""))
     if manifest.get("model_id") != EXPECTED["model_id"] or manifest.get("model_revision") != EXPECTED["model_revision"]:
@@ -244,6 +265,8 @@ def verify(summary_path: Path, image: str | None, allow_dirty: bool) -> list[str
             errors.append("repository is dirty; exact-candidate verification requires a clean tree")
     if image:
         verify_image(image, revision, errors)
+    elif not source_only:
+        errors.append("exact release verification requires --image; use --source-only only when Docker is intentionally unavailable")
     return errors
 
 
@@ -253,6 +276,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--summary", type=Path, default=ROOT / "results/production-candidate/summary.json"
     )
     parser.add_argument("--image", help="exact local image to verify against git HEAD")
+    parser.add_argument("--source-only", action="store_true", help="verify tracked source/evidence without a local Docker image")
     parser.add_argument("--allow-dirty", action="store_true")
     return parser.parse_args(argv)
 
@@ -260,7 +284,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        errors = verify(args.summary, args.image, args.allow_dirty)
+        if args.image and args.source_only:
+            raise ValueError("--image and --source-only are mutually exclusive")
+        errors = verify(args.summary, args.image, args.allow_dirty, args.source_only)
     except Exception as exc:
         print(f"RELEASE_VERIFY_FAIL: {type(exc).__name__}: {exc}")
         return 1

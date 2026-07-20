@@ -41,6 +41,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   scripts/long_context_gate.py \
   scripts/public_safety_scan.py \
   scripts/runtime_gate.py \
+  scripts/verify_model_checkpoint.py \
   scripts/verify_release.py \
   tests/test_release_contract.py \
   tests/test_launch_contract.py \
@@ -51,6 +52,7 @@ section "contract tests"
 python3 tests/test_release_contract.py
 python3 tests/test_launch_contract.py
 python3 tests/test_benchmark_harness_scaffold.py
+python3 tests/test_model_checkpoint.py
 rm -rf benchmarks/__pycache__ scripts/__pycache__ tests/__pycache__
 
 section "required reproducibility files"
@@ -71,6 +73,7 @@ required_files=(
   scripts/long_context_gate.py
   scripts/public_safety_scan.py
   scripts/runtime_gate.py
+  scripts/verify_model_checkpoint.py
   scripts/verify_release.py
   recipe/Dockerfile.dspark-runtime-overlay
   recipe/nvfp4/Dockerfile.stage-a
@@ -119,6 +122,7 @@ grep -Fx 'DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c' profiles/d
 grep -Fx 'MAX_MODEL_LEN=200000' profiles/dspark-r0b0tlab-production.env >/dev/null || fail "production profile missing MAX_MODEL_LEN=200000"
 grep -Fx 'MAX_NUM_SEQS=16' profiles/dspark-r0b0tlab-production.env >/dev/null || fail "production profile missing MAX_NUM_SEQS=16"
 grep -Fx 'KV_CACHE_DTYPE=nvfp4_ds_mla' profiles/dspark-r0b0tlab-production.env >/dev/null || fail "production profile lost NVFP4 KV"
+grep -Fx 'DSPARK_RUNTIME_LANE=native-v025' profiles/dspark-r0b0tlab-production.env >/dev/null || fail "production profile missing native-v025 lane selector"
 grep -Fx 'MAX_MODEL_LEN=384000' profiles/dspark-r0b0tlab-384k.env >/dev/null || fail "384K profile missing MAX_MODEL_LEN=384000"
 grep -Fx 'MAX_NUM_SEQS=4' profiles/dspark-r0b0tlab-384k.env >/dev/null || fail "384K profile missing MAX_NUM_SEQS=4"
 grep -Fx 'KV_CACHE_DTYPE=nvfp4_ds_mla' profiles/dspark-r0b0tlab-384k.env >/dev/null || fail "384K profile lost NVFP4 KV"
@@ -142,7 +146,7 @@ assert summary["decode_k5_confirmation"]["1"]["requests_ok"] == 5
 assert summary["decode_k5_confirmation"]["16"]["requests_ok"] == 80
 print("production evidence contract passed")
 PY
-python3 scripts/verify_release.py --allow-dirty
+python3 scripts/verify_release.py --allow-dirty --source-only
 
 section "publication artifact integrity"
 tar -tzf publication/DSpark-r0b0tlab-384K.tar.gz >/dev/null

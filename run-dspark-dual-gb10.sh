@@ -18,12 +18,64 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.84}"
 SPEC_TOKENS="${MTP_NUM_TOKENS:-5}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-nvfp4_ds_mla}"
 RUNTIME_LANE="${DSPARK_RUNTIME_LANE:-native-v025}"
+EXPECTED_MODEL_REVISION="913f0657a874f76844e2e91cbe706dbcaceeb6d7"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 HEAD_ETH_IF="${HEAD_ETH_IF:-enp1s0f0np0}"
 WORKER_ETH_IF="${WORKER_ETH_IF:-enp1s0f1np1}"
 HEAD_IB_HCA="${HEAD_IB_HCA:-rocep1s0f0}"
 WORKER_IB_HCA="${WORKER_IB_HCA:-rocep1s0f1}"
 NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX:-3}"
+
+[[ "${KV_CACHE_DTYPE}" == "nvfp4_ds_mla" ]] || {
+  echo "All DSpark lanes require KV_CACHE_DTYPE=nvfp4_ds_mla" >&2
+  exit 1
+}
+
+if [[ "${RUNTIME_LANE}" == "native-v025" ]]; then
+  [[ "${IMAGE}" != "vllm-dspark-runtime:dspark-nvfp4-stage-c" ]] || {
+    echo "native-v025 cannot use the legacy Stage-C image" >&2
+    exit 1
+  }
+  if [[ "${ALLOW_EXPERIMENTAL_PROFILE:-0}" != "1" ]]; then
+    [[ "${MAX_MODEL_LEN}" == "200000" \
+       && "${MAX_NUM_SEQS}" == "16" \
+       && "${MAX_NUM_BATCHED_TOKENS}" == "16384" \
+       && "${GPU_MEMORY_UTILIZATION}" == "0.84" \
+       && "${SPEC_TOKENS}" == "5" ]] || {
+      echo "native-v025 release launch requires the qualified 200K/16/16K/0.84/K5 profile; set ALLOW_EXPERIMENTAL_PROFILE=1 only for non-release experiments" >&2
+      exit 1
+    }
+  fi
+elif [[ "${RUNTIME_LANE}" == "legacy-stage-c" ]]; then
+  [[ "${IMAGE}" == "vllm-dspark-runtime:dspark-nvfp4-stage-c" ]] || {
+    echo "legacy-stage-c requires DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c" >&2
+    exit 1
+  }
+  case "${MAX_MODEL_LEN}" in
+    384000)
+      [[ "${MAX_NUM_SEQS}" == "4" && "${MAX_NUM_BATCHED_TOKENS}" == "8192" \
+         && "${GPU_MEMORY_UTILIZATION}" == "0.88" && "${SPEC_TOKENS}" == "5" ]] || {
+        echo "384K Stage-C launch differs from the admitted 384K/4/8192/0.88/K5 profile" >&2
+        exit 1
+      }
+      ;;
+    1048576)
+      [[ "${MAX_NUM_SEQS}" == "2" && "${MAX_NUM_BATCHED_TOKENS}" == "8192" \
+         && "${GPU_MEMORY_UTILIZATION}" == "0.88" && "${SPEC_TOKENS}" == "5" ]] || {
+        echo "1M Stage-C launch differs from the admitted 1M/2/8192/0.88/K5 profile" >&2
+        exit 1
+      }
+      ;;
+    *)
+      echo "legacy-stage-c is admitted only for the separate 384K or 1M profiles" >&2
+      exit 1
+      ;;
+  esac
+else
+  echo "Unsupported DSPARK_RUNTIME_LANE: ${RUNTIME_LANE}" >&2
+  exit 1
+fi
 
 common_args=(
   --gpus all --ipc=host --network host
@@ -78,9 +130,6 @@ if [[ "${RUNTIME_LANE}" == "legacy-stage-c" ]]; then
     -e VLLM_DSPARK_REFERENCE_KV_QUANT_DEQUANT="${VLLM_DSPARK_REFERENCE_KV_QUANT_DEQUANT:-0}"
     -e VLLM_USE_B12X_WO_PROJECTION="${VLLM_USE_B12X_WO_PROJECTION:-1}"
   )
-elif [[ "${RUNTIME_LANE}" != "native-v025" ]]; then
-  echo "Unsupported DSPARK_RUNTIME_LANE: ${RUNTIME_LANE}" >&2
-  exit 1
 fi
 
 make_cmd() {
@@ -133,7 +182,36 @@ ssh "${WORKER_IP}" "test -d '$WORKER_MODEL_DIR'" || {
   echo "Worker model directory not found: ${WORKER_MODEL_DIR}" >&2
   exit 1
 }
+python3 "${ROOT}/scripts/verify_model_checkpoint.py" "${HEAD_MODEL_DIR}" \
+  --expected-revision "${EXPECTED_MODEL_REVISION}"
+ssh "${WORKER_IP}" "python3 - '$WORKER_MODEL_DIR' --expected-revision '${EXPECTED_MODEL_REVISION}'" \
+  < "${ROOT}/scripts/verify_model_checkpoint.py"
+
+LOCAL_IMAGE_ID="$(docker image inspect "${IMAGE}" --format '{{.Id}}')"
+REMOTE_IMAGE_ID="$(ssh "${WORKER_IP}" "docker image inspect '$IMAGE' --format '{{.Id}}'")"
+[[ "${LOCAL_IMAGE_ID}" == "${REMOTE_IMAGE_ID}" ]] || {
+  echo "Head/worker image IDs differ: ${LOCAL_IMAGE_ID} != ${REMOTE_IMAGE_ID}" >&2
+  exit 1
+}
+if [[ "${RUNTIME_LANE}" == "native-v025" ]]; then
+  EXPECTED_SOURCE_REVISION="$(git -C "${ROOT}" rev-parse HEAD)"
+  [[ "$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" == "${EXPECTED_SOURCE_REVISION}" ]] || {
+    echo "Production image revision label does not match source HEAD ${EXPECTED_SOURCE_REVISION}" >&2
+    exit 1
+  }
+  [[ "$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "io.r0b0tlab.model.revision"}}')" == "${EXPECTED_MODEL_REVISION}" \
+     && "$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "io.r0b0tlab.kv-cache.dtype"}}')" == "nvfp4_ds_mla" \
+     && "$(docker image inspect "${IMAGE}" --format '{{index .Config.Labels "io.r0b0tlab.speculative.method"}}')" == "dspark" ]] || {
+    echo "Production image identity/backend labels do not match the release contract" >&2
+    exit 1
+  }
+fi
 echo "Model mounts: head=${HEAD_MODEL_DIR}; worker=${WORKER_MODEL_DIR}; container=/model"
+echo "Image identity: ${LOCAL_IMAGE_ID} on both ranks"
+if [[ "${DSPARK_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  echo "DSPARK_DUAL_NODE_PREFLIGHT_PASS"
+  exit 0
+fi
 
 echo "== stopping previous ${NAME} containers =="
 docker rm -f "${NAME}" 2>/dev/null || true

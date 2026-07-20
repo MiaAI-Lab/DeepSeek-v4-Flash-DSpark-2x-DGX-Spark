@@ -67,8 +67,10 @@ concurrency levels, request length, and collection method.
 | **5** | **70.57** | **105.99** | **165.42** | **239.57** | 310.95 | selected; five-repeat c16 confirmation reached 342.70 |
 
 K=3 had higher acceptance but lower decode throughput at c1/c2/c4/c8. K=5
-also won the independent five-repeat c16 median, so the production default
-remains K=5.
+won those matched three-repeat levels and was then independently stable in its
+five-repeat c16 confirmation. Because K=3/K=4 did not receive matched
+five-repeat c16 confirmations, that confirmation is not described as a
+five-repeat cross-K win. The production default remains K=5.
 
 ## Uncached prefill
 
