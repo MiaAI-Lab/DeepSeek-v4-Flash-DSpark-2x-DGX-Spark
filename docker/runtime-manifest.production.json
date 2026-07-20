@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "profile": "production-dspark-nvfp4",
+  "model_id": "deepseek-ai/DeepSeek-V4-Flash-DSpark",
+  "model_revision": "913f0657a874f76844e2e91cbe706dbcaceeb6d7",
+  "target_platform": "linux-aarch64-sm121",
+  "base_image": "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8",
+  "base_image_digest": "sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8",
+  "base_source_revision": "47503f8e38dadd4dededca798150db2619594fce",
+  "vllm_version": "0.25.2.dev0+g752a3a504.d20260714",
+  "torch_version": "2.11.0+cu130",
+  "cuda_version": "13.0",
+  "flashinfer_version": "0.6.15",
+  "kv_cache_dtype": "nvfp4_ds_mla",
+  "speculative_method": "dspark",
+  "production_profile": {
+    "max_model_len": 200000,
+    "max_num_seqs": 16,
+    "max_num_batched_tokens": 16384,
+    "gpu_memory_utilization": 0.84,
+    "mtp_tokens": 5
+  },
+  "capacity_profile_384k": {
+    "runtime_lane": "legacy-stage-c",
+    "image": "vllm-dspark-runtime:dspark-nvfp4-stage-c",
+    "max_model_len": 384000,
+    "max_num_seqs": 4,
+    "max_num_batched_tokens": 8192,
+    "gpu_memory_utilization": 0.88,
+    "mtp_tokens": 5
+  },
+  "long_context_profile": {
+    "runtime_lane": "legacy-stage-c",
+    "image": "vllm-dspark-runtime:dspark-nvfp4-stage-c",
+    "reason": "vLLM 0.25 production lane measured less than one million tokens of KV capacity",
+    "max_model_len": 1048576,
+    "max_num_seqs": 2,
+    "max_num_batched_tokens": 8192,
+    "gpu_memory_utilization": 0.88,
+    "mtp_tokens": 5
+  },
+  "required_runtime_markers": [
+    "DeepSeekV4DSparkModel",
+    "nvfp4_ds_mla",
+    "B12X",
+    "NET/IB"
+  ],
+  "forbidden_active_markers": [
+    "Marlin",
+    "emulation",
+    "fallback"
+  ]
+}

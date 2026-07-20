@@ -35,11 +35,10 @@ echo "  max model len: ${MAX_MODEL_LEN:-1048576}"
 echo "  max num seqs: ${MAX_NUM_SEQS:-2}"
 echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
 echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.88}"
-echo "  WO projection: ${VLLM_USE_B12X_WO_PROJECTION:-1}"
 echo "  host bind: ${VLLM_HOST:-127.0.0.1}"
 echo
 echo "Rendered vLLM command:"
 env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   COMPOSE_DISABLE_ENV_FILE=1 \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--gpu-memory-utilization|--master-port|--kv-cache-dtype|image:|VLLM_USE_B12X_WO_PROJECTION'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--gpu-memory-utilization|--master-port|--kv-cache-dtype|image:'

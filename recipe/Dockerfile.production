@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+ARG BASE_IMAGE=ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8
+FROM ${BASE_IMAGE}
+
+ARG IMAGE_REVISION=uncommitted
+USER root
+
+ENV MAX_JOBS=6 \
+    NVCC_THREADS=2 \
+    FLASHINFER_NVCC_THREADS=2 \
+    KV_CACHE_DTYPE=nvfp4_ds_mla
+
+COPY docker/runtime-manifest.production.json /opt/r0b0tlab/runtime-manifest.json
+COPY scripts/audit_runtime.py /usr/local/bin/audit_runtime.py
+COPY scripts/entrypoint.sh /usr/local/bin/dspark-entrypoint.sh
+RUN chmod 0644 /opt/r0b0tlab/runtime-manifest.json \
+    && chmod 0755 /usr/local/bin/audit_runtime.py /usr/local/bin/dspark-entrypoint.sh
+
+LABEL org.opencontainers.image.title="DeepSeek V4 Flash DSpark SM121 runtime" \
+      org.opencontainers.image.description="Pinned dual-GB10 DSpark runtime with production NVFP4 DS-MLA KV cache" \
+      org.opencontainers.image.source="https://github.com/r0b0tlab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark" \
+      org.opencontainers.image.licenses="MIT AND Apache-2.0" \
+      org.opencontainers.image.revision="${IMAGE_REVISION}" \
+      io.r0b0tlab.model.id="deepseek-ai/DeepSeek-V4-Flash-DSpark" \
+      io.r0b0tlab.model.revision="913f0657a874f76844e2e91cbe706dbcaceeb6d7" \
+      io.r0b0tlab.kv-cache.dtype="nvfp4_ds_mla" \
+      io.r0b0tlab.speculative.method="dspark"
+
+ENTRYPOINT ["/usr/local/bin/dspark-entrypoint.sh"]

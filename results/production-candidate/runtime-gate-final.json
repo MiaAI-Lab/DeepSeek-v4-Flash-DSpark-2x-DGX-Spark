@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "evidence": {
+    "models": {
+      "ids": [
+        "deepseek-v4-flash-dspark"
+      ],
+      "entries": [
+        {
+          "id": "deepseek-v4-flash-dspark",
+          "object": "model",
+          "created": 1784530807,
+          "owned_by": "vllm",
+          "root": "/model",
+          "parent": null,
+          "max_model_len": 200000,
+          "permission": [
+            {
+              "id": "modelperm-aba6ddbc5e148c23",
+              "object": "model_permission",
+              "created": 1784530807,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "semantic": {
+      "content": "133",
+      "pass": true
+    },
+    "tool_call": {
+      "names": [
+        "get_weather"
+      ],
+      "pass": true
+    },
+    "retrieval": {
+      "content": "R0B0TLAB-DSVF-NVFP4-7319",
+      "usage": {
+        "prompt_tokens": 14433,
+        "total_tokens": 14450,
+        "completion_tokens": 17,
+        "prompt_tokens_details": null
+      },
+      "pass": true
+    },
+    "runtime_logs": {
+      "required": {
+        "dspark": true,
+        "nvfp4_kv": true,
+        "native_moe": true,
+        "rdma": true
+      },
+      "forbidden": {
+        "marlin": false,
+        "emulation": false,
+        "fallback": false
+      },
+      "head_log_bytes": 96756,
+      "worker_log_bytes": 58018
+    }
+  },
+  "errors": []
+}

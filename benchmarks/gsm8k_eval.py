@@ -9,7 +9,7 @@ N    = int(sys.argv[2]) if len(sys.argv) > 2 else 200
 CONC = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 OUT  = sys.argv[4] if len(sys.argv) > 4 else "/tmp/gsm8k_run.json"
 MODEL= "deepseek-v4-flash-dspark"
-DATA = os.environ.get("GSM8K_DATA", "/home/keyspark/logs/he_runs/gsm8k_test.jsonl")
+DATA = os.environ.get("GSM8K_DATA", "data/gsm8k_test.jsonl")
 
 qs = [json.loads(l) for l in open(DATA)][:N]
 

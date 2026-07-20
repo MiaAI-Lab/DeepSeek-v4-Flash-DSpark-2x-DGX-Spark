@@ -42,6 +42,20 @@ this recipe:
 This repository now carries the DSpark-r0b0tlab model implementation, draft-head
 runtime path, two-node DGX Spark launch flow, and publication artifacts.
 
+## Production vLLM 0.25 Runtime
+
+The production image is derived from Anemll's public two-node GB10 runtime,
+pinned by digest and source revision. That runtime carries the native vLLM 0.25
+DeepSeek-V4 DSpark speculator, SM121 kernels, FlashInfer B12X path, and
+`nvfp4_ds_mla` cache support used by this release:
+
+- https://github.com/Anemll/dspark-vllm-gx10
+- Release image: `ghcr.io/anemll/dspark-vllm-gx10:0.1.1`
+
+r0b0tlab adds the fail-closed runtime contract, audited entrypoint, dual-node
+profiles, regression gates, benchmark evidence, and release packaging. The old
+Stage-C lane is retained only for historical reproduction.
+
 ## Upstream Foundations
 
 This work also relies on:

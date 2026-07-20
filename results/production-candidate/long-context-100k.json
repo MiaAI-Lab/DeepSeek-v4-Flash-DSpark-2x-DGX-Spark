@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-07-20T07:07:10.631169+00:00",
+  "status": "PASS",
+  "model": "deepseek-v4-flash-dspark",
+  "synthetic_words": 90000,
+  "nonce": "release-candidate-uncached-final",
+  "prompt_tokens": 101305,
+  "minimum_prompt_tokens": 80000,
+  "elapsed_seconds": 54.429294424000545,
+  "needle": "ORBIT-NVFP4-74291",
+  "response_text": "ORBIT-NVFP4-74291",
+  "errors": []
+}

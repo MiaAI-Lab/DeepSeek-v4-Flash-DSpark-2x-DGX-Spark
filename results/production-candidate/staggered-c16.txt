@@ -1,0 +1,22 @@
+target http://127.0.0.1:8888  N=16  stagger=0.25s
+warmup...
+requests: 16/16 ok, 0 errors
+  req0: ok len=1060 15.2s
+  req1: ok len=1138 14.6s
+  req2: ok len=1167 14.3s
+  req3: ok len=1164 14.9s
+  req4: ok len=1195 15.2s
+  req5: ok len=1167 14.0s
+  req6: ok len=1164 14.5s
+  req7: ok len=1151 14.1s
+  req8: ok len=1151 13.6s
+  req9: ok len=1189 14.2s
+  req10: ok len=1164 13.9s
+  req11: ok len=1164 13.6s
+  req12: ok len=1193 13.8s
+  req13: ok len=1191 14.0s
+  req14: ok len=1173 13.8s
+  req15: ok len=1177 13.3s
+server aggregate gen tok/s over window: 236.2
+draft acceptance (all reqs): 0.688
+VERDICT: PASS (no errors, ragged/staggered works)
