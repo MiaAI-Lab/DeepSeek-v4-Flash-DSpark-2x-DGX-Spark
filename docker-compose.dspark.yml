@@ -66,6 +66,10 @@ services:
 
       TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-12.1a}"
       FLASHINFER_CUDA_ARCH_LIST: "${FLASHINFER_CUDA_ARCH_LIST:-12.1a}"
+      # Targets CuTeDSL kernel compilation at GB10 (sm_121a). Without this,
+      # vLLM JIT-compiles a slower W4A16FusedMoeKernel mid-inference instead
+      # of using GB10-native kernels — confirmed via live boot logs.
+      CUTE_DSL_ARCH: "${CUTE_DSL_ARCH:-sm_121a}"
       FLASHINFER_DISABLE_VERSION_CHECK: "${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
       FLASHINFER_WORKSPACE_BASE: "${FLASHINFER_WORKSPACE_BASE:-/cache/huggingface/flashinfer}"
       TILELANG_CLEANUP_TEMP_FILES: "${TILELANG_CLEANUP_TEMP_FILES:-1}"
