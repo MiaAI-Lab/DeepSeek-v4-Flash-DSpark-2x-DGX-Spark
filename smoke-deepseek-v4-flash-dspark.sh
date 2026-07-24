@@ -6,6 +6,24 @@ ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
 CHAT_URL="${CHAT_URL:-http://127.0.0.1:8888/v1/chat/completions}"
 CONCURRENCY="${CONCURRENCY:-6}"
 MAX_TOKENS="${MAX_TOKENS:-32}"
+SINGLE_STREAM_RECOVERY=0
+DRY_RUN="${DRY_RUN:-0}"
+
+case "${1:-}" in
+  --single-stream-recovery)
+    SINGLE_STREAM_RECOVERY=1
+    shift
+    ;;
+  "") ;;
+  *)
+    echo "usage: $0 [--single-stream-recovery]" >&2
+    exit 2
+    ;;
+esac
+if [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--single-stream-recovery]" >&2
+  exit 2
+fi
 
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -15,6 +33,25 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 MODEL="${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
+if [ "$SINGLE_STREAM_RECOVERY" -eq 1 ]; then
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: one bounded streaming request against $CHAT_URL"
+    exit 0
+  fi
+  response="$(mktemp)"
+  trap 'rm -f "$response"' EXIT
+  curl -N -fsS --max-time 180 "$CHAT_URL" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"'"$MODEL"'","messages":[{"role":"user","content":"Reply with OK."}],"stream":true,"max_tokens":8,"temperature":0.0}' \
+    >"$response"
+  if ! grep -q '^data: ' "$response" || ! grep -q '^data: \\[DONE\\]' "$response"; then
+    echo "Recovery streaming verification did not produce a first event and terminal completion." >&2
+    exit 1
+  fi
+  echo "Recovery streaming verification passed: 1/1 request completed."
+  exit 0
+fi
+
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 

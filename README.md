@@ -541,6 +541,9 @@ usage terms.
 | `status-deepseek-v4-flash-dspark.sh` | shows head/worker container state |
 | `logs-deepseek-v4-flash-dspark.sh` | tails head/worker DSpark logs |
 | `smoke-deepseek-v4-flash-dspark.sh` | direct concurrent OpenAI-compatible smoke test |
+| `monitor/observer/vllm_request_observer.py` | content-free John HTTP lifecycle middleware; not rank-progress proof |
+| `monitor/sentinel/model_serving_sentinel.py` | independent, atomic U4 evidence emitter for each rank |
+| `monitor/recovery/recover_deepseek_serving.py` | manifest-bound worker-first recovery transaction |
 | `validate-dspark-config.sh` | renders and checks the local DSpark compose/env config |
 | `prepare-dspark-model-cache.sh` | downloads/verifies the model cache |
 | `build-dspark-vllm-runtime.sh` | optional Stage-C local image build (not required for Anemll) |
@@ -760,6 +763,33 @@ Before pointing an agent harness at the endpoint, run the included smoke test:
 ```bash
 ./smoke-deepseek-v4-flash-dspark.sh
 ```
+
+The six-request smoke remains an operator test. Recovery uses
+`--single-stream-recovery`, which issues exactly one bounded streaming request
+and requires both a first SSE event and terminal `[DONE]`.
+
+## Recovery evidence limitation
+
+The optional vLLM middleware observes HTTP lifecycle only on John. Independent
+rank progress instead comes from a fail-closed `sitecustomize.py` hook around
+the pinned image's
+`vllm.v1.worker.gpu_worker.Worker.execute_model(self, scheduler_output)`. The
+hook requires exact vLLM version
+`0.25.2.dev0+g752a3a504.d20260714`, module path, method signature, observer
+revision, and an independently preprovisioned owner-only capability on each
+host. It increments scheduled-token and completion counters only after a
+successful worker call and persists no request IDs or content.
+
+If either hook cannot install or its atomic artifact is absent, stale, bound to
+a different rank/generation/revision, or only contains HTTP lifecycle evidence,
+that rank reports `unknown`; the deployment is not eligible for automatic
+deadlock recovery. HTTP responsiveness and GPU utilization are diagnostic only.
+
+The recovery adapter validates repository, image, configuration, artifact,
+observer, and adapter revisions on both ranks before either stop. Its strict
+recovery stop mode positively checks both ranks are stopped, starts Ofus before
+John, requires fresh process generations, and performs the single streaming
+verification. Ordinary operator stop behavior remains unchanged.
 
 If direct OpenAI-compatible prompts are clean but an agent still garbles,
 investigate the agent session, fallback list, or harness prompt replay before

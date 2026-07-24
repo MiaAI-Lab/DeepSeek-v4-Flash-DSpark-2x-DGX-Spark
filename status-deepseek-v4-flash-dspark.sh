@@ -8,6 +8,26 @@ PROJECT_NAME="${PROJECT_NAME:-deepseek-v4-flash}"
 LEGACY_PROJECT_NAME="${LEGACY_PROJECT_NAME:-$(basename "$SCRIPT_DIR" | tr '[:upper:]' '[:lower:]')}"
 API_URL="${API_URL:-http://127.0.0.1:8888/v1/models}"
 PORT="${PORT:-8888}"
+RECOVERY_CHECK=""
+RECOVERY_RANK=""
+DRY_RUN="${DRY_RUN:-0}"
+
+case "${1:-}" in
+  --recovery-stopped|--recovery-generation)
+    RECOVERY_CHECK="${1#--recovery-}"
+    RECOVERY_RANK="${2:-}"
+    shift 2
+    ;;
+  "") ;;
+  *)
+    echo "usage: $0 [--recovery-stopped|--recovery-generation head|worker]" >&2
+    exit 2
+    ;;
+esac
+if [ "$#" -ne 0 ] || { [ -n "$RECOVERY_CHECK" ] && [ "$RECOVERY_RANK" != "head" ] && [ "$RECOVERY_RANK" != "worker" ]; }; then
+  echo "usage: $0 [--recovery-stopped|--recovery-generation head|worker]" >&2
+  exit 2
+fi
 
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -21,6 +41,29 @@ fi
 
 cd "$SCRIPT_DIR"
 WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
+CONTAINER_NAME="${PROJECT_NAME}-vllm-dspark-1"
+
+if [ -n "$RECOVERY_CHECK" ]; then
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY RUN: recovery $RECOVERY_CHECK rank=$RECOVERY_RANK project=$PROJECT_NAME"
+    exit 0
+  fi
+  if [ "$RECOVERY_CHECK" = "stopped" ]; then
+    if [ "$RECOVERY_RANK" = "head" ]; then
+      ! docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"
+    else
+      ssh "$WORKER_HOST" "! docker ps --format '{{.Names}}' | grep -Fxq '$CONTAINER_NAME'"
+    fi
+    echo "stopped"
+    exit 0
+  fi
+  if [ "$RECOVERY_RANK" = "head" ]; then
+    docker inspect "$CONTAINER_NAME" --format '{{.Id}}@{{.State.StartedAt}}'
+  else
+    ssh "$WORKER_HOST" "docker inspect '$CONTAINER_NAME' --format '{{.Id}}@{{.State.StartedAt}}'"
+  fi
+  exit 0
+fi
 
 show_compose() {
   local project="$1"
