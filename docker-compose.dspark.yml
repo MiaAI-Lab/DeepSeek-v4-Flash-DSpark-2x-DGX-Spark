@@ -83,7 +83,13 @@ services:
       NCCL_SOCKET_IFNAME: "${NCCL_SOCKET_IFNAME}"
       TP_SOCKET_IFNAME: "${TP_SOCKET_IFNAME:-${NCCL_SOCKET_IFNAME}}"
       GLOO_SOCKET_IFNAME: "${GLOO_SOCKET_IFNAME:-${NCCL_SOCKET_IFNAME}}"
-      NCCL_IB_GID_INDEX: "${NCCL_IB_GID_INDEX:-}"
+      # Per-node RoCEv2 GID index. WORKER_NCCL_IB_GID_INDEX (rank 1) takes
+      # precedence when set; otherwise falls back to NCCL_IB_GID_INDEX (rank 0).
+      # The RoCEv2 IPv4 GID index differs per node and can drift across reboots;
+      # a single shared IPv4 index (e.g. 3) applied to both ranks can wedge NCCL
+      # at init with "unhandled system error". Setting the worker's index separately
+      # avoids this. Link-local IPv6 (index 0) is the most reboot-stable choice.
+      NCCL_IB_GID_INDEX: "${WORKER_NCCL_IB_GID_INDEX:-${NCCL_IB_GID_INDEX:-0}}"
       NCCL_IB_ADDR_FAMILY: "${NCCL_IB_ADDR_FAMILY:-AF_INET}"
       NCCL_IB_ROCE_VERSION_NUM: "${NCCL_IB_ROCE_VERSION_NUM:-2}"
       NCCL_CROSS_NIC: "${NCCL_CROSS_NIC:-1}"
