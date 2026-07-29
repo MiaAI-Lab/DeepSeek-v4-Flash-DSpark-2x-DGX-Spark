@@ -5,14 +5,64 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
 COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.dspark.yml}"
 PROJECT_NAME="${PROJECT_NAME:-deepseek-v4-flash}"
-API_URL="${API_URL:-http://127.0.0.1:8888/v1/models}"
-CHAT_URL="${CHAT_URL:-http://127.0.0.1:8888/v1/chat/completions}"
 WAIT_ATTEMPTS="${WAIT_ATTEMPTS:-100}"
 WAIT_SECONDS="${WAIT_SECONDS:-15}"
-PORT="${PORT:-8888}"
 ENABLE_VLLM_GB10_PATCH="${ENABLE_VLLM_GB10_PATCH:-0}"
 VLLM_GB10_PATCH_DIR="${VLLM_GB10_PATCH_DIR:-$SCRIPT_DIR/vllm_patch_gb10}"
 DSPARK_PROPOSER_FILE="${DSPARK_PROPOSER_FILE:-$SCRIPT_DIR/recipe/vllm/v1/spec_decode/dspark_proposer.py}"
+CLI_VLLM_HOST=""
+CLI_VLLM_PORT=""
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--host HOST] [--port PORT]
+
+Options:
+  --host HOST  vLLM API bind address (default: VLLM_HOST or 127.0.0.1)
+  --port PORT  vLLM API listen port (default: VLLM_PORT or 8888)
+  -h, --help   Show this help message
+
+Command-line options override values from $ENV_FILE.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "--host requires a value." >&2; exit 2; }
+      CLI_VLLM_HOST="$2"
+      shift 2
+      ;;
+    --host=*)
+      CLI_VLLM_HOST="${1#*=}"
+      [ -n "$CLI_VLLM_HOST" ] || { echo "--host requires a value." >&2; exit 2; }
+      shift
+      ;;
+    --port)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "--port requires a value." >&2; exit 2; }
+      CLI_VLLM_PORT="$2"
+      shift 2
+      ;;
+    --port=*)
+      CLI_VLLM_PORT="${1#*=}"
+      [ -n "$CLI_VLLM_PORT" ] || { echo "--port requires a value." >&2; exit 2; }
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      [ "$#" -eq 0 ] || { echo "Unexpected positional argument: $1" >&2; usage >&2; exit 2; }
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing $ENV_FILE. Copy .env.dspark.example to .env.dspark and edit node-specific values." >&2
@@ -28,6 +78,39 @@ set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
+
+# CLI values have highest precedence; the env file remains the persistent
+# configuration source when no command-line override is provided.
+VLLM_HOST="${CLI_VLLM_HOST:-${VLLM_HOST:-127.0.0.1}}"
+VLLM_PORT="${CLI_VLLM_PORT:-${VLLM_PORT:-${PORT:-8888}}}"
+if [ -z "$VLLM_HOST" ]; then
+  echo "VLLM host must not be empty." >&2
+  exit 2
+fi
+if ! [[ "$VLLM_PORT" =~ ^[0-9]+$ ]]; then
+  echo "VLLM port must be an integer between 1 and 65535: $VLLM_PORT" >&2
+  exit 2
+fi
+if (( 10#$VLLM_PORT < 1 || 10#$VLLM_PORT > 65535 )); then
+  echo "VLLM port must be between 1 and 65535: $VLLM_PORT" >&2
+  exit 2
+fi
+VLLM_PORT="$((10#$VLLM_PORT))"
+# Keep PORT as a backwards-compatible alias, but use VLLM_PORT internally.
+PORT="$VLLM_PORT"
+export VLLM_HOST VLLM_PORT PORT
+
+# A wildcard is valid for binding but not a useful health-check destination.
+API_HOST="${API_HOST:-$VLLM_HOST}"
+case "$API_HOST" in
+  0.0.0.0|::|\[::\]) API_HOST="127.0.0.1" ;;
+esac
+URL_HOST="$API_HOST"
+if [[ "$URL_HOST" == *:* && "$URL_HOST" != \[*\] ]]; then
+  URL_HOST="[$URL_HOST]"
+fi
+API_URL="${API_URL:-http://$URL_HOST:$VLLM_PORT/v1/models}"
+CHAT_URL="${CHAT_URL:-http://$URL_HOST:$VLLM_PORT/v1/chat/completions}"
 
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
@@ -209,12 +292,14 @@ resolve_nccl_gid_indexes() {
 
 remote_nccl_env() {
   # Rebuild each call so GID resolve after early init is visible on the worker.
-  printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' NCCL_IB_GID_INDEX='%s'" \
+  printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' NCCL_IB_GID_INDEX='%s' VLLM_HOST='%s' VLLM_PORT='%s'" \
     "$WORKER_NCCL_IB_HCA" \
     "$WORKER_NCCL_SOCKET_IFNAME" \
     "$WORKER_TP_SOCKET_IFNAME" \
     "$WORKER_GLOO_SOCKET_IFNAME" \
-    "$WORKER_NCCL_IB_GID_INDEX"
+    "$WORKER_NCCL_IB_GID_INDEX" \
+    "$VLLM_HOST" \
+    "$VLLM_PORT"
 }
 
 compose_base() {
@@ -225,6 +310,8 @@ compose_base() {
     NCCL_IB_HCA="$NCCL_IB_HCA" \
     NCCL_SOCKET_IFNAME="$NCCL_SOCKET_IFNAME" \
     NCCL_IB_GID_INDEX="${NCCL_IB_GID_INDEX:-}" \
+    VLLM_HOST="$VLLM_HOST" \
+    VLLM_PORT="$VLLM_PORT" \
     VLLM_HOST_IP="$VLLM_HOST_IP" \
     ENABLE_VLLM_GB10_PATCH="$ENABLE_VLLM_GB10_PATCH" \
     VLLM_GB10_PATCH_DIR="$VLLM_GB10_PATCH_DIR" \
@@ -290,7 +377,9 @@ print_resolved_profile() {
   echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.80}"
   echo "  mtp speculative tokens: ${MTP_NUM_TOKENS:-5} (dspark_block_size min is 5)"
   echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))"
-  echo "  head host/ip: ${VLLM_HOST:-127.0.0.1} / $VLLM_HOST_IP"
+  echo "  API bind: $VLLM_HOST:$VLLM_PORT"
+  echo "  API probe: $API_URL"
+  echo "  head fabric IP: $VLLM_HOST_IP"
   echo "  worker host/ip: $WORKER_HOST / $WORKER_VLLM_HOST_IP"
   echo "  head NCCL HCA/if: $NCCL_IB_HCA / $NCCL_SOCKET_IFNAME"
   echo "  worker NCCL HCA/if: $WORKER_NCCL_IB_HCA / $WORKER_NCCL_SOCKET_IFNAME"
@@ -356,8 +445,8 @@ if docker ps --format '{{.Names}}' | grep -qx "${PROJECT_NAME}-vllm-dspark-1"; t
   exit 1
 fi
 
-if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$PORT )" | tail -n +2 | grep -q .; then
-  echo "Port $PORT is already listening on the head node. Stop the conflicting service first." >&2
+if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n +2 | grep -q .; then
+  echo "Port $VLLM_PORT is already listening on the head node. Stop the conflicting service first." >&2
   exit 1
 fi
 

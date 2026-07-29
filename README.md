@@ -605,6 +605,7 @@ experimenting (do not treat a temporary local `MAX_MODEL_LEN` override as the
 recipe default):
 
 - `VLLM_HOST=0.0.0.0` if Hermes/OpenClaw or another machine must reach the API
+- `VLLM_PORT=8888`
 - `MAX_MODEL_LEN=1048576` (**1M**)
 - `MAX_NUM_SEQS=6`
 - `MAX_NUM_BATCHED_TOKENS=8192`
@@ -647,6 +648,17 @@ Start the service:
 ./start-deepseek-v4-flash-dspark.sh
 ```
 
+The API bind address and port can be overridden for one launch without editing
+`.env.dspark`:
+
+```bash
+./start-deepseek-v4-flash-dspark.sh --host 0.0.0.0 --port 9000
+```
+
+These flags override `VLLM_HOST` and `VLLM_PORT` from `.env.dspark`. When the
+bind address is a wildcard, startup health checks still connect through
+`127.0.0.1` on the selected port.
+
 Optional experimental GB10 hybrid NVFP4 plugin:
 
 ```bash
@@ -668,10 +680,11 @@ recent head and worker logs before exiting.
 The API serves at:
 
 ```text
-http://HEAD_NODE_IP:8888/v1
+http://HEAD_NODE_IP:VLLM_PORT/v1
 ```
 
-For head-node-only tests, set `VLLM_HOST=127.0.0.1`. For Hermes/OpenClaw or
+`VLLM_PORT` defaults to `8888`. For head-node-only tests, set
+`VLLM_HOST=127.0.0.1`. For Hermes/OpenClaw or
 another machine to use the endpoint, keep `VLLM_HOST=0.0.0.0` and control
 access at the network/firewall layer.
 
