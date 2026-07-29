@@ -43,10 +43,21 @@ docker pull ghcr.io/anemll/dspark-vllm-gx10:0.1.1
 Alternative: set `DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c`
 and run `./build-dspark-vllm-runtime.sh` for the historical multi-stage Stage-C
 overlay build. Stage-C recipes and overlay sources remain under `recipe/`.
+When using Stage-C, also merge `docker-compose.stage-c.override.yml` and enable
+the Stage-C env block in `.env.dspark` (see [`docs/ENVS.md`](docs/ENVS.md)).
 
 This repo still vendors Keys' DSpark concurrency patch and Stage-C overlay
 sources for local image builds and documentation. With the Anemll image, that
 logic ships inside the image rather than as a host bind-mount.
+
+> [!NOTE]
+> **Environment variables differ by image.** The default Anemll `0.1.1` image does
+> **not** register every `VLLM_DSPARK_*` / `VLLM_USE_B12X_WO_PROJECTION` kill-switch
+> from the Stage-C overlay. Setting those on Anemll only yields
+> `Unknown vLLM environment variable` warnings (no-ops). See
+> [`docs/ENVS.md`](docs/ENVS.md). Stage-C users should merge
+> `docker-compose.stage-c.override.yml`.
+
 
 **Default agent-serving profile** (`.env.dspark.example` and README defaults):
 
@@ -536,6 +547,8 @@ usage terms.
 | --- | --- |
 | `docker-compose.dspark.yml` | two-node vLLM/DSpark service (Anemll image layout by default) |
 | `.env.dspark.example` | sanitized cluster template; default image Anemll `0.1.1`, **1M** context |
+| [`docs/ENVS.md`](docs/ENVS.md) | Anemll vs Stage-C env registry matrix (unknown-`VLLM_*` warnings) |
+| `docker-compose.stage-c.override.yml` | optional Stage-C-only env injection |
 | `start-deepseek-v4-flash-dspark.sh` | worker-first launch and smoke test; image must exist on both nodes |
 | `stop-deepseek-v4-flash-dspark.sh` | stops head and worker services |
 | `status-deepseek-v4-flash-dspark.sh` | shows head/worker container state |

@@ -1,0 +1,37 @@
+# Optional override for the historical Stage-C overlay image:
+#   DSPARK_VLLM_IMAGE=vllm-dspark-runtime:dspark-nvfp4-stage-c
+#
+# Usage:
+#   docker compose --env-file .env.dspark \
+#     -f docker-compose.dspark.yml \
+#     -f docker-compose.stage-c.override.yml \
+#     up -d
+#
+# On the default Anemll image (0.1.1) these VLLM_* keys are NOT registered in
+# vllm.envs and only produce "Unknown vLLM environment variable" warnings.
+# See docs/ENVS.md.
+
+services:
+  vllm-dspark:
+    environment:
+      # Long-context draft-KV slot clamp (read by overlay paths; non-VLLM_ prefix).
+      DSPARK_SLOT_CLAMP: "${DSPARK_SLOT_CLAMP:-1}"
+
+      VLLM_USE_B12X_WO_PROJECTION: "${VLLM_USE_B12X_WO_PROJECTION:-1}"
+      B12X_W4A16_TC_DECODE: "${B12X_W4A16_TC_DECODE:-0}"
+
+      VLLM_DSPARK_CONFIDENCE_THRESHOLD: "${VLLM_DSPARK_CONFIDENCE_THRESHOLD:-0.0}"
+      VLLM_DSPARK_CONFIDENCE_SCHEDULER: "${VLLM_DSPARK_CONFIDENCE_SCHEDULER:-off}"
+      VLLM_DSPARK_LOCAL_ARGMAX: "${VLLM_DSPARK_LOCAL_ARGMAX:-1}"
+      VLLM_DSPARK_REPLICATE_MARKOV_W1: "${VLLM_DSPARK_REPLICATE_MARKOV_W1:-1}"
+      VLLM_DSPARK_FUSED_MARKOV_ARGMAX: "${VLLM_DSPARK_FUSED_MARKOV_ARGMAX:-0}"
+      VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK: "${VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK:-1}"
+      VLLM_DSPARK_REFERENCE_KV_QUANT_DEQUANT: "${VLLM_DSPARK_REFERENCE_KV_QUANT_DEQUANT:-0}"
+      VLLM_DSPARK_HARDWARE_SCHEDULER_EARLY_STOP: "${VLLM_DSPARK_HARDWARE_SCHEDULER_EARLY_STOP:-1}"
+      VLLM_DSV4_B12X_COMPRESSED_MLA: "${VLLM_DSV4_B12X_COMPRESSED_MLA:-0}"
+      VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE: "${VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE:-0}"
+      VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT: "${VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT:-0}"
+
+      # Present in some overlay/historical lanes; not registered on Anemll 0.1.1.
+      VLLM_TRITON_MLA_SPARSE: "${VLLM_TRITON_MLA_SPARSE:-1}"
+      VLLM_SKIP_INIT_MEMORY_CHECK: "${VLLM_SKIP_INIT_MEMORY_CHECK:-1}"
