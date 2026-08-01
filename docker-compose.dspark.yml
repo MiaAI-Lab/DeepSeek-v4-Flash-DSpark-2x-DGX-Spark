@@ -131,6 +131,7 @@ services:
         --max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))
         --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
         --enable-prefix-caching
+        --enable-prompt-tokens-details
         --async-scheduling
         --enable-chunked-prefill
         --speculative-config "$${SPECULATIVE_CONFIG}"
