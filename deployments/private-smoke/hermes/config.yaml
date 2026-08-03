@@ -39,7 +39,9 @@ terminal:
   container_cpu: 1
   container_memory: 1024
   container_disk: 2048
-  container_persistent: true
+  # Keep the container alive for evidence collection, but keep its filesystem
+  # on tmpfs so neither /root nor /workspace is bind-mounted from the host.
+  container_persistent: false
   docker_persist_across_processes: true
   docker_orphan_reaper: false
   docker_volumes: []

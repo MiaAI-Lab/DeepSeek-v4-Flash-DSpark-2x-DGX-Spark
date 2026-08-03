@@ -227,6 +227,7 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
         pass
 if not rows:
     raise SystemExit("no Hermes terminal container was observed")
+task_rows = {}
 for row in rows:
     if row.get("HostConfig", {}).get("NetworkMode") != "none":
         raise SystemExit("terminal container did not use --network=none")
@@ -235,6 +236,11 @@ for row in rows:
     labels = row.get("Config", {}).get("Labels") or {}
     if labels.get("hermes-agent") != "1" or "hermes-profile" not in labels:
         raise SystemExit("terminal container lacks Hermes isolation labels")
+    task_rows.setdefault(labels.get("hermes-task-id", ""), []).append(row)
+if len(task_rows.get("default", [])) != 1:
+    raise SystemExit("expected exactly one isolated default task container")
+if set(task_rows) - {"default", "prompt-backend-probe"}:
+    raise SystemExit(f"unexpected Hermes task containers: {sorted(task_rows)}")
 PY
 }
 
@@ -263,7 +269,13 @@ copy_workspace_evidence() {
 import json
 from pathlib import Path
 import sys
-ids = {json.loads(line)["Id"] for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()}
+ids = {
+    row["Id"]
+    for line in Path(sys.argv[1]).read_text().splitlines()
+    if line.strip()
+    for row in [json.loads(line)]
+    if (row.get("Config", {}).get("Labels") or {}).get("hermes-task-id") == "default"
+}
 if len(ids) != 1:
     raise SystemExit(f"expected one persistent Hermes terminal container, found {len(ids)}")
 print(ids.pop())
@@ -342,11 +354,15 @@ after = json.loads(Path(after_path).read_text(encoding="utf-8"))["sha256"]
 if before != after:
     raise SystemExit("shared default/hermesia state changed during isolated run")
 container_rows = [json.loads(line) for line in Path(observations).read_text().splitlines() if line.strip()]
-if len({row["Id"] for row in container_rows}) != 1:
-    raise SystemExit("missing unique Docker confinement evidence")
+default_rows = [
+    row for row in container_rows
+    if (row.get("Config", {}).get("Labels") or {}).get("hermes-task-id") == "default"
+]
+if len({row["Id"] for row in default_rows}) != 1:
+    raise SystemExit("missing unique default-task Docker confinement evidence")
 container_isolated = all(
     row.get("HostConfig", {}).get("NetworkMode") == "none" and not row.get("Mounts")
-    for row in container_rows
+    for row in default_rows
 )
 if not container_isolated:
     raise SystemExit("terminal container isolation evidence failed")

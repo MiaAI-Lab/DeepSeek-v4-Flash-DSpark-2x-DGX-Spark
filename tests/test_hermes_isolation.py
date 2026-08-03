@@ -33,7 +33,7 @@ class HermesIsolationTest(unittest.TestCase):
             'cwd: "/workspace"',
             'home_mode: "profile"',
             "api_max_retries: 1",
-            "container_persistent: true",
+            "container_persistent: false",
             "docker_persist_across_processes: true",
             "docker_volumes: []",
             "docker_mount_cwd_to_workspace: false",
@@ -108,7 +108,7 @@ class HermesIsolationTest(unittest.TestCase):
         for required in (
             "default", "hermesia", "active_profile", "LaunchAgents",
             "readlink", "stat", "sha256", "before", "after", "trap",
-            "rm -rf --", "hermes-agent=1", "hermes-profile",
+            "rm -rf --", "hermes-agent=1", "hermes-profile", "prompt-backend-probe",
         ):
             self.assertIn(required, text)
 
