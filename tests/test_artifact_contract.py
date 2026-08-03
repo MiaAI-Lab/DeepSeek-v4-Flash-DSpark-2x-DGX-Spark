@@ -118,6 +118,7 @@ class ArtifactContractTest(unittest.TestCase):
         script = (ROOT / "prepare-dspark-model-cache.sh").read_text()
         self.assertGreaterEqual(script.count('revision=os.environ["DSPARK_MODEL_REVISION"]'), 2)
         self.assertIn("local_files_only=True", script)
+        self.assertIn('HF_XET_HIGH_PERFORMANCE="${HF_XET_HIGH_PERFORMANCE:-0}"', script)
         offline_section = script.split("verify_cache()", 1)[1]
         self.assertIn("HF_HUB_OFFLINE=1", offline_section)
         self.assertIn("rsync -a --partial --safe-links", script)
