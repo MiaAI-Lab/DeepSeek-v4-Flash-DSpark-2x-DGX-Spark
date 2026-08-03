@@ -47,17 +47,19 @@ services:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
       NO_DOCS: "True"
       PRISMA_HOME_DIR: /app/cache
-      PRISMA_QUERY_ENGINE_BINARY: /app/cache/.cache/prisma-python/binaries/5.4.2/ac9d7041ed77bcc8a8dbd2ab6616b39013829574/node_modules/prisma/query-engine-linux-arm64-openssl-3.0.x
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./secret-entrypoint.sh:/app/secret-entrypoint.sh:ro
       - ${LITELLM_MASTER_KEY_FILE:?set LITELLM_MASTER_KEY_FILE}:/run/secrets/master-key:ro
       - ${VLLM_ORIGIN_KEY_FILE:?set VLLM_ORIGIN_KEY_FILE}:/run/secrets/origin-key:ro
       - ${LITELLM_DB_PASSWORD_FILE:?set LITELLM_DB_PASSWORD_FILE}:/run/secrets/database-password:ro
-      - prisma-cache:/app/cache/.cache/prisma-python:ro
+      # The generated Prisma client pins its engine under /root/.cache. Hide the
+      # image's /root and expose only the immutable engine cache at that path.
+      - prisma-cache:/root/.cache/prisma-python:ro
     tmpfs:
       - /tmp:size=256m,mode=1777
       - /app/cache:size=64m,uid=1000,gid=1000,mode=0700
+      - /root:size=1m,uid=0,gid=0,mode=0711
     entrypoint: ["/bin/sh", "/app/secret-entrypoint.sh"]
     command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4001", "--num_workers", "1"]
     ports:
