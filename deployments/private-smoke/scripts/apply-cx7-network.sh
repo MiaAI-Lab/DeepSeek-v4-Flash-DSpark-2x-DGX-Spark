@@ -31,8 +31,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$ROLE" in
-  head) TEMPLATE="$NETWORK_DIR/head-cx7.yaml"; ADDRESS="10.77.77.1/30"; PEER_HOST="spark-lab" ;;
-  worker) TEMPLATE="$NETWORK_DIR/worker-cx7.yaml"; ADDRESS="10.77.77.2/30"; PEER_HOST="spark-api" ;;
+  head) TEMPLATE="$NETWORK_DIR/head-cx7.yaml"; ADDRESS="10.77.77.1/30"; PEER_HOST="dgx-spark-2.tailc62fd7.ts.net" ;;
+  worker) TEMPLATE="$NETWORK_DIR/worker-cx7.yaml"; ADDRESS="10.77.77.2/30"; PEER_HOST="dgx-spark-1.tailc62fd7.ts.net" ;;
   *) echo "--role must be head or worker" >&2; exit 2 ;;
 esac
 

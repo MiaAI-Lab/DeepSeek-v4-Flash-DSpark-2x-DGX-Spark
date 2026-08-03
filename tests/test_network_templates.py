@@ -44,6 +44,8 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn("ip route", script)
         self.assertIn("default_before", script)
         self.assertIn("tailscale ping", script)
+        self.assertIn("dgx-spark-1.tailc62fd7.ts.net", script)
+        self.assertIn("dgx-spark-2.tailc62fd7.ts.net", script)
         self.assertIn("enp1s0f0np0", script)
         self.assertNotIn("rm -rf", script)
         result = subprocess.run(
