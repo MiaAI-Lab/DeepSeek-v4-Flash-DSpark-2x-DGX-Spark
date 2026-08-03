@@ -1,5 +1,7 @@
 .env.dspark
 .env.dspark.works
+.env.dspark.head
+.env.dspark.worker
 .env
 .secrets/
 *.pem
@@ -15,6 +17,7 @@ vllm-cache/
 /models/
 bench-results/
 benchmarks/
+artifacts/
 RESULTS.md
 scripts/agent_sanity_bench.py
 scripts/capture_runtime.sh

@@ -16,6 +16,7 @@ if [ -n "${THIS_NODE_HF_CACHE:-}" ]; then
 fi
 
 : "${DSPARK_MODEL:=deepseek-ai/DeepSeek-V4-Flash-DSpark}"
+: "${DSPARK_MODEL_REVISION:?DSPARK_MODEL_REVISION must pin the Hugging Face snapshot commit}"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
@@ -44,6 +45,7 @@ verify_worker_image() {
 }
 
 need_cmd docker
+need_cmd python3
 mkdir -p "$HF_CACHE"
 verify_local_image
 
@@ -58,10 +60,11 @@ run_download() {
     -e TRANSFORMERS_OFFLINE=0 \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
     -e DSPARK_MODEL="$DSPARK_MODEL" \
+    -e DSPARK_MODEL_REVISION="$DSPARK_MODEL_REVISION" \
     -e HF_DOWNLOAD_WORKERS="$HF_DOWNLOAD_WORKERS" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
-    -c 'from huggingface_hub import snapshot_download; import os; print(snapshot_download(os.environ["DSPARK_MODEL"], max_workers=int(os.environ.get("HF_DOWNLOAD_WORKERS", "1"))))'
+    -c 'from huggingface_hub import snapshot_download; import os; print(snapshot_download(os.environ["DSPARK_MODEL"], revision=os.environ["DSPARK_MODEL_REVISION"], max_workers=int(os.environ.get("HF_DOWNLOAD_WORKERS", "1"))))'
 }
 
 verify_cache() {
@@ -73,6 +76,7 @@ verify_cache() {
     -e TRANSFORMERS_OFFLINE=1 \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
     -e DSPARK_MODEL="$DSPARK_MODEL" \
+    -e DSPARK_MODEL_REVISION="$DSPARK_MODEL_REVISION" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
     - <<'PY'
@@ -81,7 +85,7 @@ import os
 from pathlib import Path
 from huggingface_hub import snapshot_download
 
-path = Path(snapshot_download(os.environ["DSPARK_MODEL"], local_files_only=True))
+path = Path(snapshot_download(os.environ["DSPARK_MODEL"], revision=os.environ["DSPARK_MODEL_REVISION"], local_files_only=True))
 index_path = path / "model.safetensors.index.json"
 index = json.loads(index_path.read_text())
 needed = sorted(set(index["weight_map"].values()))
@@ -99,15 +103,31 @@ PY
 run_download
 verify_cache
 
+model_cache_name="models--${DSPARK_MODEL//\//--}"
+snapshot_dir="$HF_CACHE/hub/$model_cache_name/snapshots/$DSPARK_MODEL_REVISION"
+manifest_file="${ARTIFACT_MANIFEST_FILE:-$SCRIPT_DIR/artifacts/model-manifest.json}"
+python3 "$SCRIPT_DIR/scripts/verify-artifact-manifest.py" create \
+  --snapshot "$snapshot_dir" \
+  --revision "$DSPARK_MODEL_REVISION" \
+  --image "$DSPARK_VLLM_IMAGE" \
+  --output "$manifest_file"
+echo "artifact_manifest=$manifest_file"
+
 if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE or environment}"
   WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
   WORKER_HF_CACHE="${WORKER_HF_CACHE:-$HF_CACHE}"
   need_cmd ssh
   need_cmd scp
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "mkdir -p '$WORKER_DIR' '$WORKER_HF_CACHE'"
+  WORKER_ENV_FILE="${WORKER_ENV_FILE:-$SCRIPT_DIR/.env.dspark.worker}"
+  python3 "$SCRIPT_DIR/scripts/generate-node-env.py" \
+    --source "$ENV_FILE" \
+    --head-output "${HEAD_ENV_FILE:-$SCRIPT_DIR/.env.dspark.head}" \
+    --worker-output "$WORKER_ENV_FILE"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "mkdir -p '$WORKER_DIR/scripts' '$WORKER_HF_CACHE'"
   verify_worker_image
   scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
-  scp "$ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
+  scp "$SCRIPT_DIR/scripts/verify-artifact-manifest.py" "${WORKER_HOST}:${WORKER_DIR}/scripts/verify-artifact-manifest.py"
+  scp "$WORKER_ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
   ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ./prepare-dspark-model-cache.sh"
 fi

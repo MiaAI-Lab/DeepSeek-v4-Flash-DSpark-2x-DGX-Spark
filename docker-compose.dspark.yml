@@ -1,6 +1,6 @@
 services:
   vllm-dspark:
-    image: ${DSPARK_VLLM_IMAGE:-ghcr.io/anemll/dspark-vllm-gx10:0.1.1}
+    image: ${DSPARK_VLLM_IMAGE:-ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8}
     pull_policy: if_not_present
     entrypoint: []
     network_mode: host
@@ -116,6 +116,7 @@ services:
           *) echo "DEFAULT_THINKING must be one of: off, low, high, max (got: $${DEFAULT_THINKING})" >&2; exit 2 ;;
         esac;
         exec /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}
+        --revision ${DSPARK_MODEL_REVISION}
         --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}
         --host ${VLLM_HOST:-127.0.0.1}
         --port ${VLLM_PORT:-8888}
