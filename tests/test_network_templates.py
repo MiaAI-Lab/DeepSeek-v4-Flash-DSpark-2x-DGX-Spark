@@ -83,6 +83,7 @@ class NetworkTemplatesTest(unittest.TestCase):
         )
         self.assertIn("da0b547b1b9c6e3b1d4c15578087874522ae3761", dockerfile)
         self.assertIn("MPI=1", dockerfile)
+        self.assertIn("MPI_HOME=/usr/lib/aarch64-linux-gnu/openmpi", dockerfile)
 
     def test_head_ssh_config_pins_the_private_worker_identity(self):
         text = (NETWORK / "head-ssh-config").read_text()

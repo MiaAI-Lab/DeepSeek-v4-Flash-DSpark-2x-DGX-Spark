@@ -10,7 +10,8 @@ RUN apt-get update \
     && git -C /opt/nccl-tests fetch --depth 1 origin "${NCCL_TESTS_COMMIT}" \
     && git -C /opt/nccl-tests checkout --detach FETCH_HEAD \
     && test "$(git -C /opt/nccl-tests rev-parse HEAD)" = "${NCCL_TESTS_COMMIT}" \
-    && make -C /opt/nccl-tests MPI=1 CUDA_HOME=/usr/local/cuda \
+    && make -C /opt/nccl-tests MPI=1 \
+       MPI_HOME=/usr/lib/aarch64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
 
