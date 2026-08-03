@@ -71,6 +71,8 @@ services:
         ipv4_address: 172.30.0.10
       database:
         ipv4_address: 172.31.0.10
+      ingress:
+        ipv4_address: 172.29.0.10
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4001/health/liveliness', timeout=2)"]
       interval: 5s
@@ -89,6 +91,12 @@ networks:
       config:
         - subnet: 172.31.0.0/24
           gateway: 172.31.0.1
+  ingress:
+    name: dspark-smoke-ingress
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+          gateway: 172.29.0.1
 
 volumes:
   prisma-cache:

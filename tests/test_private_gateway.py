@@ -21,6 +21,7 @@ class PrivateGatewayTest(unittest.TestCase):
             "prisma-cache:/app/cache/.cache/prisma-python:ro",
             "/root:size=1m,uid=0,gid=0,mode=0711",
             "dspark-private-litellm-prisma-cache", "external: true",
+            "dspark-smoke-ingress", "172.29.0.10", "172.29.0.0/24",
             "${HEAD_TAILSCALE_IP:?set HEAD_TAILSCALE_IP to the head tailnet address}:4001:4001",
         ):
             self.assertIn(required, text)
@@ -81,6 +82,9 @@ class PrivateGatewayTest(unittest.TestCase):
         policy = (GATEWAY / "egress-policy.sh").read_text()
         self.assertIn("sudo -n true", policy)
         self.assertIn("--privileged --pid host --entrypoint nsenter", policy)
+        self.assertIn("DOCKER-USER", policy)
+        self.assertIn("ESTABLISHED,RELATED", policy)
+        self.assertIn("172.29.0.10", policy)
         self.assertIn("sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8", policy)
         with tempfile.TemporaryDirectory() as temporary:
             sudo = Path(temporary) / "sudo"
