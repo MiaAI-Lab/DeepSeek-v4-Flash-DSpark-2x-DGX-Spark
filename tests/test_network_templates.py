@@ -105,6 +105,8 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn('/opt/openmpi/.', script)
         self.assertIn('--prefix "$mpi_runtime"', script)
         self.assertIn('LD_LIBRARY_PATH="$mpi_runtime/lib', script)
+        self.assertIn('OPAL_PREFIX="$mpi_runtime"', script)
+        self.assertIn("mpirun' -V", script)
         self.assertIn("trap cleanup EXIT", script)
         self.assertIn("--volume /tmp:/tmp", script)
         self.assertIn("--volume /run:/run", script)
