@@ -103,6 +103,7 @@ class HermesIsolationTest(unittest.TestCase):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):
             self.assertNotIn(forbidden, text)
+        self.assertNotIn("HERMES_STREAM_RETRIES=0 \\\n    #", text)
 
     def test_failure_probe_excludes_profile_verification_requests(self):
         text = (HERMES / "run-suite.sh").read_text()

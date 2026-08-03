@@ -438,13 +438,13 @@ PY
 run_hermes() {
   local profile_home="$1" prompt_file="$2" usage_file="$3" response_file="$4" observations="$5"
   local workspace_evidence="$6" writer_observation="$7"
+  # Always record the redacted synthetic request history: Hermes destroys
+  # the tmpfs immediately after the tool result, so this is the durable
+  # source for the executed program's stdout contract.
   env -i \
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
     HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
     HERMES_TELEMETRY_DISABLED=1 HERMES_STREAM_RETRIES=0 \
-    # Always record the redacted synthetic request history: Hermes destroys
-    # the tmpfs immediately after the tool result, so this is the durable
-    # source for the executed program's stdout contract.
     HERMES_DUMP_REQUESTS=1 \
     DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
     "$HERMES_BIN" -z "$(<"$prompt_file")" \
