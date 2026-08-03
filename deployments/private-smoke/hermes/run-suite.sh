@@ -356,7 +356,7 @@ run_hermes() {
       --provider "$PROVIDER" --model "$MODEL" --toolsets terminal --ignore-rules \
       >"$response_file" 2>"$RUN_TMP/hermes-stderr.log" &
   local hermes_pid=$!
-  local status=0 elapsed=0 process_state=""
+  local status=0 elapsed=0 process_state="" started_at=$SECONDS
   while kill -0 "$hermes_pid" >/dev/null 2>&1; do
     # Hermes may rotate a tmpfs-backed terminal container while it finalizes
     # a turn. Recover the synthetic output while the writer is still alive;
@@ -368,6 +368,7 @@ run_hermes() {
     process_state="$(ps -p "$hermes_pid" -o state= 2>/dev/null | tr -d '[:space:]')"
     [ -n "$process_state" ] || break
     case "$process_state" in Z*) break ;; esac
+    elapsed=$((SECONDS - started_at))
     if [ "$elapsed" -ge "$HERMES_PROCESS_TIMEOUT" ]; then
       echo "Hermes one-shot exceeded ${HERMES_PROCESS_TIMEOUT}s; terminating test process $hermes_pid." >&2
       kill -TERM "$hermes_pid" >/dev/null 2>&1 || true
@@ -382,8 +383,7 @@ run_hermes() {
       status=124
       break
     fi
-    sleep 1
-    elapsed=$((elapsed + 1))
+    sleep 0.1
   done
   if [ "$status" -eq 0 ]; then
     wait "$hermes_pid" || status=$?
