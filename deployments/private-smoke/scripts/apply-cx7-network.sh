@@ -7,6 +7,7 @@ MODE="check"
 ROLE=""
 IFACE="enp1s0f0np0"
 TARGET="/etc/netplan/90-dspark-cx7.yaml"
+CONNECTION="netplan-$IFACE"
 
 usage() {
   cat <<'EOF'
@@ -14,7 +15,7 @@ Usage: apply-cx7-network.sh [--check|--apply] --role head|worker
 
 Runs locally on the selected Spark. Check mode is the default and makes no
 persistent change. Apply mode requires an interactive confirmation and uses
-netplan try plus a systemd-run timed rollback.
+Netplan generation, targeted NetworkManager activation, and a timed rollback.
 EOF
 }
 
@@ -35,7 +36,7 @@ case "$ROLE" in
   *) echo "--role must be head or worker" >&2; exit 2 ;;
 esac
 
-for command in ip sudo netplan systemd-run tailscale; do
+for command in ip sudo netplan nmcli systemd-run tailscale; do
   command -v "$command" >/dev/null 2>&1 || { echo "Missing command: $command" >&2; exit 1; }
 done
 [ -f "$TEMPLATE" ] || { echo "Missing template: $TEMPLATE" >&2; exit 1; }
@@ -45,6 +46,11 @@ sudo -v
 default_before="$(ip -4 route show default)"
 [ -n "$default_before" ] || { echo "No IPv4 default route is active; refusing network work." >&2; exit 1; }
 tailscale status --peers=false >/dev/null
+connection_before="$(nmcli -g GENERAL.CONNECTION device show "$IFACE")"
+if [ ! -f "$TARGET" ] && [ -n "$connection_before" ] && [ "$connection_before" != "--" ]; then
+  echo "$IFACE already has an active unmanaged NetworkManager connection: $connection_before" >&2
+  exit 1
+fi
 if ip -4 route show table all | grep -F "10.77.77.0/30" >/dev/null; then
   current="$(ip -4 address show dev "$IFACE")"
   printf '%s\n' "$current" | grep -F "$ADDRESS" >/dev/null || {
@@ -89,10 +95,10 @@ backup_dir="/var/backups/dspark-netplan/$stamp-$ROLE"
 sudo install -d -m 0700 "$backup_dir"
 if [ -f "$TARGET" ]; then
   sudo cp -a "$TARGET" "$backup_dir/original.yaml"
-  rollback="cp '$backup_dir/original.yaml' '$TARGET'; netplan apply"
+  rollback="cp '$backup_dir/original.yaml' '$TARGET'; netplan generate; nmcli connection reload; nmcli connection up '$CONNECTION' ifname '$IFACE'"
 else
   sudo touch "$backup_dir/target-was-absent"
-  rollback="find '$TARGET' -maxdepth 0 -type f -delete; netplan apply"
+  rollback="find '$TARGET' -maxdepth 0 -type f -delete; netplan generate; nmcli connection reload; nmcli device disconnect '$IFACE' || true; ip link set dev '$IFACE' up"
 fi
 sudo install -m 0600 "$TEMPLATE" "$TARGET"
 sudo netplan generate
@@ -100,10 +106,8 @@ sudo netplan generate
 rollback_unit="dspark-cx7-rollback-$stamp"
 sudo systemd-run --unit "$rollback_unit" --on-active=120s /bin/sh -c "$rollback"
 echo "Timed rollback armed as $rollback_unit for 120 seconds."
-if ! sudo netplan try --timeout 30; then
-  echo "netplan try failed or was not confirmed; rollback remains armed." >&2
-  exit 1
-fi
+sudo nmcli connection reload
+sudo nmcli connection up "$CONNECTION" ifname "$IFACE"
 ip -4 address show dev "$IFACE" | grep -F "$ADDRESS" >/dev/null
 test "$(ip -4 route show default)" = "$default_before" || {
   echo "The IPv4 default route changed; rollback remains armed." >&2
@@ -115,6 +119,7 @@ ip route show default | grep -F "dev $IFACE" >/dev/null && {
 }
 tailscale status --peers=false >/dev/null
 tailscale ping --timeout=5s "$PEER_HOST" >/dev/null
+sudo netplan get "ethernets.$IFACE" | grep -F "$ADDRESS" >/dev/null
 sudo systemctl stop "$rollback_unit.timer" 2>/dev/null || true
 sudo systemctl reset-failed "$rollback_unit.service" 2>/dev/null || true
 echo "Applied $TARGET; backup=$backup_dir"
