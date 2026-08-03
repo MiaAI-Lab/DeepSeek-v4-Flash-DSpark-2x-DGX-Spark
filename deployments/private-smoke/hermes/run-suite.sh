@@ -194,8 +194,13 @@ for forbidden in (
     "memories", "gateway.pid", "gateway_state.json", "cron", "plugins",
     "platforms", "active_profile",
 ):
-    if (home / forbidden).exists() or (home / forbidden).is_symlink():
-        raise SystemExit(f"forbidden inherited surface: {forbidden}")
+    path = home / forbidden
+    if path.is_symlink():
+        raise SystemExit(f"forbidden inherited symlink: {forbidden}")
+    if path.is_dir() and not any(path.rglob("*")):
+        continue
+    if path.exists():
+        raise SystemExit(f"forbidden populated inherited surface: {forbidden}")
 env_lines = (home / ".env").read_text(encoding="utf-8").splitlines()
 if len(env_lines) != 1 or not env_lines[0].startswith("DEEPSEEK_SMOKE_API_KEY=sk-"):
     raise SystemExit("isolated .env must contain exactly the inference key")
@@ -220,7 +225,27 @@ from pathlib import Path
 import sys
 
 observations, profile_home = sys.argv[1:]
-profile_cache = (Path(profile_home) / "cache").resolve()
+profile = Path(profile_home).resolve()
+legacy_cache_names = {
+    "document_cache", "image_cache", "audio_cache", "video_cache",
+    "browser_screenshots", "web_cache", "delegation_cache",
+}
+
+def mount_is_safe(mount):
+    source = Path(str(mount.get("Source", ""))).resolve()
+    destination = str(mount.get("Destination", ""))
+    if mount.get("RW") is not False or not source.is_dir() or any(source.rglob("*")):
+        return False
+    try:
+        relative = source.relative_to(profile)
+    except ValueError:
+        return False
+    if destination == "/root/.hermes/skills":
+        return relative == Path("skills")
+    return (
+        destination.startswith("/root/.hermes/cache/")
+        and (relative.parts[:1] == ("cache",) or str(relative) in legacy_cache_names)
+    )
 rows = []
 for line in Path(observations).read_text(encoding="utf-8").splitlines():
     try:
@@ -234,14 +259,11 @@ for row in rows:
     if row.get("HostConfig", {}).get("NetworkMode") != "none":
         raise SystemExit("terminal container did not use --network=none")
     for mount in row.get("Mounts") or []:
-        source = Path(str(mount.get("Source", ""))).resolve()
-        destination = str(mount.get("Destination", ""))
-        try:
-            source.relative_to(profile_cache)
-        except ValueError:
-            raise SystemExit(f"terminal container mount escaped isolated cache: {source}")
-        if not destination.startswith("/root/.hermes/cache/") or mount.get("RW") is not False:
-            raise SystemExit(f"unsafe isolated cache mount: {destination}")
+        if not mount_is_safe(mount):
+            raise SystemExit(
+                "unsafe terminal mount: "
+                f"{mount.get('Source', '')} -> {mount.get('Destination', '')}"
+            )
     labels = row.get("Config", {}).get("Labels") or {}
     if labels.get("hermes-agent") != "1" or "hermes-profile" not in labels:
         raise SystemExit("terminal container lacks Hermes isolation labels")
@@ -370,14 +392,31 @@ default_rows = [
 ]
 if len({row["Id"] for row in default_rows}) != 1:
     raise SystemExit("missing unique default-task Docker confinement evidence")
+profile = Path(profile_home).resolve()
+legacy_cache_names = {
+    "document_cache", "image_cache", "audio_cache", "video_cache",
+    "browser_screenshots", "web_cache", "delegation_cache",
+}
+
+def mount_is_safe(mount):
+    source = Path(str(mount.get("Source", ""))).resolve()
+    destination = str(mount.get("Destination", ""))
+    if mount.get("RW") is not False or not source.is_dir() or any(source.rglob("*")):
+        return False
+    try:
+        relative = source.relative_to(profile)
+    except ValueError:
+        return False
+    if destination == "/root/.hermes/skills":
+        return relative == Path("skills")
+    return (
+        destination.startswith("/root/.hermes/cache/")
+        and (relative.parts[:1] == ("cache",) or str(relative) in legacy_cache_names)
+    )
+
 container_isolated = all(
     row.get("HostConfig", {}).get("NetworkMode") == "none"
-    and all(
-        Path(str(mount.get("Source", ""))).resolve().is_relative_to((Path(profile_home) / "cache").resolve())
-        and str(mount.get("Destination", "")).startswith("/root/.hermes/cache/")
-        and mount.get("RW") is False
-        for mount in row.get("Mounts") or []
-    )
+    and all(mount_is_safe(mount) for mount in row.get("Mounts") or [])
     for row in default_rows
 )
 if not container_isolated:
