@@ -9,6 +9,12 @@ set -euo pipefail
 : "${IFACE:?IFACE is required}"
 : "${NCCL_TESTS_IMAGE:?NCCL_TESTS_IMAGE is required}"
 
+NCCL_TEST_TIMEOUT_SECONDS="${NCCL_TEST_TIMEOUT_SECONDS:-120}"
+[[ "$NCCL_TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "NCCL_TEST_TIMEOUT_SECONDS must be a positive integer." >&2
+  exit 2
+}
+
 test_binary="${1:-all_reduce_perf}"
 shift || true
 [ "$test_binary" = "all_reduce_perf" ] || { echo "Only all_reduce_perf is allowed." >&2; exit 2; }
@@ -30,9 +36,11 @@ done
 wrapper="$(mktemp "${TMPDIR:-/tmp}/dspark-nccl-wrapper.XXXXXX")"
 remote_wrapper="/tmp/dspark-nccl-wrapper-$$-$RANDOM"
 mpi_runtime="/tmp/dspark-openmpi-runtime-$$-$RANDOM"
+nccl_test_run_id="$$-$RANDOM"
 cleanup() {
   find "$wrapper" -maxdepth 0 -type f -delete 2>/dev/null || true
   for host in "$HEAD_HOST" "$WORKER_HOST"; do
+    run_host "$host" "ids=\$(docker ps -aq --filter 'label=com.plexiz.dspark.nccl-run=$nccl_test_run_id'); [ -z \"\$ids\" ] || docker rm -f \$ids >/dev/null" 2>/dev/null || true
     run_host "$host" "find '$remote_wrapper' -maxdepth 0 -type f -delete" 2>/dev/null || true
     run_host "$host" "find '$mpi_runtime' -depth -delete" 2>/dev/null || true
   done
@@ -54,6 +62,7 @@ while IFS='=' read -r key _; do
   case "$key" in OMPI_*|PMIX_*|NCCL_*|CUDA_VISIBLE_DEVICES) env_args+=(--env "$key") ;; esac
 done < <(env)
 exec docker run --rm --network host --ipc host --gpus all \
+  --label "com.plexiz.dspark.nccl-run=$NCCL_TEST_RUN_ID" \
   --volume /dev/infiniband:/dev/infiniband \
   --volume /tmp:/tmp --volume /run:/run \
   --ulimit memlock=-1:-1 \
@@ -72,8 +81,9 @@ done
 
 mpi_head_host="${HEAD_HOST#*@}"
 mpi_worker_host="${WORKER_HOST#*@}"
-OPAL_PREFIX="$mpi_runtime" LD_LIBRARY_PATH="$mpi_runtime/lib" \
+timeout --signal=TERM --kill-after=10s "${NCCL_TEST_TIMEOUT_SECONDS}s" \
+  env OPAL_PREFIX="$mpi_runtime" LD_LIBRARY_PATH="$mpi_runtime/lib" \
   "$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
   --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
-  -x HCA -x IFACE -x NCCL_TESTS_IMAGE \
+  -x HCA -x IFACE -x NCCL_TESTS_IMAGE -x NCCL_TEST_RUN_ID="$nccl_test_run_id" \
   "$remote_wrapper" "$@"
