@@ -39,12 +39,25 @@ unique `dspark-hermes-smoke-*` Colima profile with runtime Docker.
 
 ## Prepare and verify the direct fabric
 
-From the repository on `spark-api`:
+On `spark-api`, apply the head profile:
 
 ```bash
-deployments/private-smoke/scripts/apply-cx7-network.sh --check
-deployments/private-smoke/scripts/apply-cx7-network.sh --apply
-deployments/private-smoke/scripts/verify-fabric.sh --require-persistent
+deployments/private-smoke/scripts/apply-cx7-network.sh --check --role head
+deployments/private-smoke/scripts/apply-cx7-network.sh --apply --role head
+```
+
+On `spark-lab`, apply the worker profile:
+
+```bash
+deployments/private-smoke/scripts/apply-cx7-network.sh --check --role worker
+deployments/private-smoke/scripts/apply-cx7-network.sh --apply --role worker
+```
+
+Then verify from `spark-api` with the same worker target used by `.env.dspark`:
+
+```bash
+HEAD_HOST=localhost WORKER_HOST="$WORKER_HOST" \
+  deployments/private-smoke/scripts/verify-fabric.sh --require-persistent
 deployments/private-smoke/scripts/deploy-dspark.sh --prepare-only
 ```
 
@@ -156,11 +169,13 @@ deployments/private-smoke/scripts/purge-qwen.sh \
   --gate-report artifacts/acceptance/<timestamp>/accepted.json
 ```
 
-Read the resolved run ID and type both requested confirmations exactly. The
-first moves only the inode-verified allowlisted targets into same-filesystem
-quarantine and removes the exact container/image. The second permanently
-deletes that quarantine. If the second confirmation is not entered, the
-quarantine remains recoverable and the command fails.
+The purge first re-proves both DeepSeek ranks and the private LiteLLM gateway.
+Read the resolved run ID and manifest SHA-256, then type both requested
+confirmations exactly. The first moves only the inode-verified allowlisted
+targets into same-filesystem quarantine and removes the exact container/image.
+The second permanently deletes that quarantine. If the second confirmation is
+not entered, the quarantine remains recoverable and the command fails. Any
+recorded or current Qwen supervisor entry blocks retirement.
 
 After purge, confirm the Qwen container/image/model/service targets remain
 absent and the existing public gateway containers retain the pre-run identity.

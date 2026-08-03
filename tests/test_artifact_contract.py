@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -28,6 +29,17 @@ def run(*args, env=None):
 
 
 class ArtifactContractTest(unittest.TestCase):
+    def test_all_temporary_services_disable_automatic_restart(self):
+        compose_files = (
+            ROOT / "docker-compose.dspark.yml",
+            ROOT / "deployments/private-smoke/litellm/docker-compose.yml",
+        )
+        policies = []
+        for compose in compose_files:
+            policies.extend(re.findall(r"^\s*restart:\s*(.+)$", compose.read_text(), re.MULTILINE))
+        self.assertGreaterEqual(len(policies), 3)
+        self.assertEqual({value.strip().strip("'\"") for value in policies}, {"no"})
+
     def write_env(self, directory, *, revision=REVISION, image=IMAGE, key_file=True):
         secret = directory / "origin.key"
         if key_file:
@@ -173,6 +185,40 @@ class ArtifactContractTest(unittest.TestCase):
             )
             self.assertNotEqual(mismatch.returncode, 0)
             self.assertIn("manifest mismatch", mismatch.stderr.lower())
+
+    def test_manifest_hashes_huggingface_cache_symlinks_and_rejects_escapes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_root = Path(tmp) / "models--deepseek-ai--DeepSeek-V4-Flash-0731"
+            blobs = model_root / "blobs"
+            snapshot = model_root / "snapshots" / REVISION
+            blobs.mkdir(parents=True)
+            snapshot.mkdir(parents=True)
+            blob = blobs / "model-blob"
+            blob.write_bytes(b"weights")
+            shard = snapshot / "model-00001-of-00001.safetensors"
+            shard.symlink_to(Path("../../blobs") / blob.name)
+            output = Path(tmp) / "manifest.json"
+            create = run(
+                "python3", ROOT / "scripts/verify-artifact-manifest.py", "create",
+                "--snapshot", snapshot, "--revision", REVISION, "--image", IMAGE,
+                "--output", output,
+            )
+            self.assertEqual(create.returncode, 0, create.stderr)
+            entry = json.loads(output.read_text())["files"][0]
+            self.assertEqual(entry["link_target"], "../../blobs/model-blob")
+            self.assertEqual(entry["size"], len(b"weights"))
+
+            shard.unlink()
+            outside = Path(tmp) / "outside"
+            outside.write_bytes(b"escape")
+            shard.symlink_to(outside)
+            rejected = run(
+                "python3", ROOT / "scripts/verify-artifact-manifest.py", "create",
+                "--snapshot", snapshot, "--revision", REVISION, "--image", IMAGE,
+                "--output", output,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("escapes model cache", rejected.stderr)
 
     def test_worker_env_is_allowlisted_and_diagnostics_redact_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:

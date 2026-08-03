@@ -126,13 +126,14 @@ def record(path):
         "mode": oct(stat.S_IMODE(info.st_mode)),
         "uid": info.st_uid,
         "gid": info.st_gid,
-        "size": info.st_size,
-        "mtime_ns": info.st_mtime_ns,
     }
     if path.is_symlink():
         item.update(type="symlink", target=os.readlink(path))
     elif path.is_file():
-        item.update(type="file", sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        item.update(
+            type="file", size=info.st_size, mtime_ns=info.st_mtime_ns,
+            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
     elif path.is_dir():
         item.update(type="directory")
     else:
@@ -201,17 +202,14 @@ if len(env_lines) != 1 or not env_lines[0].startswith("DEEPSEEK_SMOKE_API_KEY=sk
 PY
 }
 
-monitor_containers() {
-  local pid="$1" output="$2"
+capture_containers() {
+  local output="$1"
   : >"$output"
-  while kill -0 "$pid" 2>/dev/null; do
-    DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -q --filter label=hermes-agent=1 2>/dev/null \
-      | while IFS= read -r container; do
-          [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
-            --format '{{json .}}' "$container" >>"$output" 2>/dev/null || true
-        done
-    sleep 0.1
-  done
+  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
+    | while IFS= read -r container; do
+        [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
+          --format '{{json .}}' "$container" >>"$output"
+      done
 }
 
 validate_container_observations() {
@@ -251,12 +249,28 @@ run_hermes() {
       --provider "$PROVIDER" --model "$MODEL" --toolsets terminal --ignore-rules \
       >"$response_file" 2>"$RUN_TMP/hermes-stderr.log" &
   local hermes_pid=$!
-  monitor_containers "$hermes_pid" "$observations" &
-  local monitor_pid=$!
   local status=0
   wait "$hermes_pid" || status=$?
-  wait "$monitor_pid" || true
   [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
+  capture_containers "$observations"
+}
+
+copy_workspace_evidence() {
+  local observations="$1" destination="$2"
+  local container
+  container="$(python3 - "$observations" <<'PY'
+import json
+from pathlib import Path
+import sys
+ids = {json.loads(line)["Id"] for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()}
+if len(ids) != 1:
+    raise SystemExit(f"expected one persistent Hermes terminal container, found {len(ids)}")
+print(ids.pop())
+PY
+)"
+  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" cp \
+    "$container:/workspace/output.json" "$destination"
+  chmod 0600 "$destination"
 }
 
 write_prompt() {
@@ -274,10 +288,11 @@ You MUST call terminal and do all work inside /workspace. Do not solve this only
 1. Use terminal to create /workspace/input.json with this exact JSON:
 {json.dumps(fixture, sort_keys=True)}
 2. Use terminal to read the file back and validate dataset, currency, four row ids, scopes, and decimal amounts.
-3. Use terminal with Python decimal arithmetic to create /workspace/output.json containing integer centavo totals grouped by scope and a grand total.
+3. Use terminal with Python decimal arithmetic to create /workspace/output.json with exactly this JSON object (key order and whitespace do not matter):
+{json.dumps(contract['expected_totals'], sort_keys=True)}
 4. Use terminal to prove these host paths are absent: /Users/gunter/.ssh, /Users/gunter/.hermes, /home/gunter/.ssh, /root/.ssh.
 5. Use terminal Python sockets to prove a connection to 1.1.1.1:53 is blocked.
-6. Read /workspace/output.json back. Expected totals are {json.dumps(contract['expected_totals'], sort_keys=True)}.
+6. Read /workspace/output.json back and validate every key and value.
 
 Your final response must be exactly one line, with no markdown, in this form:
 HERMES_SMOKE_RESULT={{"created":true,"read":true,"transformed":true,"personal_centavos":97150,"plexiz_centavos":276875,"grand_total_centavos":374025,"host_paths_blocked":true,"network_blocked":true}}
@@ -288,15 +303,15 @@ PY
 }
 
 assemble_result() {
-  local request_id="$1" usage="$2" response="$3" observations="$4" before="$5" after="$6" output="$7"
-  python3 - "$request_id" "$usage" "$response" "$observations" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" <<'PY'
+  local request_id="$1" usage="$2" response="$3" observations="$4" workspace_evidence="$5" before="$6" after="$7" output="$8"
+  python3 - "$request_id" "$usage" "$response" "$observations" "$workspace_evidence" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import re
 import sys
 
-request_id, usage_path, response_path, observations, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path = sys.argv[1:]
+request_id, usage_path, response_path, observations, workspace_path, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path = sys.argv[1:]
 usage = json.loads(Path(usage_path).read_text(encoding="utf-8"))
 response = Path(response_path).read_text(encoding="utf-8").strip()
 match = re.fullmatch(r'HERMES_SMOKE_RESULT=(\{.*\})', response)
@@ -311,6 +326,10 @@ expected = {
 }
 if reported != expected:
     raise SystemExit("Hermes result did not match the synthetic fixture contract")
+workspace = json.loads(Path(workspace_path).read_text(encoding="utf-8"))
+workspace_expected = json.loads(Path(contract_path).read_text(encoding="utf-8"))["expected_totals"]
+if workspace != workspace_expected:
+    raise SystemExit("independently recovered terminal output does not match the fixture contract")
 if usage.get("failed") or not usage.get("completed") or int(usage.get("api_calls") or 0) < 1:
     raise SystemExit("Hermes usage report is incomplete or failed")
 if usage.get("model") not in (model, f"openai/{model}"):
@@ -321,8 +340,16 @@ before = json.loads(Path(before_path).read_text(encoding="utf-8"))["sha256"]
 after = json.loads(Path(after_path).read_text(encoding="utf-8"))["sha256"]
 if before != after:
     raise SystemExit("shared default/hermesia state changed during isolated run")
-if not Path(observations).read_text(encoding="utf-8").strip():
-    raise SystemExit("missing Docker confinement evidence")
+container_rows = [json.loads(line) for line in Path(observations).read_text().splitlines() if line.strip()]
+if len({row["Id"] for row in container_rows}) != 1:
+    raise SystemExit("missing unique Docker confinement evidence")
+container_isolated = all(
+    row.get("HostConfig", {}).get("NetworkMode") == "none" and not row.get("Mounts")
+    for row in container_rows
+)
+if not container_isolated:
+    raise SystemExit("terminal container isolation evidence failed")
+workspace_sha256 = hashlib.sha256(Path(workspace_path).read_bytes()).hexdigest()
 result = {
     "schema_version": 1,
     "run_id": request_id,
@@ -332,11 +359,12 @@ result = {
     "tasks": {"create": True, "read": True, "transform": True},
     "negative_checks": {
         "skills": True, "mcp": True, "memory": True, "gateway": True,
-        "host_paths": True, "network": True, "fallback": True,
+        "host_paths": container_isolated, "network": container_isolated, "fallback": True,
     },
     "shared_state": {"before_sha256": before, "after_sha256": after, "unchanged": True},
     "usage": usage,
     "request_ids": [request_id],
+    "tool_evidence_sha256": workspace_sha256,
     "suite_pin_sha256": hashlib.sha256(
         b"".join(Path(path).read_bytes() for path in (config_path, fixture_path, contract_path))
     ).hexdigest(),
@@ -471,6 +499,7 @@ for iteration in $(seq 1 "$REPEAT"); do
   response_file="$RUN_TMP/response-${iteration}.txt"
   prompt_file="$RUN_TMP/prompt-${iteration}.txt"
   observations="$RUN_TMP/docker-${iteration}.jsonl"
+  workspace_evidence="$RUN_TMP/workspace-output-${iteration}.json"
   result_file="$OUTPUT_DIR/${request_id}.json"
 
   "$CREATE_PROFILE" --home "$profile_home" --base-url "$BASE_URL" \
@@ -479,15 +508,21 @@ for iteration in $(seq 1 "$REPEAT"); do
   write_prompt "$prompt_file"
   run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations"
   validate_container_observations "$observations"
+  copy_workspace_evidence "$observations" "$workspace_evidence"
 
   # The process-scoped environment and profile must not leave a gateway,
-  # cron scheduler, MCP registry, skills, memory, or persistent container.
+  # cron scheduler, MCP registry, skills, or memory. The terminal container
+  # persists only long enough to recover its work product, then is removed.
   assert_profile_inventory "$profile_home"
-  [ -z "$(DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1)" ] \
-    || { echo "Hermes left a persistent container in the smoke daemon." >&2; exit 1; }
   snapshot_shared_state "$RUN_TMP/shared-after-${iteration}.json"
-  assemble_result "$request_id" "$usage_file" "$response_file" "$observations" \
+  assemble_result "$request_id" "$usage_file" "$response_file" "$observations" "$workspace_evidence" \
     "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file"
+  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
+    | while IFS= read -r container; do
+        [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" rm -f -- "$container" >/dev/null
+      done
+  [ -z "$(DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1)" ] \
+    || { echo "Hermes terminal container cleanup was incomplete." >&2; exit 1; }
   echo "Hermes isolated suite accepted: $result_file"
 done
 

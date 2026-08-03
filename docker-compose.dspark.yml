@@ -181,4 +181,4 @@ services:
       - /run/secrets/origin.key
       - --allow-cidr
       - 172.30.0.0/24
-    restart: unless-stopped
+    restart: "no"

@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -25,6 +27,8 @@ class AcceptanceReportTest(unittest.TestCase):
             "chain_head_sha256", "pins", "gates", "functional_runs",
             "performance", "soak", "evidence_chain", "purge_eligible",
         }.issubset(schema["required"]))
+        functional = schema["properties"]["functional_runs"]["items"]
+        self.assertIn("gateway_attested", functional["required"])
 
     def test_sanitizer_rejects_credentials_private_addresses_and_host_paths(self):
         planted = (
@@ -57,8 +61,8 @@ class AcceptanceReportTest(unittest.TestCase):
             "1800", "SOAK_SAMPLE_INTERVAL_SECONDS", "5", "benchmark-direct.json",
             "benchmark-litellm.json", "hermes", "exactly two", "evidence_chain",
             "previous_sha256", "pin_set_sha256", "sanitize-evidence.py",
-            "cleanup_failed_acceptance", "stop-deepseek-v4-flash-dspark.sh",
-            "egress-policy.sh", "public_gateway_unchanged", "purge_eligible",
+            "cleanup_failed_acceptance", "cleanup-acceptance.sh",
+            "public_gateway_unchanged", "purge_eligible",
         ):
             self.assertIn(required, text)
         for forbidden in ("docker start urbanplan-qwen", "compose start qwen", "purge-qwen.sh --gate-report"):
@@ -76,6 +80,43 @@ class AcceptanceReportTest(unittest.TestCase):
             cwd=ROOT, text=True, capture_output=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_cleanup_runs_every_teardown_step_and_reports_rank_failure(self):
+        cleanup = DEPLOY / "scripts/cleanup-acceptance.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = root / "calls.log"
+            commands = {}
+            for name, status in (("stop", 1), ("status", 1), ("docker", 0), ("egress", 0)):
+                path = root / name
+                path.write_text(f"#!/bin/sh\nprintf '%s\\n' \"{name} $*\" >>'{log}'\nexit {status}\n")
+                path.chmod(0o755)
+                commands[name] = path
+            env_file = root / "dspark.env"
+            litellm_env = root / "litellm.env"
+            compose = root / "compose.yml"
+            for path in (env_file, litellm_env, compose):
+                path.write_text("\n")
+            result = subprocess.run(
+                [str(cleanup)],
+                env={
+                    **os.environ,
+                    "ENV_FILE": str(env_file),
+                    "LITELLM_ENV_FILE": str(litellm_env),
+                    "STOP_DSPARK_BIN": str(commands["stop"]),
+                    "STATUS_DSPARK_BIN": str(commands["status"]),
+                    "DOCKER_BIN": str(commands["docker"]),
+                    "EGRESS_POLICY_BIN": str(commands["egress"]),
+                    "LITELLM_COMPOSE_FILE": str(compose),
+                },
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            calls = log.read_text()
+            for expected in ("stop", "status --expect stopped", "docker compose", "egress --remove"):
+                self.assertIn(expected, calls)
+            self.assertNotIn("qwen", calls.lower())
+            self.assertIn("cleanup was incomplete", result.stderr)
 
 
 if __name__ == "__main__":

@@ -30,8 +30,9 @@ class HermesIsolationTest(unittest.TestCase):
             'backend: "docker"',
             'cwd: "/workspace"',
             'home_mode: "profile"',
-            "container_persistent: false",
-            "docker_persist_across_processes: false",
+            "api_max_retries: 0",
+            "container_persistent: true",
+            "docker_persist_across_processes: true",
             "docker_volumes: []",
             "docker_mount_cwd_to_workspace: false",
             "docker_forward_env: []",
@@ -96,6 +97,7 @@ class HermesIsolationTest(unittest.TestCase):
             "schema_version", "run_id", "accepted", "provider", "model",
             "tasks", "negative_checks", "shared_state", "usage", "request_ids",
             "suite_pin_sha256",
+            "tool_evidence_sha256",
         }.issubset(required))
         self.assertFalse(schema["additionalProperties"])
 

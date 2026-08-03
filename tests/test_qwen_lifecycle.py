@@ -1,4 +1,7 @@
 import json
+from datetime import datetime, timezone
+import hashlib
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -40,7 +43,10 @@ class QwenLifecycleTest(unittest.TestCase):
         text = (SCRIPTS / "purge-qwen.sh").read_text()
         for required in (
             "manifest_sha256", "accepted", "st_dev", "st_ino", "realpath",
-            "-t 0", "PURGE QWEN", "DELETE QWEN", "quarantine",
+            "-t 0", "PURGE QWEN $run_id $manifest_hash",
+            "DELETE QWEN $run_id $manifest_hash", "quarantine",
+            "verify-no-supervisors", "status-deepseek-v4-flash-dspark.sh",
+            "litellm/smoke.sh",
         ):
             self.assertIn(required, text)
         self.assertNotIn("rm -rf", text)
@@ -91,6 +97,84 @@ class QwenLifecycleTest(unittest.TestCase):
                 text=True, capture_output=True, check=False,
             )
             self.assertNotEqual(symlinked.returncode, 0)
+
+    def test_stop_and_purge_reject_evidence_before_any_docker_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "manifest.json"
+            report = root / "report.json"
+            manifest.write_text("{}")
+            report.write_text("{}")
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            marker = root / "docker-called"
+            python = fake_bin / "python3"
+            python.write_text("#!/bin/sh\nexit 9\n")
+            python.chmod(0o755)
+            docker = fake_bin / "docker"
+            docker.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+            docker.chmod(0o755)
+            env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+            for script in ("stop-qwen.sh", "purge-qwen.sh"):
+                with self.subTest(script=script):
+                    marker.unlink(missing_ok=True)
+                    result = subprocess.run(
+                        [str(SCRIPTS / script), "--manifest", str(manifest),
+                         "--gate-report", str(report)],
+                        env=env, text=True, capture_output=True, check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(marker.exists())
+
+    def test_purge_report_rehashes_every_bound_evidence_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / "qwen-manifest.json"
+            artifact = root / "direct.json"
+            manifest.write_text(json.dumps({
+                "schema_version": 1,
+                "run_id": "unit-run",
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "filesystem_targets": [],
+            }))
+            artifact.write_text('{"accepted":true}\n')
+            artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            pins = {"model_revision": "b" * 40}
+            pin_hash = hashlib.sha256(
+                json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            previous = "0" * 64
+            entry = hashlib.sha256(
+                f"{previous}:direct:{artifact_hash}:{pin_hash}".encode()
+            ).hexdigest()
+            report = root / "accepted.json"
+            report.write_text(json.dumps({
+                "accepted": True,
+                "purge_eligible": True,
+                "run_id": "unit-run",
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "pin_set_sha256": pin_hash,
+                "chain_head_sha256": entry,
+                "pins": pins,
+                "gates": {"fabric": True},
+                "evidence_chain": [{
+                    "name": "direct", "artifact_path": artifact.name,
+                    "artifact_sha256": artifact_hash, "previous_sha256": previous,
+                    "entry_sha256": entry,
+                }],
+            }))
+            command = [
+                "python3", str(ROOT / "scripts/qwen_manifest.py"), "verify-report",
+                "--manifest", str(manifest), "--report", str(report),
+                "--required-gate", "fabric",
+            ]
+            good = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            artifact.write_text('{"accepted":false}\n')
+            tampered = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(tampered.returncode, 0)
+            self.assertIn("artifact hash mismatch", tampered.stderr)
 
 
 if __name__ == "__main__":

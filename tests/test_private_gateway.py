@@ -14,7 +14,7 @@ class PrivateGatewayTest(unittest.TestCase):
             "postgres@sha256:b797483593b82cbea9a7ee41c88f324a90d10d9c2504d40e755d91c75456366d",
             "cap_drop", "ALL", "read_only: true", "no-new-privileges:true",
             "seccomp.json", "tmpfs", "internal: true", "ipv4_address",
-            "${HEAD_TAILSCALE_IP}:4001:4001",
+            "${HEAD_TAILSCALE_IP:?set HEAD_TAILSCALE_IP to the head tailnet address}:4001:4001",
         ):
             self.assertIn(required, text)
         for forbidden in ("docker.sock", "network_mode: host", "4000:4000"):

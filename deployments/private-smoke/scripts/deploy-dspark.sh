@@ -27,10 +27,15 @@ set +a
 if [ "$MODE" = "prepare" ]; then
   nccl_commit="da0b547b1b9c6e3b1d4c15578087874522ae3761"
   nccl_image="dspark-nccl-tests:$nccl_commit"
-  docker build -t "$nccl_image" \
-    -f "$ROOT_DIR/deployments/private-smoke/network/Dockerfile.nccl-tests" "$ROOT_DIR"
+  nccl_context="$(mktemp -d /tmp/dspark-nccl-build.XXXXXX)"
+  trap 'find "$nccl_context" -depth -delete' EXIT
+  docker build -t "$nccl_image" -f - "$nccl_context" \
+    <"$ROOT_DIR/deployments/private-smoke/network/Dockerfile.nccl-tests"
   ssh "$WORKER_HOST" "nccl_context=\$(mktemp -d /tmp/dspark-nccl-build.XXXXXX); trap 'find \"\$nccl_context\" -depth -delete' EXIT; docker build -t '$nccl_image' -f - \"\$nccl_context\"" \
     <"$ROOT_DIR/deployments/private-smoke/network/Dockerfile.nccl-tests"
+  head_nccl="$(docker image inspect "$nccl_image" -f '{{.Id}}')"
+  worker_nccl="$(ssh "$WORKER_HOST" "docker image inspect '$nccl_image' -f '{{.Id}}'")"
+  [ "$head_nccl" = "$worker_nccl" ] || { echo "NCCL test image IDs differ between ranks." >&2; exit 1; }
   ENV_FILE="$ENV_FILE" "$ROOT_DIR/prepare-dspark-model-cache.sh"
   exit 0
 fi

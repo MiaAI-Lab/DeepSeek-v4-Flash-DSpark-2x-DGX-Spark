@@ -8,6 +8,7 @@ SCHEMA="$SCRIPT_DIR/schemas/acceptance.schema.json"
 SANITIZER="$SCRIPT_DIR/scripts/sanitize-evidence.py"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.dspark}"
 LITELLM_ENV_FILE="${LITELLM_ENV_FILE:-$SCRIPT_DIR/litellm/.env}"
+ACTIVE_GATEWAY_SNAPSHOT="${ACTIVE_GATEWAY_SNAPSHOT:-$ROOT_DIR/artifacts/active-gateway-snapshot.json}"
 MODE=""
 RUN_DIR=""
 HERMES_RESULTS=""
@@ -60,14 +61,14 @@ pin_hash = hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")
 chain = []; previous = "0" * 64
 for i in range(7):
   entry = hashlib.sha256(f"{previous}:gate-{i}:{h}:{pin_hash}".encode()).hexdigest()
-  chain.append({"name": f"gate-{i}", "artifact_sha256": h, "previous_sha256": previous, "entry_sha256": entry})
+  chain.append({"name": f"gate-{i}", "artifact_path": f"gate-{i}.json", "artifact_sha256": h, "previous_sha256": previous, "entry_sha256": entry})
   previous = entry
 print(json.dumps({
   "schema_version": 1, "run_id": "fixture-run", "created_at": "2026-08-02T12:00:00Z",
   "accepted": True, "manifest_sha256": h, "fixture_sha256": h, "pin_set_sha256": pin_hash,
   "chain_head_sha256": previous, "pins": pins,
   "gates": gates,
-  "functional_runs": [{"artifact_sha256": h, "accepted": True, "api_calls": 3}, {"artifact_sha256": h, "accepted": True, "api_calls": 3}],
+  "functional_runs": [{"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}, {"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}],
   "performance": {"direct": performance, "litellm": performance, "median_decode_overhead_ratio": 1.0, "p95_ttft_overhead_seconds": 0.1},
   "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 5.0, "min_worker_mem_available_gib": 5.0, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "speculative_acceptance_mean": None},
   "evidence_chain": chain, "purge_eligible": True,
@@ -127,15 +128,20 @@ PY
 
 cleanup_failed_acceptance() {
   local status=$?
+  local cleaned=0
   trap - ERR
   write_rejection
   if [ "$LIVE_STARTED" -eq 1 ]; then
-    ENV_FILE="$ENV_FILE" "$ROOT_DIR/stop-deepseek-v4-flash-dspark.sh" || true
-    docker compose -p dspark-private-litellm --env-file "$LITELLM_ENV_FILE" \
-      -f "$SCRIPT_DIR/litellm/docker-compose.yml" down --remove-orphans || true
-    "$SCRIPT_DIR/litellm/egress-policy.sh" --remove || true
+    if ENV_FILE="$ENV_FILE" LITELLM_ENV_FILE="$LITELLM_ENV_FILE" \
+      "$SCRIPT_DIR/scripts/cleanup-acceptance.sh"; then
+      cleaned=1
+    fi
   fi
-  echo "Acceptance failed at $FAILURE_STAGE; DeepSeek and the private gateway were disabled. Qwen remains stopped." >&2
+  if [ "$LIVE_STARTED" -eq 1 ] && [ "$cleaned" -ne 1 ]; then
+    echo "Acceptance failed at $FAILURE_STAGE; WARNING: at least one DeepSeek rank may still be running. Qwen remains stopped." >&2
+  else
+    echo "Acceptance failed at $FAILURE_STAGE; DeepSeek and the private gateway were disabled. Qwen remains stopped." >&2
+  fi
   exit "$status"
 }
 trap cleanup_failed_acceptance ERR
@@ -189,7 +195,25 @@ FAILURE_STAGE="hermes"
 mapfile -t hermes_files < <(find "$HERMES_RESULTS" -maxdepth 1 -type f -name 'hermes-smoke-*.json' -print | sort)
 [ "${#hermes_files[@]}" -eq 2 ] || { echo "Hermes acceptance requires exactly two result files." >&2; false; }
 python3 - "${hermes_files[@]}" <<'PY'
-import json, sys
+import json
+import re
+import subprocess
+import sys
+
+def spend_rows(request_id):
+    if not re.fullmatch(r"hermes-smoke-[a-f0-9-]{8,64}", request_id):
+        raise AssertionError("invalid Hermes request id")
+    sql = (
+        'SELECT row_to_json(t)::text FROM "LiteLLM_SpendLogs" AS t '
+        f"WHERE to_jsonb(t)::text LIKE '%{request_id}%';"
+    )
+    output = subprocess.check_output([
+        "docker", "exec", "dspark-private-litellm-postgres-1",
+        "psql", "-X", "-A", "-t", "-U", "litellm_smoke", "-d", "litellm_smoke",
+        "-c", sql,
+    ], text=True)
+    return [json.loads(line) for line in output.splitlines() if line.strip()]
+
 for path in sys.argv[1:]:
     item = json.load(open(path))
     assert item["accepted"] is True
@@ -197,6 +221,14 @@ for path in sys.argv[1:]:
     assert item["provider"] == "custom:deepseek-smoke"
     assert item["shared_state"]["unchanged"] is True
     assert all(item["negative_checks"].values())
+    assert item["request_ids"] == [item["run_id"]]
+    rows = spend_rows(item["run_id"])
+    assert len(rows) == item["usage"]["api_calls"]
+    for row in rows:
+        encoded = json.dumps(row, sort_keys=True)
+        assert item["run_id"] in encoded
+        assert "deepseek-v4-flash-0731-smoke" in encoded
+        assert "hermes-deepseek-smoke" in encoded
 assert len({item["suite_pin_sha256"] for item in map(lambda p: json.load(open(p)), sys.argv[1:])}) == 1
 PY
 
@@ -377,9 +409,13 @@ PY
 ENV_FILE="$ENV_FILE" "$SCRIPT_DIR/scripts/collect-node-evidence.sh" "$NODE_EVIDENCE_AFTER"
 
 FAILURE_STAGE="report"
+[ -f "$ACTIVE_GATEWAY_SNAPSHOT" ] || { echo "Missing active gateway snapshot." >&2; false; }
+GATEWAY_SNAPSHOT_EVIDENCE="$RUN_DIR/active-gateway-snapshot.json"
+cp "$ACTIVE_GATEWAY_SNAPSHOT" "$GATEWAY_SNAPSHOT_EVIDENCE"
+chmod 0600 "$GATEWAY_SNAPSHOT_EVIDENCE"
 python3 - "$QWEN_MANIFEST" "$DIRECT_BENCHMARK" "$GATEWAY_BENCHMARK" "$NODE_EVIDENCE_AFTER" \
   "$SOAK_EVIDENCE" "$FIXTURE" "$DIRECT_INTERIM" "${hermes_files[0]}" "${hermes_files[1]}" \
-  "$ACTIVE_GATEWAY_SNAPSHOT" "$ENV_FILE" "$ROOT_DIR" <<'PY' \
+  "$GATEWAY_SNAPSHOT_EVIDENCE" "$ENV_FILE" "$ROOT_DIR" <<'PY' \
   | "$SANITIZER" --schema "$SCHEMA" --output "$FINAL_REPORT"
 from datetime import datetime, timezone
 import hashlib, json
@@ -418,9 +454,13 @@ pin_hash = hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")
 evidence = [("qwen-manifest", manifest_path), ("direct", direct_path), ("gateway", gateway_path), ("nodes", node_path), ("hermes-a", hermes_a), ("hermes-b", hermes_b), ("soak", soak_path), ("public-gateway", gateway_snapshot)]
 previous = "0" * 64; chain = []
 for name, path in evidence:
+    try:
+        artifact_path = path.resolve().relative_to(manifest_path.parent.resolve()).as_posix()
+    except ValueError as exc:
+        raise SystemExit(f"evidence artifact is outside the acceptance run: {name}") from exc
     artifact = digest(path)
     entry = hashlib.sha256(f"{previous}:{name}:{artifact}:{pin_hash}".encode()).hexdigest()
-    chain.append({"name": name, "artifact_sha256": artifact, "previous_sha256": previous, "entry_sha256": entry})
+    chain.append({"name": name, "artifact_path": artifact_path, "artifact_sha256": artifact, "previous_sha256": previous, "entry_sha256": entry})
     previous = entry
 def summary(item):
     value = item["summary"]
@@ -431,7 +471,7 @@ report = {
   "schema_version": 1, "run_id": manifest["run_id"], "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "accepted": True,
   "manifest_sha256": digest(manifest_path), "fixture_sha256": digest(fixture_path), "pin_set_sha256": pin_hash, "chain_head_sha256": previous,
   "pins": pins, "gates": gates,
-  "functional_runs": [{"artifact_sha256": digest(path), "accepted": item["accepted"], "api_calls": item["usage"]["api_calls"]} for path, item in ((hermes_a, hermes[0]), (hermes_b, hermes[1]))],
+  "functional_runs": [{"artifact_sha256": digest(path), "accepted": item["accepted"], "api_calls": item["usage"]["api_calls"], "gateway_attested": True} for path, item in ((hermes_a, hermes[0]), (hermes_b, hermes[1]))],
   "performance": {"direct": d, "litellm": g, "median_decode_overhead_ratio": g["median_decode_tokens_per_second"] / d["median_decode_tokens_per_second"], "p95_ttft_overhead_seconds": g["p95_ttft_seconds"] - d["p95_ttft_seconds"]},
   "soak": soak, "evidence_chain": chain, "purge_eligible": True,
 }

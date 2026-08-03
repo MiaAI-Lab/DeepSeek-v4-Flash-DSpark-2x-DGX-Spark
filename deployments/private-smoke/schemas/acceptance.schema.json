@@ -55,11 +55,12 @@
       "type": "array", "minItems": 2, "maxItems": 2,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["artifact_sha256", "accepted", "api_calls"],
+        "required": ["artifact_sha256", "accepted", "api_calls", "gateway_attested"],
         "properties": {
           "artifact_sha256": {"$ref": "#/$defs/sha256"},
           "accepted": {"type": "boolean"},
-          "api_calls": {"type": "integer", "minimum": 1}
+          "api_calls": {"type": "integer", "minimum": 1},
+          "gateway_attested": {"const": true}
         }
       }
     },
@@ -108,9 +109,10 @@
       "type": "array", "minItems": 7,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["name", "artifact_sha256", "previous_sha256", "entry_sha256"],
+        "required": ["name", "artifact_path", "artifact_sha256", "previous_sha256", "entry_sha256"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9_-]{2,80}$"},
+          "artifact_path": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$"},
           "artifact_sha256": {"$ref": "#/$defs/sha256"},
           "previous_sha256": {"$ref": "#/$defs/sha256"},
           "entry_sha256": {"$ref": "#/$defs/sha256"}

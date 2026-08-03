@@ -58,7 +58,7 @@ services:
     entrypoint: ["/bin/sh", "/app/secret-entrypoint.sh"]
     command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4001", "--num_workers", "1"]
     ports:
-      - "${HEAD_TAILSCALE_IP}:4001:4001"
+      - "${HEAD_TAILSCALE_IP:?set HEAD_TAILSCALE_IP to the head tailnet address}:4001:4001"
     networks:
       origin:
         ipv4_address: 172.30.0.10

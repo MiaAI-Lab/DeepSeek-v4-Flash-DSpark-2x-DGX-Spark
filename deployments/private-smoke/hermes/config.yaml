@@ -21,7 +21,7 @@ providers:
 fallback_providers: []
 
 agent:
-  api_max_retries: 1
+  api_max_retries: 0
   max_turns: 24
   tool_use_enforcement: true
 
@@ -38,8 +38,8 @@ terminal:
   container_cpu: 1
   container_memory: 1024
   container_disk: 2048
-  container_persistent: false
-  docker_persist_across_processes: false
+  container_persistent: true
+  docker_persist_across_processes: true
   docker_orphan_reaper: false
   docker_volumes: []
   docker_mount_cwd_to_workspace: false

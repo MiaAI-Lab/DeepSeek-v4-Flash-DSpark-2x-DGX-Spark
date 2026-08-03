@@ -22,18 +22,32 @@ def sha256(path: Path) -> str:
 def create(snapshot: Path, revision: str, image: str) -> dict[str, object]:
     if not snapshot.is_dir():
         raise ValueError(f"snapshot is not a directory: {snapshot}")
+    cache_root = snapshot.parent.parent.resolve(strict=True)
     files: list[dict[str, object]] = []
     for path in sorted(snapshot.rglob("*"), key=lambda item: item.as_posix()):
+        resolved = path.resolve(strict=True)
+        link_target = None
         if path.is_symlink():
-            raise ValueError(f"snapshot symlink is not allowed: {path.relative_to(snapshot)}")
-        if not path.is_file():
+            try:
+                resolved.relative_to(cache_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"snapshot symlink escapes model cache: {path.relative_to(snapshot)}"
+                ) from exc
+            if not resolved.is_file():
+                raise ValueError(f"snapshot symlink target is not a file: {path.relative_to(snapshot)}")
+            link_target = os.readlink(path)
+        elif not path.is_file():
             continue
-        files.append({
+        entry = {
             "path": path.relative_to(snapshot).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": sha256(path),
+            "size": resolved.stat().st_size,
+            "sha256": sha256(resolved),
             "executable": bool(path.stat().st_mode & 0o111),
-        })
+        }
+        if link_target is not None:
+            entry["link_target"] = link_target
+        files.append(entry)
     return {
         "schema_version": 1,
         "model_revision": revision,

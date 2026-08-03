@@ -15,7 +15,8 @@
     "shared_state",
     "usage",
     "request_ids",
-    "suite_pin_sha256"
+    "suite_pin_sha256",
+    "tool_evidence_sha256"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -76,6 +77,7 @@
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^hermes-smoke-[a-f0-9-]{8,64}$"}
     },
-    "suite_pin_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    "suite_pin_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "tool_evidence_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
   }
 }

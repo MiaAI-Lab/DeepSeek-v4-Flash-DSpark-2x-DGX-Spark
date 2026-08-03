@@ -230,6 +230,17 @@ def verify_targets(manifest: dict) -> None:
                 raise RuntimeError(f"target metadata changed for {path}: {field}")
 
 
+def verify_no_supervisors(manifest: dict) -> None:
+    recorded = manifest.get("supervisors") or []
+    if recorded:
+        names = ", ".join(str(item.get("unit", "unknown")) for item in recorded)
+        raise RuntimeError(f"recorded Qwen supervisor entries block retirement: {names}")
+    current = supervisor_units()
+    if current:
+        names = ", ".join(str(item.get("unit", "unknown")) for item in current)
+        raise RuntimeError(f"current Qwen supervisor entries block retirement: {names}")
+
+
 def manifest_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -271,6 +282,32 @@ def verify_report(manifest_path: Path, report_path: Path, gates: list[str], max_
     for gate in gates:
         if report.get("gates", {}).get(gate) is not True:
             raise RuntimeError(f"required gate did not pass: {gate}")
+    if report.get("purge_eligible") is True:
+        pins = report.get("pins") or {}
+        pin_hash = hashlib.sha256(
+            json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if report.get("pin_set_sha256") != pin_hash:
+            raise RuntimeError("gate report pin_set_sha256 mismatch")
+        report_root = report_path.parent.resolve(strict=True)
+        previous = "0" * 64
+        for item in report.get("evidence_chain") or []:
+            artifact = (report_root / str(item.get("artifact_path", ""))).resolve(strict=True)
+            try:
+                artifact.relative_to(report_root)
+            except ValueError as exc:
+                raise RuntimeError("evidence artifact escapes the acceptance run") from exc
+            artifact_hash = manifest_sha256(artifact)
+            if artifact_hash != item.get("artifact_sha256"):
+                raise RuntimeError(f"evidence artifact hash mismatch: {item.get('name')}")
+            expected = hashlib.sha256(
+                f"{previous}:{item.get('name')}:{artifact_hash}:{pin_hash}".encode()
+            ).hexdigest()
+            if item.get("previous_sha256") != previous or item.get("entry_sha256") != expected:
+                raise RuntimeError(f"evidence chain mismatch: {item.get('name')}")
+            previous = expected
+        if not report.get("evidence_chain") or report.get("chain_head_sha256") != previous:
+            raise RuntimeError("evidence chain head mismatch")
 
 
 def quarantine(manifest_path: Path, quarantine_root: Path) -> Path:
@@ -312,6 +349,8 @@ def main() -> int:
     inventory.add_argument("--check-only", action="store_true")
     targets = sub.add_parser("verify-targets")
     targets.add_argument("--manifest", type=Path, required=True)
+    supervisors = sub.add_parser("verify-no-supervisors")
+    supervisors.add_argument("--manifest", type=Path, required=True)
     live = sub.add_parser("verify-live")
     live.add_argument("--manifest", type=Path, required=True)
     live.add_argument("--max-age-hours", type=float, default=24)
@@ -339,6 +378,8 @@ def main() -> int:
         return 0
     if args.command == "verify-targets":
         verify_targets(load_manifest(args.manifest))
+    elif args.command == "verify-no-supervisors":
+        verify_no_supervisors(load_manifest(args.manifest))
     elif args.command == "verify-live":
         verify_live(args.manifest, args.max_age_hours)
     elif args.command == "verify-report":
