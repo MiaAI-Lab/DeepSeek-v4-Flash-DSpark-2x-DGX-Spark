@@ -96,6 +96,7 @@ class HermesIsolationTest(unittest.TestCase):
             "workspace writer observation lacks a container ID",
             "_dspark_workspace_writer", "at most one rotated default container",
             "summarize_request_diagnostics", "nested_arguments", "content_prefix",
+            "observation_candidate", "configuration is immutable",
         ):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):

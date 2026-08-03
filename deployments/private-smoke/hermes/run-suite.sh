@@ -225,23 +225,28 @@ capture_containers() {
 
 capture_workspace_evidence_if_present() {
   local destination="$1" writer_observation="$2"
-  local container candidate
+  local container candidate observation_candidate
   candidate="${destination}.candidate"
+  observation_candidate="${writer_observation}.candidate"
   DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq \
     --filter label=hermes-agent=1 --filter label=hermes-task-id=default \
     | while IFS= read -r container; do
         [ -n "$container" ] || continue
-        rm -f -- "$candidate"
-        if DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" cp \
-          "$container:/workspace/output.json" "$candidate" 2>/dev/null; then
+        rm -f -- "$candidate" "$observation_candidate"
+        # Container configuration is immutable. Capture it before copying the
+        # file so a fast Hermes teardown cannot remove the writer between a
+        # successful docker cp and the confinement observation.
+        if DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
+          --format '{{json .}}' "$container" >"$observation_candidate" 2>/dev/null \
+          && DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" cp \
+            "$container:/workspace/output.json" "$candidate" 2>/dev/null; then
           chmod 0600 "$candidate"
           mv -f -- "$candidate" "$destination"
-          DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
-            --format '{{json .}}' "$container" >"$writer_observation"
-          chmod 0600 "$writer_observation"
+          chmod 0600 "$observation_candidate"
+          mv -f -- "$observation_candidate" "$writer_observation"
         fi
       done
-  rm -f -- "$candidate"
+  rm -f -- "$candidate" "$observation_candidate"
 }
 
 merge_workspace_writer_observation() {
