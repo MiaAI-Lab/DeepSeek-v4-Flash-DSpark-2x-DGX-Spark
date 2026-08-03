@@ -18,8 +18,10 @@ DOCKER_BIN="${DOCKER_BIN:-docker}"
 HERMES_BIN="${HERMES_BIN:-hermes}"
 HERMES_PROCESS_TIMEOUT="${HERMES_SMOKE_PROCESS_TIMEOUT:-600}"
 HERMES_DUMP_REQUESTS="${HERMES_SMOKE_DUMP_REQUESTS:-0}"
+COLIMA_START_TIMEOUT="${HERMES_SMOKE_COLIMA_START_TIMEOUT:-180}"
 RUN_TMP=""
 COLIMA_PROFILE=""
+COLIMA_START_PID=""
 DOCKER_HOST=""
 DOCKER_CONFIG_DIR=""
 STUB_PID=""
@@ -44,6 +46,8 @@ done
   || { echo "HERMES_SMOKE_PROCESS_TIMEOUT must be a positive integer" >&2; exit 2; }
 [[ "$HERMES_DUMP_REQUESTS" =~ ^[01]$ ]] \
   || { echo "HERMES_SMOKE_DUMP_REQUESTS must be 0 or 1" >&2; exit 2; }
+[[ "$COLIMA_START_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "HERMES_SMOKE_COLIMA_START_TIMEOUT must be a positive integer" >&2; exit 2; }
 [ -n "$BASE_URL" ] && [ -n "$KEY_FILE" ] || { usage; exit 2; }
 
 command -v "$COLIMA_BIN" >/dev/null || { echo "Colima is required." >&2; exit 1; }
@@ -62,6 +66,15 @@ safe_remove_run_tmp() {
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  if [ -n "$COLIMA_START_PID" ]; then
+    kill -TERM "$COLIMA_START_PID" >/dev/null 2>&1 || true
+    for _ in $(seq 1 100); do
+      kill -0 "$COLIMA_START_PID" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -KILL "$COLIMA_START_PID" >/dev/null 2>&1 || true
+    wait "$COLIMA_START_PID" 2>/dev/null || true
+  fi
   if [ -n "$STUB_PID" ]; then
     kill "$STUB_PID" >/dev/null 2>&1 || true
     wait "$STUB_PID" 2>/dev/null || true
@@ -84,6 +97,36 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT INT TERM
+
+start_colima_profile() {
+  local started_at=$SECONDS
+  local status
+
+  "$COLIMA_BIN" start --profile "$COLIMA_PROFILE" --runtime docker --cpu 2 --memory 4 --disk 20 &
+  COLIMA_START_PID=$!
+  while kill -0 "$COLIMA_START_PID" >/dev/null 2>&1; do
+    if [ $((SECONDS - started_at)) -ge "$COLIMA_START_TIMEOUT" ]; then
+      echo "Colima profile start exceeded ${COLIMA_START_TIMEOUT}s; terminating exact client PID $COLIMA_START_PID." >&2
+      kill -TERM "$COLIMA_START_PID" >/dev/null 2>&1 || true
+      for _ in $(seq 1 100); do
+        kill -0 "$COLIMA_START_PID" >/dev/null 2>&1 || break
+        sleep 0.1
+      done
+      kill -KILL "$COLIMA_START_PID" >/dev/null 2>&1 || true
+      wait "$COLIMA_START_PID" 2>/dev/null || true
+      COLIMA_START_PID=""
+      return 124
+    fi
+    sleep 1
+  done
+  if wait "$COLIMA_START_PID"; then
+    status=0
+  else
+    status=$?
+  fi
+  COLIMA_START_PID=""
+  return "$status"
+}
 
 RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dspark-hermes-smoke.XXXXXX")"
 chmod 0700 "$RUN_TMP"
@@ -891,7 +934,7 @@ PY
 snapshot_shared_state "$RUN_TMP/shared-before.json"
 
 echo "Starting isolated Colima profile $COLIMA_PROFILE (existing profiles are not modified)."
-"$COLIMA_BIN" start --profile "$COLIMA_PROFILE" --runtime docker --cpu 2 --memory 4 --disk 20
+start_colima_profile
 for _ in $(seq 1 60); do
   [ -S "${DOCKER_HOST#unix://}" ] && DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" version >/dev/null 2>&1 && break
   sleep 1

@@ -105,6 +105,8 @@ class HermesIsolationTest(unittest.TestCase):
             "DOCKER_HOST", "DOCKER_CONFIG", "colima", "dspark-hermes-smoke", "--runtime docker",
             "HERMES_HOME", "HERMES_STREAM_RETRIES=0", "--ignore-rules", "--usage-file", "-z",
             "HERMES_SMOKE_PROCESS_TIMEOUT", "HERMES_SMOKE_DUMP_REQUESTS", "HERMES_DUMP_REQUESTS",
+            "HERMES_SMOKE_COLIMA_START_TIMEOUT", "start_colima_profile", "COLIMA_START_PID",
+            "Colima profile start exceeded",
             "ps -p", "kill -TERM", "kill -KILL", "status=124",
             "started_at=$SECONDS", "sleep 0.1",
             "--provider", "custom:deepseek-smoke", "--model",
