@@ -26,7 +26,7 @@ master = Path("/run/secrets/master-key").read_text().strip()
 payload = json.dumps({
     "models": ["deepseek-v4-flash-0731-smoke"],
     "key_alias": "hermes-deepseek-smoke",
-    "max_parallel_requests": 1,
+    "max_parallel_requests": 3,
     "metadata": {"scope": "synthetic-hermes-smoke"},
 }).encode()
 request = urllib.request.Request(

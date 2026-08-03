@@ -49,6 +49,7 @@ class PrivateGatewayTest(unittest.TestCase):
             self.assertIn(required, entrypoint)
         self.assertIn("/key/generate", bootstrap)
         self.assertIn('"models": ["deepseek-v4-flash-0731-smoke"]', bootstrap)
+        self.assertIn('"max_parallel_requests": 3', bootstrap)
         self.assertIn("http://127.0.0.1:4001/key/generate", bootstrap)
         self.assertIn("umask 077", bootstrap)
         self.assertIn("chmod 0600", bootstrap)

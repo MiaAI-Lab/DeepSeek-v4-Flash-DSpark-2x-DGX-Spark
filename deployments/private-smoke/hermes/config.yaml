@@ -27,7 +27,7 @@ agent:
   api_max_retries: 1
   # The task needs one terminal turn and one final-answer turn. Eight leaves
   # recovery room without allowing a non-tool continuation loop to run
-  # indefinitely against the single-concurrency acceptance key.
+  # indefinitely against the bounded three-request production key.
   max_turns: 8
   tool_use_enforcement: true
   intent_ack_continuation: true
