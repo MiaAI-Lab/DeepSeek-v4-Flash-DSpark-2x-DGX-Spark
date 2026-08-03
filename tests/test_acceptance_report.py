@@ -29,6 +29,8 @@ class AcceptanceReportTest(unittest.TestCase):
         }.issubset(schema["required"]))
         functional = schema["properties"]["functional_runs"]["items"]
         self.assertIn("gateway_attested", functional["required"])
+        self.assertIn("sample_error_count", schema["properties"]["soak"]["required"])
+        self.assertEqual(schema["properties"]["soak"]["properties"]["sample_error_count"]["maximum"], 3)
 
     def test_sanitizer_rejects_credentials_private_addresses_and_host_paths(self):
         planted = (
@@ -62,7 +64,8 @@ class AcceptanceReportTest(unittest.TestCase):
             "benchmark-litellm.json", "hermes", "exactly two", "evidence_chain",
             "previous_sha256", "pin_set_sha256", "sanitize-evidence.py",
             "cleanup_failed_acceptance", "cleanup-acceptance.sh",
-            "public_gateway_unchanged", "purge_eligible",
+            "public_gateway_unchanged", "purge_eligible", "sample_error_limit",
+            "BatchMode=yes", "ConnectTimeout=3", "ConnectionAttempts=1",
         ):
             self.assertIn(required, text)
         for forbidden in ("docker start urbanplan-qwen", "compose start qwen", "purge-qwen.sh --gate-report"):

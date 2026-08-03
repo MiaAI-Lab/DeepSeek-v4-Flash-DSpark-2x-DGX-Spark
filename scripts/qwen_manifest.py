@@ -131,12 +131,14 @@ def litellm_success_count(model_names: tuple[str, ...]) -> dict:
         ):
             count += 1
     returncode = process.wait()
+    if returncode != 0:
+        raise RuntimeError("could not read the existing LiteLLM logs for Qwen usage evidence")
     return {
         "source": "plexiz-litellm container logs",
         "window_hours": 720,
         "successful_line_count": count,
         "semantics": "lines containing a Qwen model name and an explicit 200/success marker",
-        "source_available": returncode == 0,
+        "source_available": True,
     }
 
 

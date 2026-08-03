@@ -78,7 +78,7 @@
       "type": "object", "additionalProperties": false,
       "required": [
         "accepted", "duration_seconds", "sample_interval_seconds", "request_count",
-        "origin_completion_delta", "gateway_attempt_delta", "failed_requests",
+        "origin_completion_delta", "gateway_attempt_delta", "failed_requests", "sample_error_count",
         "max_idle_gap_seconds", "node_samples", "min_head_mem_available_gib",
         "min_worker_mem_available_gib", "max_requests_running",
         "max_requests_waiting", "preemption_delta", "max_rank_restarts",
@@ -92,6 +92,7 @@
         "origin_completion_delta": {"type": "integer", "minimum": 1},
         "gateway_attempt_delta": {"type": "integer", "minimum": 1},
         "failed_requests": {"type": "integer", "minimum": 0},
+        "sample_error_count": {"type": "integer", "minimum": 0, "maximum": 3},
         "max_idle_gap_seconds": {"type": "number", "minimum": 0},
         "node_samples": {"type": "integer", "minimum": 300},
         "min_head_mem_available_gib": {"type": "number", "minimum": 0},

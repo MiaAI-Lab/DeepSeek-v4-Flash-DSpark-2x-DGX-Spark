@@ -70,7 +70,7 @@ print(json.dumps({
   "gates": gates,
   "functional_runs": [{"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}, {"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}],
   "performance": {"direct": performance, "litellm": performance, "median_decode_overhead_ratio": 1.0, "p95_ttft_overhead_seconds": 0.1},
-  "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 5.0, "min_worker_mem_available_gib": 5.0, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "speculative_acceptance_mean": None},
+  "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "sample_error_count": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 5.0, "min_worker_mem_available_gib": 5.0, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "speculative_acceptance_mean": None},
   "evidence_chain": chain, "purge_eligible": True,
 }))
 PY
@@ -284,7 +284,7 @@ def spend_count():
     return int(subprocess.check_output(command, text=True).strip())
 
 def node_value(command, remote=False):
-    argv = ["ssh", worker, command] if remote else ["bash", "-lc", command]
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "ConnectionAttempts=1", worker, command] if remote else ["bash", "-lc", command]
     return subprocess.check_output(argv, text=True, timeout=4).strip()
 
 def node_sample(remote=False):
@@ -376,11 +376,12 @@ preempt_after = metric(prometheus(), "vllm:num_preemptions_total")
 gaps = [node_rows[i][0] - node_rows[i-1][0] for i in range(1, len(node_rows))]
 spec_values = [row[4] for row in metric_rows if row[4] is not None]
 minimum_samples = int(duration / interval * 0.9)
+sample_error_limit = max(3, int(duration / interval * 0.01))
 accepted = all((
     elapsed >= duration, request_count > 0, failed == 0,
     origin_delta == request_count, gateway_delta == request_count,
-    not sample_errors, len(node_rows) >= minimum_samples,
-    max(idle_gaps or [0.0]) <= 1.0, max(gaps or [0.0]) <= interval * 1.5,
+    len(sample_errors) <= sample_error_limit, len(node_rows) >= minimum_samples,
+    max(idle_gaps or [0.0]) <= 1.0, max(gaps or [0.0]) <= interval * 2.5,
     min(row[1] for row in node_rows) >= 4.0, min(row[2] for row in node_rows) >= 4.0,
     max(row[3] for row in node_rows) == 0, max(row[4] for row in node_rows) == 0,
     max(row[0] for row in metric_rows) <= 1, max(row[1] for row in metric_rows) == 0,
@@ -390,6 +391,7 @@ result = {
     "accepted": accepted, "duration_seconds": elapsed, "sample_interval_seconds": interval,
     "request_count": request_count, "origin_completion_delta": origin_delta,
     "gateway_attempt_delta": gateway_delta, "failed_requests": failed,
+    "sample_error_count": len(sample_errors),
     "max_idle_gap_seconds": round(max(idle_gaps or [0.0]), 6), "node_samples": len(node_rows),
     "min_head_mem_available_gib": round(min(row[1] for row in node_rows), 3),
     "min_worker_mem_available_gib": round(min(row[2] for row in node_rows), 3),

@@ -22,6 +22,7 @@ class QwenLifecycleTest(unittest.TestCase):
         for required in (
             "container_id", "image_id", "config_hash", "restart_policy",
             "filesystem_targets", "litellm_success_30d", "st_dev", "st_ino",
+            "could not read the existing LiteLLM logs for Qwen usage evidence",
         ):
             self.assertIn(required, helper)
         for forbidden in ("Config.Env", "VLLM_API_KEY", "secret_value"):
