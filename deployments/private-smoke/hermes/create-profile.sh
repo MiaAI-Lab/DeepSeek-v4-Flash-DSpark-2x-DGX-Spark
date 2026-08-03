@@ -56,7 +56,7 @@ if mode == "verify":
 
 if not all((home_raw, base_url, key_raw, request_id)):
     raise SystemExit("--home, --base-url, --key-file, and --request-id are required")
-if not re.fullmatch(r"hermes-smoke-[a-f0-9-]{8,64}", request_id):
+if not re.fullmatch(r"hermes-smoke-[a-z0-9-]{8,64}", request_id):
     raise SystemExit("invalid request id")
 try:
     timeout = int(timeout_raw)

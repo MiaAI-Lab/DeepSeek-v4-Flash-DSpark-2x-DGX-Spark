@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -55,6 +57,29 @@ class HermesIsolationTest(unittest.TestCase):
             self.assertIn(required, text)
         for forbidden in ("profile use", "active_profile", "~/.hermes/profiles"):
             self.assertNotIn(forbidden, text)
+
+    def test_profile_accepts_named_failure_probe_request_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            key = root / "key"
+            key.write_text("sk-synthetic\n")
+            key.chmod(0o600)
+            home = root / "profile"
+            environment = dict(os.environ)
+            environment["ALLOW_LOOPBACK_PROVIDER"] = "1"
+            result = subprocess.run(
+                [
+                    str(HERMES / "create-profile.sh"),
+                    "--home", str(home),
+                    "--base-url", "http://127.0.0.1:4001/v1",
+                    "--key-file", str(key),
+                    "--request-id", "hermes-smoke-deadbeef-invalid",
+                ],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_suite_pins_invocation_and_dedicated_colima_socket(self):
         text = (HERMES / "run-suite.sh").read_text()
