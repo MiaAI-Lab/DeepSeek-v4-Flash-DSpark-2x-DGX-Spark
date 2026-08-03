@@ -469,11 +469,16 @@ import sys
 
 mode, status, count_path, usage_path, stderr_path = sys.argv[1:]
 request_lines = [line for line in Path(count_path).read_text().splitlines() if line.strip()]
-attempts = len(request_lines)
+requests = [json.loads(line) for line in request_lines]
+inference_requests = [
+    request for request in requests
+    if request.get("path", "").rstrip("/").endswith("/chat/completions")
+]
+attempts = len(inference_requests)
 if attempts != 1:
     stderr_tail = Path(stderr_path).read_text(errors="replace")[-4000:]
     raise SystemExit(
-        f"{mode} probe made {attempts} attempts; expected exactly one; "
+        f"{mode} probe made {attempts} inference attempts; expected exactly one; "
         f"requests={request_lines!r}; stderr_tail={stderr_tail!r}"
     )
 usage_file = Path(usage_path)

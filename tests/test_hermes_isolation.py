@@ -101,6 +101,7 @@ class HermesIsolationTest(unittest.TestCase):
         invocation = text.index('"$HERMES_BIN" -z', reset)
         self.assertLess(profile_creation, reset)
         self.assertLess(reset, invocation)
+        self.assertIn('endswith("/chat/completions")', text)
 
     def test_suite_guards_shared_state_and_cleans_ephemeral_state(self):
         text = (HERMES / "run-suite.sh").read_text()
