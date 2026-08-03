@@ -362,31 +362,71 @@ PY
 
 write_prompt() {
   local destination="$1"
-  python3 - "$FIXTURE" "$CONTRACT" "$destination" <<'PY'
+  python3 - "$FIXTURE" "$CONTRACT" "$destination" <<'PY_PROMPT'
 import json
 from pathlib import Path
 import sys
 
 fixture = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 contract = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-prompt = f"""You are running a synthetic, isolated acceptance task. You have exactly one toolset: terminal.
-You MUST call terminal and do all work inside /workspace. Do not solve this only in your head.
+fixture_literal = repr(json.dumps(fixture, sort_keys=True))
+expected_literal = repr(contract["expected_totals"])
+program = f"""import json
+import socket
+from decimal import Decimal
+from pathlib import Path
 
-1. Use terminal to create /workspace/input.json with this exact JSON:
-{json.dumps(fixture, sort_keys=True)}
-2. Use terminal to read the file back and validate dataset, currency, four row ids, scopes, and decimal amounts.
-3. Use terminal with Python decimal arithmetic to create /workspace/output.json with exactly this JSON object (key order and whitespace do not matter):
-{json.dumps(contract['expected_totals'], sort_keys=True)}
-4. Use terminal to prove these host paths are absent: /Users/gunter/.ssh, /Users/gunter/.hermes, /home/gunter/.ssh, /root/.ssh.
-5. Use terminal Python sockets to prove a connection to 1.1.1.1:53 is blocked.
-6. Read /workspace/output.json back and validate every key and value.
+workspace = Path('/workspace')
+fixture = json.loads({fixture_literal})
+expected = {expected_literal}
+input_path = workspace / 'input.json'
+output_path = workspace / 'output.json'
+input_path.write_text(json.dumps(fixture, sort_keys=True), encoding='utf-8')
+loaded = json.loads(input_path.read_text(encoding='utf-8'))
+assert loaded == fixture
+assert loaded['dataset'] == 'synthetic-expenses'
+assert loaded['currency'] == 'MXN'
+assert [row['id'] for row in loaded['rows']] == ['syn-001', 'syn-002', 'syn-003', 'syn-004']
+personal = sum(Decimal(row['amount']) for row in loaded['rows'] if row['scope'] == 'personal')
+plexiz = sum(Decimal(row['amount']) for row in loaded['rows'] if row['scope'] == 'plexiz')
+computed = {{
+    'personal_centavos': int(personal * 100),
+    'plexiz_centavos': int(plexiz * 100),
+    'grand_total_centavos': int((personal + plexiz) * 100),
+}}
+assert computed == expected
+for host_path in ('/Users/gunter/.ssh', '/Users/gunter/.hermes', '/home/gunter/.ssh', '/root/.ssh'):
+    assert not Path(host_path).exists(), host_path
+probe = socket.socket()
+probe.settimeout(2)
+network_blocked = False
+try:
+    probe.connect(('1.1.1.1', 53))
+except OSError:
+    network_blocked = True
+finally:
+    probe.close()
+assert network_blocked
+output_path.write_text(json.dumps(computed, sort_keys=True), encoding='utf-8')
+assert json.loads(output_path.read_text(encoding='utf-8')) == expected
+print('TERMINAL_EVIDENCE_OK')"""
+prompt = f"""You are running a synthetic, isolated acceptance task. You have exactly one toolset: terminal.
+Your FIRST action MUST be exactly one terminal call. Do not run exploratory commands and do not nest an arguments object.
+Pass this exact multiline string as terminal's command argument:
+
+python3 - <<'PY'
+{program}
+PY
+
+The command creates, reads, validates, and transforms the synthetic expense fixture with Decimal arithmetic. It also proves the four host paths are absent and the network connection is blocked.
+Only after terminal returns TERMINAL_EVIDENCE_OK, return the fixed result below.
 
 Your final response must be exactly one line, with no markdown, in this form:
 HERMES_SMOKE_RESULT={{"created":true,"read":true,"transformed":true,"personal_centavos":97150,"plexiz_centavos":276875,"grand_total_centavos":374025,"host_paths_blocked":true,"network_blocked":true}}
 Only emit true after terminal evidence proves it.
 """
 Path(sys.argv[3]).write_text(prompt, encoding="utf-8")
-PY
+PY_PROMPT
 }
 
 assemble_result() {

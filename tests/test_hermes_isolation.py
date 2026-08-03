@@ -105,6 +105,17 @@ class HermesIsolationTest(unittest.TestCase):
         self.assertLess(reset, invocation)
         self.assertIn('endswith("/chat/completions")', text)
 
+    def test_positive_prompt_requires_one_deterministic_terminal_call(self):
+        text = (HERMES / "run-suite.sh").read_text()
+        for required in (
+            "Your FIRST action MUST be exactly one terminal call",
+            "TERMINAL_EVIDENCE_OK",
+            "from decimal import Decimal",
+            "probe.connect(('1.1.1.1', 53))",
+            "assert not Path(host_path).exists()",
+        ):
+            self.assertIn(required, text)
+
     def test_suite_guards_shared_state_and_cleans_ephemeral_state(self):
         text = (HERMES / "run-suite.sh").read_text()
         for required in (
