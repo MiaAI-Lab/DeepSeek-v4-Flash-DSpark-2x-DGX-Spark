@@ -61,7 +61,14 @@ env_args=()
 while IFS='=' read -r key _; do
   case "$key" in OMPI_*|PMIX_*|NCCL_*|CUDA_VISIBLE_DEVICES) env_args+=(--env "$key") ;; esac
 done < <(env)
+rank_uid="$(id -u)"
+rank_gid="$(id -g)"
+group_args=()
+for gid in $(id -G); do
+  [ "$gid" = "$rank_gid" ] || group_args+=(--group-add "$gid")
+done
 exec docker run --rm --network host --ipc host --pid host --gpus all \
+  --user "$rank_uid:$rank_gid" "${group_args[@]}" \
   --label "com.plexiz.dspark.nccl-run=$NCCL_TEST_RUN_ID" \
   --volume /dev/infiniband:/dev/infiniband \
   --volume /tmp:/tmp --volume /run:/run \
@@ -81,9 +88,13 @@ done
 
 mpi_head_host="${HEAD_HOST#*@}"
 mpi_worker_host="${WORKER_HOST#*@}"
+mpi_export_args=(-x HCA -x IFACE -x NCCL_TEST_RUN_ID="$nccl_test_run_id")
+while IFS='=' read -r key _; do
+  case "$key" in NCCL_*) mpi_export_args+=(-x "$key") ;; esac
+done < <(env)
 timeout --signal=TERM --kill-after=10s "${NCCL_TEST_TIMEOUT_SECONDS}s" \
   env OPAL_PREFIX="$mpi_runtime" LD_LIBRARY_PATH="$mpi_runtime/lib" \
   "$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
   --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
-  -x HCA -x IFACE -x NCCL_TESTS_IMAGE -x NCCL_TEST_RUN_ID="$nccl_test_run_id" \
+  "${mpi_export_args[@]}" \
   "$remote_wrapper" "$@"
