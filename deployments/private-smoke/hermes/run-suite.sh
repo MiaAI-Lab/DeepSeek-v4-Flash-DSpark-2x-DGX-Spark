@@ -271,6 +271,54 @@ observations.write_text(
 PY
 }
 
+summarize_request_diagnostics() {
+  local profile_home="$1"
+  [ "$HERMES_DUMP_REQUESTS" = "1" ] || return 0
+  python3 - "$profile_home" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+dumps = sorted(Path(sys.argv[1]).rglob("request_dump_*.json"))
+print(f"Hermes request diagnostics: dumps={len(dumps)}", file=sys.stderr)
+if not dumps:
+    raise SystemExit(0)
+body = json.loads(dumps[-1].read_text(encoding="utf-8"))["request"]["body"]
+for index, message in enumerate(body.get("messages") or []):
+    role = message.get("role")
+    if role == "assistant":
+        summaries = []
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            raw = function.get("arguments") or ""
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                parsed = None
+            summaries.append({
+                "name": function.get("name"),
+                "argument_chars": len(raw),
+                "argument_keys": sorted(parsed) if isinstance(parsed, dict) else [],
+                "command_chars": len(parsed.get("command") or "") if isinstance(parsed, dict) else 0,
+                "nested_arguments": isinstance(parsed, dict) and "arguments" in parsed,
+            })
+        print(json.dumps({
+            "message": index,
+            "role": role,
+            "content_chars": len(message.get("content") or ""),
+            "calls": summaries,
+        }, sort_keys=True), file=sys.stderr)
+    elif role == "tool":
+        content = str(message.get("content") or "")
+        print(json.dumps({
+            "message": index,
+            "role": role,
+            "content_chars": len(content),
+            "content_prefix": content[:400],
+        }, sort_keys=True), file=sys.stderr)
+PY
+}
+
 remove_hermes_containers() {
   DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
     | while IFS= read -r container; do
@@ -391,7 +439,11 @@ run_hermes() {
   [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
   capture_workspace_evidence_if_present "$workspace_evidence" "$writer_observation"
   [ -s "$workspace_evidence" ] && [ -s "$writer_observation" ] \
-    || { echo "Hermes did not leave recoverable terminal workspace evidence." >&2; return 1; }
+    || {
+      echo "Hermes did not leave recoverable terminal workspace evidence." >&2
+      summarize_request_diagnostics "$profile_home"
+      return 1
+    }
   capture_containers "$observations"
   merge_workspace_writer_observation "$observations" "$writer_observation"
 }

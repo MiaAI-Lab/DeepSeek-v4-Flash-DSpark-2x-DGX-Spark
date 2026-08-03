@@ -95,6 +95,7 @@ class HermesIsolationTest(unittest.TestCase):
             "capture_workspace_evidence_if_present", "merge_workspace_writer_observation",
             "workspace writer observation lacks a container ID",
             "_dspark_workspace_writer", "at most one rotated default container",
+            "summarize_request_diagnostics", "nested_arguments", "content_prefix",
         ):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):
