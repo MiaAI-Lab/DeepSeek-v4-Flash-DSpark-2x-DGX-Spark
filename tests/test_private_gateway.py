@@ -56,6 +56,10 @@ class PrivateGatewayTest(unittest.TestCase):
             self.assertIn(required, text)
 
     def test_egress_policy_builds_rules_under_nounset(self):
+        policy = (GATEWAY / "egress-policy.sh").read_text()
+        self.assertIn("sudo -n true", policy)
+        self.assertIn("--privileged --pid host --entrypoint nsenter", policy)
+        self.assertIn("sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8", policy)
         with tempfile.TemporaryDirectory() as temporary:
             sudo = Path(temporary) / "sudo"
             sudo.write_text("#!/bin/sh\nexit 0\n")
