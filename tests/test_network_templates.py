@@ -33,6 +33,8 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn('MODE="check"', script)
         self.assertIn("--apply", script)
         self.assertIn("netplan generate", script)
+        self.assertIn('netplan get --root-dir "$check_root"', script)
+        self.assertIn("Merged CX-7 configuration unexpectedly adds", script)
         self.assertIn("netplan try", script)
         self.assertIn("systemd-run", script)
         self.assertIn("/etc/netplan", script)

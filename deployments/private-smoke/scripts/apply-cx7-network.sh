@@ -45,11 +45,6 @@ sudo -v
 default_before="$(ip -4 route show default)"
 [ -n "$default_before" ] || { echo "No IPv4 default route is active; refusing network work." >&2; exit 1; }
 tailscale status --peers=false >/dev/null
-existing="$(sudo find /etc/netplan -maxdepth 1 -type f -exec sh -c 'for f do echo "### $f"; cat "$f"; done' sh {} +)"
-if printf '%s\n' "$existing" | grep -F "$IFACE" >/dev/null && [ ! -f "$TARGET" ]; then
-  echo "$IFACE is already defined by an existing netplan file; refusing an automatic merge." >&2
-  exit 1
-fi
 if ip -4 route show table all | grep -F "10.77.77.0/30" >/dev/null; then
   current="$(ip -4 address show dev "$IFACE")"
   printf '%s\n' "$current" | grep -F "$ADDRESS" >/dev/null || {
@@ -64,6 +59,17 @@ mkdir -p "$check_root/etc/netplan"
 sudo cp -a /etc/netplan/. "$check_root/etc/netplan/"
 sudo install -m 0600 "$TEMPLATE" "$check_root$TARGET"
 sudo netplan generate --root-dir "$check_root"
+merged="$(sudo netplan get --root-dir "$check_root" "ethernets.$IFACE")"
+for expected in "$ADDRESS" "mtu: 9000" "dhcp4: false" "dhcp6: false" "accept-ra: false" "link-local: []"; do
+  printf '%s\n' "$merged" | grep -F "$expected" >/dev/null || {
+    echo "Merged netplan did not preserve required setting: $expected" >&2
+    exit 1
+  }
+done
+if printf '%s\n' "$merged" | grep -E '^[[:space:]]*(gateway4|gateway6|nameservers|routes):' >/dev/null; then
+  echo "Merged CX-7 configuration unexpectedly adds a gateway, DNS, or route." >&2
+  exit 1
+fi
 
 echo "Validated role=$ROLE interface=$IFACE address=$ADDRESS"
 if [ -f "$TARGET" ]; then
