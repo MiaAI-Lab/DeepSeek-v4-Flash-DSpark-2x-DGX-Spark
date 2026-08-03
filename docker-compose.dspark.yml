@@ -119,7 +119,7 @@ services:
         --revision ${DSPARK_MODEL_REVISION}
         --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}
         --host ${VLLM_HOST:-127.0.0.1}
-        --port ${VLLM_PORT:-8888}
+        --port ${VLLM_PORT:-8889}
         --trust-remote-code
         $${VLLM_QUANTIZATION_ARGS}
         --tensor-parallel-size 2
@@ -151,3 +151,34 @@ services:
         --master-addr ${MASTER_ADDR}
         --master-port ${MASTER_PORT:-25000}
         ${HEADLESS:+--headless}
+
+  origin-auth-proxy:
+    profiles: ["head-proxy"]
+    image: ${DSPARK_VLLM_IMAGE:-ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8}
+    pull_policy: if_not_present
+    network_mode: host
+    read_only: true
+    user: "${DSPARK_PROXY_UID:-1000}:${DSPARK_PROXY_GID:-1000}"
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - ./scripts/origin-auth-proxy.py:/opt/dspark/origin-auth-proxy.py:ro
+      - ${VLLM_ORIGIN_KEY_FILE:-/nonexistent/dspark-origin.key}:/run/secrets/origin.key:ro
+    entrypoint: ["python3", "/opt/dspark/origin-auth-proxy.py"]
+    command:
+      - --listen-host
+      - ${VLLM_PROXY_HOST:-172.30.0.1}
+      - --listen-port
+      - ${VLLM_PROXY_PORT:-8888}
+      - --upstream-host
+      - 127.0.0.1
+      - --upstream-port
+      - ${VLLM_PORT:-8889}
+      - --key-file
+      - /run/secrets/origin.key
+      - --allow-cidr
+      - 172.30.0.0/24
+    restart: unless-stopped

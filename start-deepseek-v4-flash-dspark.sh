@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
+HEAD_ENV_FILE="${HEAD_ENV_FILE:-$SCRIPT_DIR/.env.dspark.head}"
+WORKER_ENV_FILE="${WORKER_ENV_FILE:-$SCRIPT_DIR/.env.dspark.worker}"
 COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.dspark.yml}"
 PROJECT_NAME="${PROJECT_NAME:-deepseek-v4-flash}"
 WAIT_ATTEMPTS="${WAIT_ATTEMPTS:-100}"
@@ -10,6 +12,7 @@ WAIT_SECONDS="${WAIT_SECONDS:-15}"
 ENABLE_VLLM_GB10_PATCH="${ENABLE_VLLM_GB10_PATCH:-0}"
 VLLM_GB10_PATCH_DIR="${VLLM_GB10_PATCH_DIR:-$SCRIPT_DIR/vllm_patch_gb10}"
 DSPARK_PROPOSER_FILE="${DSPARK_PROPOSER_FILE:-$SCRIPT_DIR/recipe/vllm/v1/spec_decode/dspark_proposer.py}"
+ORIGIN_PROXY_FILE="${ORIGIN_PROXY_FILE:-$SCRIPT_DIR/scripts/origin-auth-proxy.py}"
 CLI_VLLM_HOST=""
 CLI_VLLM_PORT=""
 
@@ -19,7 +22,7 @@ Usage: $(basename "$0") [--host HOST] [--port PORT]
 
 Options:
   --host HOST  vLLM API bind address (default: VLLM_HOST or 127.0.0.1)
-  --port PORT  vLLM API listen port (default: VLLM_PORT or 8888)
+  --port PORT  loopback vLLM port (default: VLLM_PORT or 8889)
   -h, --help   Show this help message
 
 Command-line options override values from $ENV_FILE.
@@ -82,7 +85,7 @@ set +a
 # CLI values have highest precedence; the env file remains the persistent
 # configuration source when no command-line override is provided.
 VLLM_HOST="${CLI_VLLM_HOST:-${VLLM_HOST:-127.0.0.1}}"
-VLLM_PORT="${CLI_VLLM_PORT:-${VLLM_PORT:-${PORT:-8888}}}"
+VLLM_PORT="${CLI_VLLM_PORT:-${VLLM_PORT:-${PORT:-8889}}}"
 if [ -z "$VLLM_HOST" ]; then
   echo "VLLM host must not be empty." >&2
   exit 2
@@ -96,6 +99,10 @@ if (( 10#$VLLM_PORT < 1 || 10#$VLLM_PORT > 65535 )); then
   exit 2
 fi
 VLLM_PORT="$((10#$VLLM_PORT))"
+if [ "$VLLM_HOST" != "127.0.0.1" ]; then
+  echo "vLLM must bind only to 127.0.0.1; use the authenticated bridge proxy for clients." >&2
+  exit 2
+fi
 # Keep PORT as a backwards-compatible alias, but use VLLM_PORT internally.
 PORT="$VLLM_PORT"
 DEFAULT_THINKING="${DEFAULT_THINKING:-low}"
@@ -108,17 +115,16 @@ case "$DEFAULT_THINKING" in
 esac
 export VLLM_HOST VLLM_PORT PORT DEFAULT_THINKING
 
-# A wildcard is valid for binding but not a useful health-check destination.
-API_HOST="${API_HOST:-$VLLM_HOST}"
-case "$API_HOST" in
-  0.0.0.0|::|\[::\]) API_HOST="127.0.0.1" ;;
-esac
+# Clients reach only the authenticated proxy on the dedicated Docker bridge.
+VLLM_PROXY_HOST="${VLLM_PROXY_HOST:-172.30.0.1}"
+VLLM_PROXY_PORT="${VLLM_PROXY_PORT:-8888}"
+API_HOST="${API_HOST:-$VLLM_PROXY_HOST}"
 URL_HOST="$API_HOST"
 if [[ "$URL_HOST" == *:* && "$URL_HOST" != \[*\] ]]; then
   URL_HOST="[$URL_HOST]"
 fi
-API_URL="${API_URL:-http://$URL_HOST:$VLLM_PORT/v1/models}"
-CHAT_URL="${CHAT_URL:-http://$URL_HOST:$VLLM_PORT/v1/chat/completions}"
+API_URL="${API_URL:-http://$URL_HOST:$VLLM_PROXY_PORT/v1/models}"
+CHAT_URL="${CHAT_URL:-http://$URL_HOST:$VLLM_PROXY_PORT/v1/chat/completions}"
 
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
@@ -126,6 +132,7 @@ CHAT_URL="${CHAT_URL:-http://$URL_HOST:$VLLM_PORT/v1/chat/completions}"
 : "${NCCL_IB_HCA:?NCCL_IB_HCA must be set in $ENV_FILE}"
 : "${NCCL_SOCKET_IFNAME:?NCCL_SOCKET_IFNAME must be set in $ENV_FILE}"
 : "${DSPARK_VLLM_IMAGE:?DSPARK_VLLM_IMAGE must be set in $ENV_FILE}"
+: "${VLLM_ORIGIN_KEY_FILE:?VLLM_ORIGIN_KEY_FILE must be set in $ENV_FILE}"
 
 VLLM_HOST_IP="${VLLM_HOST_IP:-$MASTER_ADDR}"
 WORKER_VLLM_HOST_IP="${WORKER_VLLM_HOST_IP:-$WORKER_HOST}"
@@ -202,27 +209,24 @@ resolve_rocev2_gid_index() {
   local ssh_target="$1" hca="$2" match_ip="$3"
   local hex remote
   hex="$(ipv4_to_gid_suffix "$match_ip")" || return 1
-  remote=$(
-    cat <<EOF
-hca=$(printf '%q' "$hca")
-hex=$(printf '%q' "$hex")
-for g in /sys/class/infiniband/\$hca/ports/1/gids/*; do
-  [ -e "\$g" ] || continue
-  i=\${g##*/}
-  t=\$(cat /sys/class/infiniband/\$hca/ports/1/gid_attrs/types/\$i 2>/dev/null || true)
-  [ "\$t" = "RoCE v2" ] || continue
-  case \$(cat "\$g" 2>/dev/null) in
-    *ffff:\${hex}) echo "\$i"; exit 0 ;;
+  remote="$(cat <<'EOF'
+for g in /sys/class/infiniband/$HCA/ports/1/gids/*; do
+  [ -e "$g" ] || continue
+  i=${g##*/}
+  t=$(cat /sys/class/infiniband/$HCA/ports/1/gid_attrs/types/$i 2>/dev/null || true)
+  [ "$t" = "RoCE v2" ] || continue
+  case $(cat "$g" 2>/dev/null) in
+    *ffff:${HEX}) echo "$i"; exit 0 ;;
   esac
 done
 exit 1
 EOF
-  )
+  )"
   if [ -z "$ssh_target" ]; then
-    bash -c "$remote"
+    HCA="$hca" HEX="$hex" bash -c "$remote"
   else
     # shellcheck disable=SC2029
-    ssh "$ssh_target" "bash -s" <<<"$remote"
+    ssh "$ssh_target" "HCA=$(printf '%q' "$hca") HEX=$(printf '%q' "$hex") bash -s" <<<"$remote"
   fi
 }
 
@@ -321,12 +325,15 @@ compose_base() {
     VLLM_HOST="$VLLM_HOST" \
     VLLM_PORT="$VLLM_PORT" \
     VLLM_HOST_IP="$VLLM_HOST_IP" \
+    VLLM_ORIGIN_KEY_FILE="$VLLM_ORIGIN_KEY_FILE" \
+    VLLM_PROXY_HOST="$VLLM_PROXY_HOST" \
+    VLLM_PROXY_PORT="$VLLM_PROXY_PORT" \
     ENABLE_VLLM_GB10_PATCH="$ENABLE_VLLM_GB10_PATCH" \
     VLLM_GB10_PATCH_DIR="$VLLM_GB10_PATCH_DIR" \
     GB10_HYBRID_NVFP4_M_THRESHOLD="${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}" \
     NODE_RANK="$1" \
     HEADLESS="$2" \
-    docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "${@:3}"
+    docker compose -p "$PROJECT_NAME" --env-file "$HEAD_ENV_FILE" -f "$COMPOSE_FILE" --profile head-proxy "${@:3}"
 }
 
 remote_compose() {
@@ -370,7 +377,51 @@ on_error() {
   local status=$?
   trap - ERR
   print_failure_logs
+  cleanup_partial_start || status=1
   exit "$status"
+}
+
+verify_stopped() {
+  local failed=0 worker_resources
+  if docker ps -aq --filter "label=com.docker.compose.project=$PROJECT_NAME" | grep -q .; then
+    echo "Head resources remain for $PROJECT_NAME." >&2
+    failed=1
+  fi
+  if ! worker_resources="$(ssh "$WORKER_HOST" "docker ps -aq --filter 'label=com.docker.compose.project=$PROJECT_NAME'")"; then
+    echo "Could not verify worker cleanup for $PROJECT_NAME." >&2
+    failed=1
+  elif [ -n "$worker_resources" ]; then
+    echo "Worker resources remain for $PROJECT_NAME." >&2
+    failed=1
+  fi
+  return "$failed"
+}
+
+cleanup_partial_start() {
+  local failed=0
+  echo "Cleaning up both DSpark ranks after startup failure..." >&2
+  compose_base 0 "" down --remove-orphans || failed=1
+  remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml down --remove-orphans" || failed=1
+  verify_stopped || failed=1
+  return "$failed"
+}
+
+probe_authenticated_models() {
+  python3 - "$API_URL" "$VLLM_ORIGIN_KEY_FILE" "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}" <<'PY'
+import json
+from pathlib import Path
+import sys
+import urllib.request
+
+url, key_file, model = sys.argv[1:]
+key = Path(key_file).read_text().strip()
+request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+with urllib.request.urlopen(request, timeout=5) as response:
+    payload = json.load(response)
+ids = {item.get("id") for item in payload.get("data", [])}
+if model not in ids:
+    raise SystemExit(f"served model mismatch: expected {model}")
+PY
 }
 
 print_resolved_profile() {
@@ -387,7 +438,7 @@ print_resolved_profile() {
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"
   echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))"
   echo "  API bind: $VLLM_HOST:$VLLM_PORT"
-  echo "  API probe: $API_URL"
+  echo "  authenticated proxy: $VLLM_PROXY_HOST:$VLLM_PROXY_PORT"
   echo "  head fabric IP: $VLLM_HOST_IP"
   echo "  worker host/ip: $WORKER_HOST / $WORKER_VLLM_HOST_IP"
   echo "  head NCCL HCA/if: $NCCL_IB_HCA / $NCCL_SOCKET_IFNAME"
@@ -415,6 +466,7 @@ need_cmd docker
 need_cmd ssh
 need_cmd scp
 need_cmd curl
+need_cmd python3
 
 if [ "$ENABLE_VLLM_GB10_PATCH" != "0" ] && [ "$ENABLE_VLLM_GB10_PATCH" != "1" ]; then
   echo "ENABLE_VLLM_GB10_PATCH must be 0 or 1." >&2
@@ -430,6 +482,14 @@ if [ ! -f "$DSPARK_PROPOSER_FILE" ]; then
   echo "Missing DSpark proposer bind-mount source: $DSPARK_PROPOSER_FILE" >&2
   exit 1
 fi
+if [ ! -f "$ORIGIN_PROXY_FILE" ]; then
+  echo "Missing origin auth proxy: $ORIGIN_PROXY_FILE" >&2
+  exit 1
+fi
+
+ENV_FILE="$ENV_FILE" VALIDATE_RENDER=0 "$SCRIPT_DIR/validate-dspark-config.sh"
+python3 "$SCRIPT_DIR/scripts/generate-node-env.py" \
+  --source "$ENV_FILE" --head-output "$HEAD_ENV_FILE" --worker-output "$WORKER_ENV_FILE"
 
 docker compose version >/dev/null
 docker image inspect "$DSPARK_VLLM_IMAGE" >/dev/null || {
@@ -454,7 +514,7 @@ if docker ps --format '{{.Names}}' | grep -qx "${PROJECT_NAME}-vllm-dspark-1"; t
   exit 1
 fi
 
-if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n +2 | grep -q .; then
+if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT or sport = :$VLLM_PROXY_PORT )" | tail -n +2 | grep -q .; then
   echo "Port $VLLM_PORT is already listening on the head node. Stop the conflicting service first." >&2
   exit 1
 fi
@@ -470,7 +530,8 @@ print_resolved_profile
 echo "Syncing DSpark deployment files to ${WORKER_HOST}:${WORKER_DIR}"
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR"
 scp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_COMPOSE_FILE}"
-scp "$ENV_FILE" "${WORKER_HOST}:${REMOTE_ENV_FILE}"
+scp "$WORKER_ENV_FILE" "${WORKER_HOST}:${REMOTE_ENV_FILE}"
+ssh "$WORKER_HOST" "chmod 0600 $REMOTE_ENV_FILE"
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
 scp "$DSPARK_PROPOSER_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
 if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
@@ -483,6 +544,15 @@ if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
 fi
 validate_compose
 
+if ! docker network inspect dspark-smoke >/dev/null 2>&1; then
+  docker network create --driver bridge --subnet 172.30.0.0/24 --gateway 172.30.0.1 dspark-smoke >/dev/null
+fi
+network_config="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}} {{(index .IPAM.Config 0).Gateway}}' dspark-smoke)"
+[ "$network_config" = "172.30.0.0/24 172.30.0.1" ] || {
+  echo "Existing dspark-smoke network has unexpected IPAM: $network_config" >&2
+  exit 1
+}
+
 echo "Starting DSpark worker on ${WORKER_HOST}..."
 remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
 
@@ -492,15 +562,14 @@ compose_base 0 "" up -d
 echo "Waiting for DSpark vLLM API..."
 print_initial_startup_logs
 for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
-  if curl -fsS --max-time 5 "$API_URL" >/dev/null 2>&1; then
+  if probe_authenticated_models >/dev/null 2>&1; then
     echo "DeepSeek V4 Flash DSpark is running: $API_URL"
     compose_base 0 "" ps
     remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml ps"
-    echo "Running minimal OpenAI-compatible chat request..."
-    curl -fsS --max-time 60 "$CHAT_URL" \
-      -H "Content-Type: application/json" \
-      -d '{"model":"'"${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"'","messages":[{"role":"user","content":"Reply with OK."}],"temperature":0.0}' >/dev/null
-    echo "Minimal chat request succeeded."
+    python3 "$SCRIPT_DIR/scripts/smoke-openai-compat.py" --profile direct \
+      --base-url "http://$URL_HOST:$VLLM_PROXY_PORT/v1" \
+      --key-file "$VLLM_ORIGIN_KEY_FILE" \
+      --model "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}" --runs 1
     exit 0
   fi
   wait_with_startup_logs
@@ -510,4 +579,5 @@ echo "Timed out waiting for DSpark API. Recent head logs:" >&2
 compose_base 0 "" logs --tail=120 vllm-dspark >&2 || true
 echo "Recent worker logs:" >&2
 remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml logs --tail=120 vllm-dspark" >&2 || true
+cleanup_partial_start || true
 exit 1

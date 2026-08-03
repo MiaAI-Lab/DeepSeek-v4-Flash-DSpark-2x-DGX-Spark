@@ -3,49 +3,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
-CHAT_URL="${CHAT_URL:-http://127.0.0.1:8888/v1/chat/completions}"
-CONCURRENCY="${CONCURRENCY:-6}"
+RUNS="${RUNS:-2}"
 
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
+[ -f "$ENV_FILE" ] || { echo "Missing $ENV_FILE" >&2; exit 1; }
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
 
-MODEL="${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+: "${VLLM_ORIGIN_KEY_FILE:?VLLM_ORIGIN_KEY_FILE must be set in $ENV_FILE}"
+VLLM_PROXY_HOST="${VLLM_PROXY_HOST:-172.30.0.1}"
+VLLM_PROXY_PORT="${VLLM_PROXY_PORT:-8888}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
 
-echo "Running ${CONCURRENCY}-way smoke test against ${CHAT_URL}"
-
-for i in $(seq 1 "$CONCURRENCY"); do
-  (
-    curl -fsS --max-time 180 "$CHAT_URL" \
-      -H "Content-Type: application/json" \
-      -d '{"model":"'"$MODEL"'","messages":[{"role":"user","content":"Reply with OK and the number '"$i"'."}],"temperature":0.0}' \
-      >"$tmpdir/$i.json"
-  ) &
-done
-
-fail=0
-for job in $(jobs -p); do
-  if ! wait "$job"; then
-    fail=1
-  fi
-done
-
-if [ "$fail" -ne 0 ]; then
-  echo "Smoke test failed. Responses are in $tmpdir until this script exits." >&2
+if ! python3 "$SCRIPT_DIR/scripts/smoke-openai-compat.py" \
+    --profile direct \
+    --base-url "http://$VLLM_PROXY_HOST:$VLLM_PROXY_PORT/v1" \
+    --key-file "$VLLM_ORIGIN_KEY_FILE" \
+    --model "$SERVED_MODEL_NAME" \
+    --runs "$RUNS"; then
+  echo "Semantic smoke failed; stopping both ranks to avoid a partial cluster." >&2
+  "$SCRIPT_DIR/stop-deepseek-v4-flash-dspark.sh" || true
+  "$SCRIPT_DIR/status-deepseek-v4-flash-dspark.sh" --expect stopped
   exit 1
 fi
-
-for i in $(seq 1 "$CONCURRENCY"); do
-  if ! grep -q '"choices"' "$tmpdir/$i.json"; then
-    echo "Smoke response $i did not contain choices." >&2
-    cat "$tmpdir/$i.json" >&2
-    exit 1
-  fi
-done
-
-echo "Smoke test passed: ${CONCURRENCY}/${CONCURRENCY} requests succeeded."

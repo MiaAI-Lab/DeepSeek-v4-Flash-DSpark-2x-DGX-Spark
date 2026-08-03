@@ -78,7 +78,8 @@ class ArtifactContractTest(unittest.TestCase):
         self.assertIn("VLLM_ORIGIN_KEY_FILE=", example)
         self.assertIn("--revision ${DSPARK_MODEL_REVISION}", compose)
         self.assertNotIn("VLLM_API_KEY", compose)
-        self.assertNotIn("VLLM_ORIGIN_KEY_FILE", compose)
+        vllm_service = compose.split("origin-auth-proxy:", 1)[0]
+        self.assertNotIn("VLLM_ORIGIN_KEY_FILE", vllm_service)
 
     def test_validator_rejects_missing_revision_digest_and_secret_file(self):
         with tempfile.TemporaryDirectory() as tmp:

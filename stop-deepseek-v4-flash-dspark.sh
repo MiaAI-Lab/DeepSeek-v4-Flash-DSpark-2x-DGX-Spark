@@ -33,10 +33,12 @@ local_project_has_resources() {
 
 stop_project() {
   local project="$1"
+  local failed=0
 
   if local_project_has_resources "$project"; then
     echo "Stopping DSpark head project ${project}..."
-    COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$project" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down || true
+    COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$project" --env-file "$ENV_FILE" \
+      -f "$COMPOSE_FILE" --profile head-proxy down --remove-orphans || failed=1
   else
     echo "No DSpark head resources for project ${project}; skipping."
   fi
@@ -57,12 +59,44 @@ stop_project() {
     else
       echo 'No DSpark worker resources for project $project on $WORKER_HOST; skipping.'
     fi
-  " || true
+  " || failed=1
+  return "$failed"
 }
 
-stop_project "$PROJECT_NAME"
+verify_stopped() {
+  local project="$1"
+  local failed=0 worker_resources
+  if local_project_has_resources "$project"; then
+    echo "Head resources remain for $project." >&2
+    failed=1
+  fi
+  if ! worker_resources="$(ssh "$WORKER_HOST" "{
+    docker ps -aq --filter 'label=com.docker.compose.project=$project'
+    docker network ls -q --filter 'label=com.docker.compose.project=$project'
+    docker volume ls -q --filter 'label=com.docker.compose.project=$project'
+  }")"; then
+    echo "Could not verify worker resources for $project." >&2
+    failed=1
+  elif [ -n "$worker_resources" ]; then
+    echo "Worker resources remain for $project." >&2
+    failed=1
+  fi
+  return "$failed"
+}
+
+failed=0
+stop_project "$PROJECT_NAME" || failed=1
 if [ "$LEGACY_PROJECT_NAME" != "$PROJECT_NAME" ]; then
-  stop_project "$LEGACY_PROJECT_NAME"
+  stop_project "$LEGACY_PROJECT_NAME" || failed=1
+fi
+verify_stopped "$PROJECT_NAME" || failed=1
+if [ "$LEGACY_PROJECT_NAME" != "$PROJECT_NAME" ]; then
+  verify_stopped "$LEGACY_PROJECT_NAME" || failed=1
+fi
+
+if [ "$failed" -ne 0 ]; then
+  echo "DeepSeek V4 Flash DSpark did not stop cleanly on both nodes." >&2
+  exit 1
 fi
 
 echo "DeepSeek V4 Flash DSpark stopped."
