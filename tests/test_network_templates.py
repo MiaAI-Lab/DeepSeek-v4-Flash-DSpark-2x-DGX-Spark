@@ -112,6 +112,7 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn('timeout --signal=TERM --kill-after=10s', script)
         self.assertIn('label=com.plexiz.dspark.nccl-run=', script)
         self.assertIn('--label "com.plexiz.dspark.nccl-run=$NCCL_TEST_RUN_ID"', script)
+        self.assertIn("--network host --ipc host --pid host", script)
         self.assertIn("--volume /tmp:/tmp", script)
         self.assertIn("--volume /run:/run", script)
         self.assertIn('mpi_worker_host="${WORKER_HOST#*@}"', script)

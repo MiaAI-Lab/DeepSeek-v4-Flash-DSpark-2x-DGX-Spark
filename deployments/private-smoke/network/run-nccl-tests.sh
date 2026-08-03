@@ -61,7 +61,7 @@ env_args=()
 while IFS='=' read -r key _; do
   case "$key" in OMPI_*|PMIX_*|NCCL_*|CUDA_VISIBLE_DEVICES) env_args+=(--env "$key") ;; esac
 done < <(env)
-exec docker run --rm --network host --ipc host --gpus all \
+exec docker run --rm --network host --ipc host --pid host --gpus all \
   --label "com.plexiz.dspark.nccl-run=$NCCL_TEST_RUN_ID" \
   --volume /dev/infiniband:/dev/infiniband \
   --volume /tmp:/tmp --volume /run:/run \
