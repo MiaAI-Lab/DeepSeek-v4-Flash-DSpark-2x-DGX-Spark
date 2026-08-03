@@ -83,6 +83,14 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn("da0b547b1b9c6e3b1d4c15578087874522ae3761", dockerfile)
         self.assertIn("MPI=1", dockerfile)
 
+    def test_head_ssh_config_pins_the_private_worker_identity(self):
+        text = (NETWORK / "head-ssh-config").read_text()
+        for required in (
+            "Host 10.77.77.2", "User plexiz", "id_ed25519_dgx_cluster",
+            "IdentitiesOnly yes", "BatchMode yes", "StrictHostKeyChecking yes",
+        ):
+            self.assertIn(required, text)
+
     def test_nccl_launcher_stages_remote_wrapper_and_cleans_up(self):
         script = (NETWORK / "run-nccl-tests.sh").read_text()
         self.assertIn("scp -q", script)

@@ -1,0 +1,10 @@
+Host 10.77.77.2
+    HostName 10.77.77.2
+    User plexiz
+    IdentityFile ~/.ssh/id_ed25519_dgx_cluster
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    ConnectTimeout 10
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
