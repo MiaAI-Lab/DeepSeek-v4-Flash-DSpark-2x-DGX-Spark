@@ -13,11 +13,6 @@ test_binary="${1:-all_reduce_perf}"
 shift || true
 [ "$test_binary" = "all_reduce_perf" ] || { echo "Only all_reduce_perf is allowed." >&2; exit 2; }
 
-command -v mpirun >/dev/null 2>&1 || {
-  echo "mpirun is required on the control host for the two-node NCCL gate." >&2
-  exit 1
-}
-
 run_host() {
   local host="$1" command="$2"
   case "$host" in
@@ -34,13 +29,23 @@ done
 # coordination variables into an isolated host-networked test container.
 wrapper="$(mktemp "${TMPDIR:-/tmp}/dspark-nccl-wrapper.XXXXXX")"
 remote_wrapper="/tmp/dspark-nccl-wrapper-$$-$RANDOM"
+mpi_runtime="/tmp/dspark-openmpi-runtime-$$-$RANDOM"
 cleanup() {
   find "$wrapper" -maxdepth 0 -type f -delete 2>/dev/null || true
   for host in "$HEAD_HOST" "$WORKER_HOST"; do
     run_host "$host" "find '$remote_wrapper' -maxdepth 0 -type f -delete" 2>/dev/null || true
+    run_host "$host" "find '$mpi_runtime' -depth -delete" 2>/dev/null || true
   done
 }
 trap cleanup EXIT
+
+# Extract one identical OpenMPI runtime from the pinned image on both hosts.
+# This avoids mixing the host distribution's external PMIx with the image's
+# embedded PMIx when mpirun starts the containerized ranks.
+for host in "$HEAD_HOST" "$WORKER_HOST"; do
+  run_host "$host" "set -e; mkdir -p '$mpi_runtime'; cid=\$(docker create '$NCCL_TESTS_IMAGE'); trap 'docker rm -f \"\$cid\" >/dev/null 2>&1 || true' EXIT; docker cp \"\$cid:/opt/openmpi/.\" '$mpi_runtime'; docker rm \"\$cid\" >/dev/null; trap - EXIT; '$mpi_runtime/bin/mpirun' --version | grep -F '4.1.6' >/dev/null"
+done
+
 cat >"$wrapper" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -67,6 +72,7 @@ done
 
 mpi_head_host="${HEAD_HOST#*@}"
 mpi_worker_host="${WORKER_HOST#*@}"
-mpirun --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
+"$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
+  --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
   -x HCA -x IFACE -x NCCL_TESTS_IMAGE \
   "$remote_wrapper" "$@"
