@@ -223,6 +223,54 @@ capture_containers() {
       done
 }
 
+capture_workspace_evidence_if_present() {
+  local destination="$1" writer_observation="$2"
+  local container candidate
+  candidate="${destination}.candidate"
+  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq \
+    --filter label=hermes-agent=1 --filter label=hermes-task-id=default \
+    | while IFS= read -r container; do
+        [ -n "$container" ] || continue
+        rm -f -- "$candidate"
+        if DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" cp \
+          "$container:/workspace/output.json" "$candidate" 2>/dev/null; then
+          chmod 0600 "$candidate"
+          mv -f -- "$candidate" "$destination"
+          DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
+            --format '{{json .}}' "$container" >"$writer_observation"
+          chmod 0600 "$writer_observation"
+        fi
+      done
+  rm -f -- "$candidate"
+}
+
+merge_workspace_writer_observation() {
+  local observations="$1" writer_observation="$2"
+  python3 - "$observations" "$writer_observation" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+observations, writer_path = map(Path, sys.argv[1:])
+writer = json.loads(writer_path.read_text(encoding="utf-8"))
+writer_id = writer.get("Id")
+if not writer_id:
+    raise SystemExit("workspace writer observation lacks a container ID")
+writer["_dspark_workspace_writer"] = True
+rows = [
+    json.loads(line)
+    for line in observations.read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+merged = [row for row in rows if row.get("Id") != writer_id]
+merged.append(writer)
+observations.write_text(
+    "".join(json.dumps(row, sort_keys=True) + "\n" for row in merged),
+    encoding="utf-8",
+)
+PY
+}
+
 remove_hermes_containers() {
   DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
     | while IFS= read -r container; do
@@ -285,8 +333,10 @@ for row in rows:
     if labels.get("hermes-agent") != "1" or "hermes-profile" not in labels:
         raise SystemExit("terminal container lacks Hermes isolation labels")
     task_rows.setdefault(labels.get("hermes-task-id", ""), []).append(row)
-if len(task_rows.get("default", [])) != 1:
-    raise SystemExit("expected exactly one isolated default task container")
+default_ids = {row.get("Id") for row in task_rows.get("default", [])}
+writer_rows = [row for row in task_rows.get("default", []) if row.get("_dspark_workspace_writer")]
+if not (1 <= len(default_ids) <= 2) or len(writer_rows) != 1:
+    raise SystemExit("expected one isolated workspace writer and at most one rotated default container")
 if set(task_rows) - {"default", "prompt-backend-probe"}:
     raise SystemExit(f"unexpected Hermes task containers: {sorted(task_rows)}")
 PY
@@ -294,6 +344,7 @@ PY
 
 run_hermes() {
   local profile_home="$1" prompt_file="$2" usage_file="$3" response_file="$4" observations="$5"
+  local workspace_evidence="$6" writer_observation="$7"
   env -i \
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
     HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
@@ -307,6 +358,11 @@ run_hermes() {
   local hermes_pid=$!
   local status=0 elapsed=0 process_state=""
   while kill -0 "$hermes_pid" >/dev/null 2>&1; do
+    # Hermes may rotate a tmpfs-backed terminal container while it finalizes
+    # a turn. Recover the synthetic output while the writer is still alive;
+    # the captured inspect row proves the writer itself had the required
+    # network and mount confinement.
+    capture_workspace_evidence_if_present "$workspace_evidence" "$writer_observation"
     # An exited, unreaped child is still visible to kill -0 as a zombie.
     # Break so wait can collect its real exit status instead of timing out.
     process_state="$(ps -p "$hermes_pid" -o state= 2>/dev/null | tr -d '[:space:]')"
@@ -333,31 +389,11 @@ run_hermes() {
     wait "$hermes_pid" || status=$?
   fi
   [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
+  capture_workspace_evidence_if_present "$workspace_evidence" "$writer_observation"
+  [ -s "$workspace_evidence" ] && [ -s "$writer_observation" ] \
+    || { echo "Hermes did not leave recoverable terminal workspace evidence." >&2; return 1; }
   capture_containers "$observations"
-}
-
-copy_workspace_evidence() {
-  local observations="$1" destination="$2"
-  local container
-  container="$(python3 - "$observations" <<'PY'
-import json
-from pathlib import Path
-import sys
-ids = {
-    row["Id"]
-    for line in Path(sys.argv[1]).read_text().splitlines()
-    if line.strip()
-    for row in [json.loads(line)]
-    if (row.get("Config", {}).get("Labels") or {}).get("hermes-task-id") == "default"
-}
-if len(ids) != 1:
-    raise SystemExit(f"expected one persistent Hermes terminal container, found {len(ids)}")
-print(ids.pop())
-PY
-)"
-  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" cp \
-    "$container:/workspace/output.json" "$destination"
-  chmod 0600 "$destination"
+  merge_workspace_writer_observation "$observations" "$writer_observation"
 }
 
 write_prompt() {
@@ -473,8 +509,10 @@ default_rows = [
     row for row in container_rows
     if (row.get("Config", {}).get("Labels") or {}).get("hermes-task-id") == "default"
 ]
-if len({row["Id"] for row in default_rows}) != 1:
-    raise SystemExit("missing unique default-task Docker confinement evidence")
+default_ids = {row["Id"] for row in default_rows}
+writer_rows = [row for row in default_rows if row.get("_dspark_workspace_writer")]
+if not (1 <= len(default_ids) <= 2) or len(writer_rows) != 1:
+    raise SystemExit("missing unique workspace-writer confinement evidence")
 profile = Path(profile_home).resolve()
 legacy_cache_names = {
     "document_cache", "image_cache", "audio_cache", "video_cache",
@@ -683,15 +721,16 @@ for iteration in $(seq 1 "$REPEAT"); do
   prompt_file="$RUN_TMP/prompt-${iteration}.txt"
   observations="$RUN_TMP/docker-${iteration}.jsonl"
   workspace_evidence="$RUN_TMP/workspace-output-${iteration}.json"
+  writer_observation="$RUN_TMP/workspace-writer-${iteration}.json"
   result_file="$OUTPUT_DIR/${request_id}.json"
 
   "$CREATE_PROFILE" --home "$profile_home" --base-url "$BASE_URL" \
     --key-file "$KEY_FILE" --request-id "$request_id"
   assert_profile_inventory "$profile_home"
   write_prompt "$prompt_file"
-  run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations"
+  run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations" \
+    "$workspace_evidence" "$writer_observation"
   validate_container_observations "$observations" "$profile_home"
-  copy_workspace_evidence "$observations" "$workspace_evidence"
 
   # The process-scoped environment and profile must not leave a gateway,
   # cron scheduler, MCP registry, skills, or memory. The terminal container

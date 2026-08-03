@@ -91,6 +91,9 @@ class HermesIsolationTest(unittest.TestCase):
             "--provider", "custom:deepseek-smoke", "--model",
             "deepseek-v4-flash-0731-smoke", "--toolsets", "terminal",
             "--repeat", "docker.sock", "--network=none", '"$DOCKER_BIN" inspect',
+            "capture_workspace_evidence_if_present", "merge_workspace_writer_observation",
+            "workspace writer observation lacks a container ID",
+            "_dspark_workspace_writer", "at most one rotated default container",
         ):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):
