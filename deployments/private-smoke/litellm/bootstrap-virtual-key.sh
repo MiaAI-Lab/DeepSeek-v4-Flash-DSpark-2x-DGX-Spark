@@ -4,21 +4,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MASTER_KEY_FILE="${LITELLM_MASTER_KEY_FILE:?set LITELLM_MASTER_KEY_FILE}"
 OUTPUT="${LITELLM_VIRTUAL_KEY_FILE:?set LITELLM_VIRTUAL_KEY_FILE}"
-BASE_URL="${LITELLM_BASE_URL:-http://${HEAD_TAILSCALE_IP:?set HEAD_TAILSCALE_IP}:4001}"
+CONTAINER="dspark-private-litellm-litellm-1"
+CONTAINER_OUTPUT="/tmp/hermes-inference.key"
+completed=0
 
 [ -f "$MASTER_KEY_FILE" ] && [ ! -L "$MASTER_KEY_FILE" ] || exit 1
 [ ! -e "$OUTPUT" ] || { echo "Refusing to overwrite virtual key file: $OUTPUT" >&2; exit 1; }
+cleanup() {
+  docker exec "$CONTAINER" python3 -c \
+    'from pathlib import Path; Path("/tmp/hermes-inference.key").unlink(missing_ok=True)' \
+    >/dev/null 2>&1 || true
+  if [ "$completed" -ne 1 ] && [ -e "$OUTPUT" ]; then
+    unlink "$OUTPUT" || true
+  fi
+}
+trap cleanup EXIT
 # Exact scope sent to /key/generate: {"models": ["deepseek-v4-flash-0731-smoke"]}
-python3 - "$BASE_URL" "$MASTER_KEY_FILE" "$OUTPUT" <<'PY'
+docker exec -i "$CONTAINER" python3 - "$CONTAINER_OUTPUT" <<'PY'
 import json
 from pathlib import Path
 import sys
-import time
-import urllib.error
 import urllib.request
 
-base_url, master_path, output_path = sys.argv[1:]
-master = Path(master_path).read_text().strip()
+output_path = sys.argv[1]
+master = Path("/run/secrets/master-key").read_text().strip()
 payload = json.dumps({
     "models": ["deepseek-v4-flash-0731-smoke"],
     "key_alias": "hermes-deepseek-smoke",
@@ -26,7 +35,7 @@ payload = json.dumps({
     "metadata": {"scope": "synthetic-hermes-smoke"},
 }).encode()
 request = urllib.request.Request(
-    f"{base_url}/key/generate",
+    "http://127.0.0.1:4001/key/generate",
     data=payload,
     headers={"Authorization": f"Bearer {master}", "Content-Type": "application/json"},
 )
@@ -40,5 +49,9 @@ target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text(key + "\n")
 target.chmod(0o600)
 PY
+docker cp "$CONTAINER:$CONTAINER_OUTPUT" "$OUTPUT"
 chmod 0600 "$OUTPUT"
+completed=1
+cleanup
+trap - EXIT
 echo "Model-scoped virtual key written to $OUTPUT"

@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENV_FILE="${LITELLM_ENV_FILE:-$SCRIPT_DIR/.env}"
 COMPOSE=(docker compose -p dspark-private-litellm --env-file "$ENV_FILE" -f "$SCRIPT_DIR/docker-compose.yml")
 POLICY_INSTALLED=0
+VIRTUAL_KEY_CREATED=0
 PRISMA_CACHE_VOLUME="dspark-private-litellm-prisma-cache"
 LITELLM_IMAGE="ghcr.io/berriai/litellm-database@sha256:5fa5f99cd5576e359a0e50395ad14edbe922ef41c152f67c534e4f8b6238c5ec"
 PRISMA_CACHE_SENTINEL="binaries/5.4.2/ac9d7041ed77bcc8a8dbd2ab6616b39013829574/node_modules/prisma/build/index.js"
@@ -23,6 +24,9 @@ cleanup_failed_gateway() {
   docker volume rm "$PRISMA_CACHE_VOLUME" >/dev/null 2>&1 || true
   if [ "$POLICY_INSTALLED" -eq 1 ]; then
     "$SCRIPT_DIR/egress-policy.sh" --remove || true
+  fi
+  if [ "$VIRTUAL_KEY_CREATED" -eq 1 ] && [ -e "$LITELLM_VIRTUAL_KEY_FILE" ]; then
+    unlink "$LITELLM_VIRTUAL_KEY_FILE" || true
   fi
   echo "Private gateway deployment failed; the active gateway was not changed." >&2
   exit "$status"
@@ -66,6 +70,7 @@ for _ in $(seq 1 90); do
 done
 [ "${health:-}" = "healthy" ] || { echo "Private LiteLLM did not become healthy." >&2; false; }
 "$SCRIPT_DIR/bootstrap-virtual-key.sh"
+VIRTUAL_KEY_CREATED=1
 "$SCRIPT_DIR/smoke.sh" --all-interfaces
 trap - ERR
 echo "Private LiteLLM smoke gateway is running only on ${HEAD_TAILSCALE_IP}:4001."

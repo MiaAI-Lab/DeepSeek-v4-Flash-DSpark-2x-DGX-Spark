@@ -67,18 +67,42 @@ docker inspect dspark-private-litellm-litellm-1 -f '{{json .Mounts}}' | grep -F 
   false
 }
 
-python3 - "$HEAD_TAILSCALE_IP" "$LITELLM_VIRTUAL_KEY_FILE" "$public_catalog" <<'PY'
+python3 - "$HEAD_TAILSCALE_IP" "$public_catalog" <<'PY'
 import json
 from pathlib import Path
 import socket
 import subprocess
 import sys
+
+tail_ip, snapshot_path = sys.argv[1:]
+
+for denied_ip in {"127.0.0.1", *[item.split("/")[0] for item in subprocess.check_output(["hostname", "-I"], text=True).split()]} - {tail_ip}:
+    try:
+        socket.create_connection((denied_ip, 4001), timeout=1).close()
+    except OSError:
+        continue
+    raise AssertionError(f"port 4001 unexpectedly reachable on {denied_ip}")
+
+before = json.loads(Path(snapshot_path).read_text())
+current = []
+for name in ("plexiz-litellm", "plexiz-litellm-postgres", "plexiz-litellm-cloudflared"):
+    item = json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
+    labels = item.get("Config", {}).get("Labels") or {}
+    current.append({"name": name, "id": item["Id"], "image": item["Image"], "config_hash": labels.get("com.docker.compose.config-hash"), "running": item.get("State", {}).get("Running")})
+if before != {"public_catalog": current}:
+    raise AssertionError("active public gateway catalog/container identity changed")
+PY
+
+container_key="/tmp/smoke-virtual.key"
+docker cp "$LITELLM_VIRTUAL_KEY_FILE" "dspark-private-litellm-litellm-1:$container_key"
+docker exec -i dspark-private-litellm-litellm-1 python3 - <<'PY'
+import json
+from pathlib import Path
 import urllib.error
 import urllib.request
 
-tail_ip, key_path, snapshot_path = sys.argv[1:]
-base = f"http://{tail_ip}:4001"
-key = Path(key_path).read_text().strip()
+base = "http://127.0.0.1:4001"
+key = Path("/tmp/smoke-virtual.key").read_text().strip()
 
 def call(path, *, token=key, body=None, expected=(200,)):
     data = None if body is None else json.dumps(body).encode()
@@ -113,23 +137,9 @@ call("/v1/models", token="wrong-key", expected=(401, 403))
 call("/v1/chat/completions", body={"model": "wrong-model", "messages": [{"role": "user", "content": "x"}]}, expected=(400, 403, 404))
 for admin_path in ("/key/generate", "/config"):
     call(admin_path, body={} if admin_path == "/key/generate" else None, expected=(401, 403, 404, 405))
-
-for denied_ip in {"127.0.0.1", *[item.split("/")[0] for item in subprocess.check_output(["hostname", "-I"], text=True).split()]} - {tail_ip}:
-    try:
-        socket.create_connection((denied_ip, 4001), timeout=1).close()
-    except OSError:
-        continue
-    raise AssertionError(f"port 4001 unexpectedly reachable on {denied_ip}")
-
-before = json.loads(Path(snapshot_path).read_text())
-current = []
-for name in ("plexiz-litellm", "plexiz-litellm-postgres", "plexiz-litellm-cloudflared"):
-    item = json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
-    labels = item.get("Config", {}).get("Labels") or {}
-    current.append({"name": name, "id": item["Id"], "image": item["Image"], "config_hash": labels.get("com.docker.compose.config-hash"), "running": item.get("State", {}).get("Running")})
-if before != {"public_catalog": current}:
-    raise AssertionError("active public gateway catalog/container identity changed")
 PY
+docker exec dspark-private-litellm-litellm-1 python3 -c \
+  'from pathlib import Path; Path("/tmp/smoke-virtual.key").unlink(missing_ok=True)'
 
 docker exec -i dspark-private-litellm-litellm-1 python3 - <<'PY'
 import os

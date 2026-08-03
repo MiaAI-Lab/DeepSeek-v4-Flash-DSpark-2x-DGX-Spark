@@ -47,6 +47,8 @@ class PrivateGatewayTest(unittest.TestCase):
             self.assertIn(required, entrypoint)
         self.assertIn("/key/generate", bootstrap)
         self.assertIn('"models": ["deepseek-v4-flash-0731-smoke"]', bootstrap)
+        self.assertIn("http://127.0.0.1:4001/key/generate", bootstrap)
+        self.assertIn("docker cp", bootstrap)
         self.assertIn("chmod 0600", bootstrap)
 
     def test_deploy_populates_pinned_prisma_cache_without_network(self):
@@ -65,8 +67,14 @@ class PrivateGatewayTest(unittest.TestCase):
             "--all-interfaces", "/key/generate", "/config", "wrong-model",
             "HEAD_TAILSCALE_IP", "127.0.0.1", "4001", "public_catalog",
             "docker.sock", "1.1.1.1", "172.30.0.1", "4000", "no fallback",
+            "docker cp", "http://127.0.0.1:4001",
         ):
             self.assertIn(required, text)
+
+    def test_failed_deploy_removes_only_generated_virtual_key(self):
+        text = (GATEWAY / "deploy.sh").read_text()
+        self.assertIn("VIRTUAL_KEY_CREATED", text)
+        self.assertIn('unlink "$LITELLM_VIRTUAL_KEY_FILE"', text)
 
     def test_egress_policy_builds_rules_under_nounset(self):
         policy = (GATEWAY / "egress-policy.sh").read_text()
