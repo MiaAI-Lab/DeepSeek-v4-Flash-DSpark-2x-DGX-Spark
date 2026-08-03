@@ -118,6 +118,7 @@ class HermesIsolationTest(unittest.TestCase):
             "observation_candidate", "Configuration is immutable",
             "capture-proxy.py", "origin_response_ids", "start_capture_proxy",
             "captured inference count does not match Hermes usage",
+            "summarize_failed_hermes", "response_contract", "stderr_tail",
         ):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):

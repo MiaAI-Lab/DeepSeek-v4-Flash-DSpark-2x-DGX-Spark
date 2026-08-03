@@ -369,6 +369,47 @@ for index, message in enumerate(body.get("messages") or []):
 PY
 }
 
+summarize_failed_hermes() {
+  local status="$1" usage_file="$2" response_file="$3" stderr_file="$4" profile_home="$5"
+  python3 - "$status" "$usage_file" "$response_file" "$stderr_file" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+status, usage_path, response_path, stderr_path = sys.argv[1:]
+usage_file = Path(usage_path)
+usage = json.loads(usage_file.read_text()) if usage_file.exists() else {}
+response = Path(response_path).read_text(errors="replace") if Path(response_path).exists() else ""
+stderr = Path(stderr_path).read_text(errors="replace") if Path(stderr_path).exists() else ""
+
+def scrub(value):
+    value = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "<redacted-key>", value)
+    value = re.sub(r"(?i)bearer\s+\S+", "Bearer <redacted>", value)
+    value = re.sub(r"/Users/[^/\s]+", "<home>", value)
+    value = re.sub(r"\b100\.(?:6[4-9]|[789][0-9]|1[01][0-9]|12[0-7])(?:\.\d{1,3}){2}\b", "<tailnet-ip>", value)
+    return value
+
+safe_usage = {
+    key: usage.get(key)
+    for key in ("api_calls", "completed", "failed", "input_tokens", "output_tokens", "total_tokens")
+}
+failure = scrub(str(usage.get("failure") or ""))[-500:]
+stderr_tail = scrub(stderr)[-1000:]
+print(json.dumps({
+    "status": int(status),
+    "usage": safe_usage,
+    "failure": failure,
+    "response_chars": len(response),
+    "response_contract": bool(re.fullmatch(r'HERMES_SMOKE_RESULT=(\{.*\})\s*', response)),
+    "response_sha256": hashlib.sha256(response.encode()).hexdigest(),
+    "stderr_tail": stderr_tail,
+}, sort_keys=True), file=sys.stderr)
+PY
+  HERMES_DUMP_REQUESTS=1 summarize_request_diagnostics "$profile_home"
+}
+
 remove_hermes_containers() {
   DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
     | while IFS= read -r container; do
@@ -489,7 +530,11 @@ run_hermes() {
   if [ "$status" -eq 0 ]; then
     wait "$hermes_pid" || status=$?
   fi
-  [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
+  [ "$status" -eq 0 ] || {
+    echo "Hermes one-shot failed with status $status" >&2
+    summarize_failed_hermes "$status" "$usage_file" "$response_file" "$RUN_TMP/hermes-stderr.log" "$profile_home"
+    return "$status"
+  }
   capture_default_container_observation "$writer_observation"
   recover_tool_evidence "$profile_home" "$workspace_evidence" || {
     summarize_request_diagnostics "$profile_home"
