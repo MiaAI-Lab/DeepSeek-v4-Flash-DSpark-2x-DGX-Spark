@@ -93,6 +93,8 @@ class LifecycleContractTest(unittest.TestCase):
                 proxy_source = (SCRIPTS / "origin-auth-proxy.py").read_text()
                 self.assertIn("self.client_address[0]", proxy_source)
                 self.assertIn("allow_network", proxy_source)
+                self.assertIn("response.read1(65536)", proxy_source)
+                self.assertNotIn("response.read(65536)", proxy_source)
             finally:
                 proxy.terminate()
                 proxy.wait(timeout=5)

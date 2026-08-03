@@ -82,7 +82,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     self.send_header(key, value)
             self.send_header("Connection", "close")
             self.end_headers()
-            while chunk := response.read(65536):
+            # ``HTTPResponse.read(n)`` blocks until n bytes or EOF.  A normal
+            # 512-token SSE completion is smaller than 64 KiB, so using read()
+            # here silently buffered the entire stream and turned TTFT into
+            # total request time.  read1() performs at most one underlying read
+            # and lets each available SSE fragment cross the authenticated
+            # bridge immediately.
+            while chunk := response.read1(65536):
                 self.wfile.write(chunk)
                 self.wfile.flush()
             self.close_connection = True
