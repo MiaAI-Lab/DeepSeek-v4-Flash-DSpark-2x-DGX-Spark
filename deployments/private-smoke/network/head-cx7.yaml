@@ -1,0 +1,12 @@
+network:
+  version: 2
+  ethernets:
+    enp1s0f0np0:
+      addresses:
+        - 10.77.77.1/30
+      mtu: 9000
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
+      optional: true

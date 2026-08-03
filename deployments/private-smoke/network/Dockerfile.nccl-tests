@@ -1,0 +1,17 @@
+FROM ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8
+
+ARG NCCL_TESTS_COMMIT=da0b547b1b9c6e3b1d4c15578087874522ae3761
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       ca-certificates git make g++ libopenmpi-dev openmpi-bin \
+    && git init /opt/nccl-tests \
+    && git -C /opt/nccl-tests remote add origin https://github.com/NVIDIA/nccl-tests.git \
+    && git -C /opt/nccl-tests fetch --depth 1 origin "${NCCL_TESTS_COMMIT}" \
+    && git -C /opt/nccl-tests checkout --detach FETCH_HEAD \
+    && test "$(git -C /opt/nccl-tests rev-parse HEAD)" = "${NCCL_TESTS_COMMIT}" \
+    && make -C /opt/nccl-tests MPI=1 CUDA_HOME=/usr/local/cuda \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete
+
+ENTRYPOINT ["/opt/nccl-tests/build/all_reduce_perf"]
