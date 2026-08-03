@@ -57,6 +57,16 @@ class DeployGateTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_stream_path_diagnostic_pairs_identical_payloads_and_alternates_order(self):
+        text = (DEPLOY / "scripts/diagnose-stream-path.py").read_text()
+        for required in (
+            "--direct-base-url", "--proxy-base-url", "deepcopy(payload)",
+            "list(reversed(paths))", '"paired_payloads": True',
+            '"proxy_is_primary_bottleneck"', 'delta.get("reasoning")',
+            'delta.get("reasoning_content")',
+        ):
+            self.assertIn(required, text)
+
     def test_node_evidence_is_allowlisted_and_secret_free(self):
         schema = (DEPLOY / "schemas/node-evidence.schema.json").read_text()
         collector = (DEPLOY / "scripts/collect-node-evidence.sh").read_text()
