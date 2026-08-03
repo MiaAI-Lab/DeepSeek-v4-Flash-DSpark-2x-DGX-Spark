@@ -446,6 +446,10 @@ PY
     --base-url "http://127.0.0.1:${port}/v1" --key-file "$key_file" \
     --request-id "$probe_id" --request-timeout "$timeout" >/dev/null
 
+  # Profile verification may probe provider metadata (for example /api/show).
+  # The failure gate measures only the subsequent agent inference attempts.
+  : >"$count_file"
+
   local status=0
   env -i \
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
@@ -494,7 +498,7 @@ DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" version >/dev/null
 DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" pull "$TERMINAL_IMAGE" >/dev/null
 
 # Fail-closed provider behavior: the installed Hermes version must surface an
-# invalid request, a timeout, and malformed JSON after exactly one API attempt.
+# invalid request, a timeout, and malformed JSON after exactly one inference attempt.
 # fallback_providers is empty, so any recovery through another model is a gate failure.
 run_failure_probe invalid 5
 run_failure_probe malformed 5

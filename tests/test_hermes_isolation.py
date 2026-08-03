@@ -32,7 +32,7 @@ class HermesIsolationTest(unittest.TestCase):
             'backend: "docker"',
             'cwd: "/workspace"',
             'home_mode: "profile"',
-            "api_max_retries: 0",
+            "api_max_retries: 1",
             "container_persistent: true",
             "docker_persist_across_processes: true",
             "docker_volumes: []",
@@ -93,6 +93,14 @@ class HermesIsolationTest(unittest.TestCase):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):
             self.assertNotIn(forbidden, text)
+
+    def test_failure_probe_excludes_profile_verification_requests(self):
+        text = (HERMES / "run-suite.sh").read_text()
+        profile_creation = text.index('ALLOW_LOOPBACK_PROVIDER=1 "$CREATE_PROFILE"')
+        reset = text.index(': >"$count_file"', profile_creation)
+        invocation = text.index('"$HERMES_BIN" -z', reset)
+        self.assertLess(profile_creation, reset)
+        self.assertLess(reset, invocation)
 
     def test_suite_guards_shared_state_and_cleans_ephemeral_state(self):
         text = (HERMES / "run-suite.sh").read_text()

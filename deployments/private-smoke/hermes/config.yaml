@@ -21,7 +21,8 @@ providers:
 fallback_providers: []
 
 agent:
-  api_max_retries: 0
+  # Hermes counts total attempts here: 1 means one request and zero retries.
+  api_max_retries: 1
   max_turns: 24
   tool_use_enforcement: true
 
