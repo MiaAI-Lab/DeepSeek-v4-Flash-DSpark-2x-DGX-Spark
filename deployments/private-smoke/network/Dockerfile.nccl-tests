@@ -1,17 +1,36 @@
 FROM ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8
 
 ARG NCCL_TESTS_COMMIT=da0b547b1b9c6e3b1d4c15578087874522ae3761
+ARG OPENMPI_VERSION=4.1.6
+ARG OPENMPI_SHA256=44da277b8cdc234e71c62473305a09d63f4dcca292ca40335aab7c4bf0e6a566
+
+ENV MPI_HOME=/opt/openmpi \
+    PATH=/opt/openmpi/bin:${PATH} \
+    LD_LIBRARY_PATH=/opt/openmpi/lib:${LD_LIBRARY_PATH}
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       ca-certificates git make g++ libopenmpi-dev openmpi-bin \
+       build-essential ca-certificates curl git perl python3 \
+    && curl -fsSL -o /tmp/openmpi.tar.gz \
+       "https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-${OPENMPI_VERSION}.tar.gz" \
+    && echo "${OPENMPI_SHA256}  /tmp/openmpi.tar.gz" | sha256sum -c - \
+    && mkdir /tmp/openmpi-src \
+    && tar -xzf /tmp/openmpi.tar.gz -C /tmp/openmpi-src --strip-components=1 \
+    && cd /tmp/openmpi-src \
+    && ./configure --prefix="${MPI_HOME}" --disable-mpi-fortran --disable-oshmem \
+       --with-pmix=internal --with-libevent=internal --with-hwloc=internal \
+    && make -j"$(nproc)" \
+    && make install \
+    && "${MPI_HOME}/bin/mpirun" --version | grep -F "4.1.6" \
+    && cd / \
+    && rm -rf /tmp/openmpi-src /tmp/openmpi.tar.gz \
     && git init /opt/nccl-tests \
     && git -C /opt/nccl-tests remote add origin https://github.com/NVIDIA/nccl-tests.git \
     && git -C /opt/nccl-tests fetch --depth 1 origin "${NCCL_TESTS_COMMIT}" \
     && git -C /opt/nccl-tests checkout --detach FETCH_HEAD \
     && test "$(git -C /opt/nccl-tests rev-parse HEAD)" = "${NCCL_TESTS_COMMIT}" \
     && make -C /opt/nccl-tests MPI=1 \
-       MPI_HOME=/usr/lib/aarch64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda \
+       MPI_HOME="${MPI_HOME}" CUDA_HOME=/usr/local/cuda \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
 
