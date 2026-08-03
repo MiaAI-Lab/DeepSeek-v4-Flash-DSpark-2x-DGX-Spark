@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -9,6 +10,11 @@ SCHEMA = ROOT / "deployments/private-smoke/schemas/hermes-result.schema.json"
 
 
 class HermesIsolationTest(unittest.TestCase):
+    def test_shell_entrypoints_parse(self):
+        for script in sorted(HERMES.glob("*.sh")):
+            with self.subTest(script=script.name):
+                subprocess.run(["bash", "-n", str(script)], check=True)
+
     def test_config_has_one_provider_one_model_and_no_fallback(self):
         text = (HERMES / "config.yaml").read_text()
         self.assertEqual(text.count("deepseek-smoke:"), 1)

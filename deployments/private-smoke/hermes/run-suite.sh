@@ -341,6 +341,12 @@ result = {
         b"".join(Path(path).read_bytes() for path in (config_path, fixture_path, contract_path))
     ).hexdigest(),
 }
+target = Path(output_path)
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+target.chmod(0o600)
+PY
+}
 
 run_failure_probe() {
   local mode="$1" timeout="$2"
@@ -433,12 +439,6 @@ if int(status) == 0 and not usage.get("failed"):
     raise SystemExit(f"{mode} probe did not fail explicitly")
 if int(usage.get("api_calls") or 0) > 1:
     raise SystemExit(f"{mode} probe reported a retry")
-PY
-}
-target = Path(output_path)
-target.parent.mkdir(parents=True, exist_ok=True)
-target.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-target.chmod(0o600)
 PY
 }
 

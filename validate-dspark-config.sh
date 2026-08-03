@@ -39,7 +39,11 @@ if [ ! -f "$VLLM_ORIGIN_KEY_FILE" ] || [ -L "$VLLM_ORIGIN_KEY_FILE" ] || [ ! -s 
   echo "VLLM_ORIGIN_KEY_FILE must be a non-empty regular file, not a symlink." >&2
   exit 1
 fi
-key_mode="$(stat -f '%Lp' "$VLLM_ORIGIN_KEY_FILE" 2>/dev/null || stat -c '%a' "$VLLM_ORIGIN_KEY_FILE")"
+if stat -c '%a' "$VLLM_ORIGIN_KEY_FILE" >/dev/null 2>&1; then
+  key_mode="$(stat -c '%a' "$VLLM_ORIGIN_KEY_FILE")"
+else
+  key_mode="$(stat -f '%Lp' "$VLLM_ORIGIN_KEY_FILE")"
+fi
 if [ "$key_mode" != "600" ]; then
   echo "VLLM_ORIGIN_KEY_FILE must have mode 0600." >&2
   exit 1
