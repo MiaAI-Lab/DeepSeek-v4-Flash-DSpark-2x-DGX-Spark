@@ -109,6 +109,7 @@ class HermesIsolationTest(unittest.TestCase):
             "default", "hermesia", "active_profile", "LaunchAgents",
             "readlink", "stat", "sha256", "before", "after", "trap",
             "rm -rf --", "hermes-agent=1", "hermes-profile", "prompt-backend-probe",
+            "remove_hermes_containers",
         ):
             self.assertIn(required, text)
 

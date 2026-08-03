@@ -217,6 +217,13 @@ capture_containers() {
       done
 }
 
+remove_hermes_containers() {
+  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
+    | while IFS= read -r container; do
+        [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" rm -f -- "$container" >/dev/null
+      done
+}
+
 validate_container_observations() {
   local observations="$1" profile_home="$2"
   python3 - "$observations" "$profile_home" <<'PY'
@@ -571,6 +578,7 @@ if int(status) == 0 and not usage.get("failed"):
 if int(usage.get("api_calls") or 0) > 1:
     raise SystemExit(f"{mode} probe reported a retry")
 PY
+  remove_hermes_containers
 }
 
 snapshot_shared_state "$RUN_TMP/shared-before.json"
@@ -620,10 +628,7 @@ for iteration in $(seq 1 "$REPEAT"); do
   snapshot_shared_state "$RUN_TMP/shared-after-${iteration}.json"
   assemble_result "$request_id" "$usage_file" "$response_file" "$observations" "$workspace_evidence" \
     "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file" "$profile_home"
-  DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
-    | while IFS= read -r container; do
-        [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" rm -f -- "$container" >/dev/null
-      done
+  remove_hermes_containers
   [ -z "$(DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1)" ] \
     || { echo "Hermes terminal container cleanup was incomplete." >&2; exit 1; }
   echo "Hermes isolated suite accepted: $result_file"
