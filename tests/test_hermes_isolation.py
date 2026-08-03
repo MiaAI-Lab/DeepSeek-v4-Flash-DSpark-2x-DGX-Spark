@@ -28,7 +28,6 @@ class HermesIsolationTest(unittest.TestCase):
             "transport: chat_completions",
             "discover_models: false",
             "fallback_providers: []",
-            "streaming: false",
             "cli: [terminal]",
             'backend: "docker"',
             'cwd: "/workspace"',
@@ -86,7 +85,7 @@ class HermesIsolationTest(unittest.TestCase):
         text = (HERMES / "run-suite.sh").read_text()
         for required in (
             "DOCKER_HOST", "DOCKER_CONFIG", "colima", "dspark-hermes-smoke", "--runtime docker",
-            "HERMES_HOME", "--ignore-rules", "--usage-file", "-z",
+            "HERMES_HOME", "HERMES_STREAM_RETRIES=0", "--ignore-rules", "--usage-file", "-z",
             "--provider", "custom:deepseek-smoke", "--model",
             "deepseek-v4-flash-0731-smoke", "--toolsets", "terminal",
             "--repeat", "docker.sock", "--network=none", '"$DOCKER_BIN" inspect',

@@ -20,11 +20,6 @@ providers:
 
 fallback_providers: []
 
-display:
-  # Non-streaming makes the one-attempt failure contract observable: Hermes
-  # otherwise performs its own safe SSE reconnects before the agent retry loop.
-  streaming: false
-
 agent:
   # Hermes counts total attempts here: 1 means one request and zero retries.
   api_max_retries: 1

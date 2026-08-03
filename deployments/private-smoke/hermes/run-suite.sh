@@ -243,7 +243,8 @@ run_hermes() {
   env -i \
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
     HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
-    HERMES_TELEMETRY_DISABLED=1 DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+    HERMES_TELEMETRY_DISABLED=1 HERMES_STREAM_RETRIES=0 \
+    DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
     "$HERMES_BIN" -z "$(<"$prompt_file")" \
       --usage-file "$usage_file" \
       --provider "$PROVIDER" --model "$MODEL" --toolsets terminal --ignore-rules \
@@ -460,7 +461,8 @@ PY
   env -i \
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
     HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
-    HERMES_TELEMETRY_DISABLED=1 DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+    HERMES_TELEMETRY_DISABLED=1 HERMES_STREAM_RETRIES=0 \
+    DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
     "$HERMES_BIN" -z "Return the word impossible; do not call tools." \
       --usage-file "$usage_file" --provider "$PROVIDER" --model "$MODEL" \
       --toolsets terminal --ignore-rules >"$response_file" 2>"$stderr_file" || status=$?
