@@ -86,7 +86,8 @@ class HermesIsolationTest(unittest.TestCase):
         for required in (
             "DOCKER_HOST", "DOCKER_CONFIG", "colima", "dspark-hermes-smoke", "--runtime docker",
             "HERMES_HOME", "HERMES_STREAM_RETRIES=0", "--ignore-rules", "--usage-file", "-z",
-            "HERMES_SMOKE_PROCESS_TIMEOUT", "ps -p", "kill -TERM", "kill -KILL", "status=124",
+            "HERMES_SMOKE_PROCESS_TIMEOUT", "HERMES_SMOKE_DUMP_REQUESTS", "HERMES_DUMP_REQUESTS",
+            "ps -p", "kill -TERM", "kill -KILL", "status=124",
             "--provider", "custom:deepseek-smoke", "--model",
             "deepseek-v4-flash-0731-smoke", "--toolsets", "terminal",
             "--repeat", "docker.sock", "--network=none", '"$DOCKER_BIN" inspect',

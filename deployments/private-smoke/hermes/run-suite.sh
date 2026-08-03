@@ -17,6 +17,7 @@ COLIMA_BIN="${COLIMA_BIN:-colima}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 HERMES_BIN="${HERMES_BIN:-hermes}"
 HERMES_PROCESS_TIMEOUT="${HERMES_SMOKE_PROCESS_TIMEOUT:-600}"
+HERMES_DUMP_REQUESTS="${HERMES_SMOKE_DUMP_REQUESTS:-0}"
 RUN_TMP=""
 COLIMA_PROFILE=""
 DOCKER_HOST=""
@@ -40,6 +41,8 @@ done
 [[ "$REPEAT" =~ ^[1-9][0-9]*$ ]] && [ "$REPEAT" -le 10 ] || { echo "--repeat must be 1..10" >&2; exit 2; }
 [[ "$HERMES_PROCESS_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
   || { echo "HERMES_SMOKE_PROCESS_TIMEOUT must be a positive integer" >&2; exit 2; }
+[[ "$HERMES_DUMP_REQUESTS" =~ ^[01]$ ]] \
+  || { echo "HERMES_SMOKE_DUMP_REQUESTS must be 0 or 1" >&2; exit 2; }
 [ -n "$BASE_URL" ] && [ -n "$KEY_FILE" ] || { usage; exit 2; }
 
 command -v "$COLIMA_BIN" >/dev/null || { echo "Colima is required." >&2; exit 1; }
@@ -295,6 +298,7 @@ run_hermes() {
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
     HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
     HERMES_TELEMETRY_DISABLED=1 HERMES_STREAM_RETRIES=0 \
+    HERMES_DUMP_REQUESTS="$HERMES_DUMP_REQUESTS" \
     DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
     "$HERMES_BIN" -z "$(<"$prompt_file")" \
       --usage-file "$usage_file" \
