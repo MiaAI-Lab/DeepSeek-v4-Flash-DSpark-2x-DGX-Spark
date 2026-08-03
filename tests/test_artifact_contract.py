@@ -122,6 +122,7 @@ class ArtifactContractTest(unittest.TestCase):
         self.assertIn("HF_HUB_OFFLINE=1", offline_section)
         self.assertIn("rsync -a --partial --safe-links", script)
         self.assertIn("PREPARE_DOWNLOAD=0", script)
+        self.assertIn('${HF_DOWNLOAD_WORKERS:=4}', script)
         self.assertNotIn("rsync -a --delete", script)
 
     def test_manifest_is_deterministic_full_snapshot_and_detects_mismatch(self):

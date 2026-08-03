@@ -18,7 +18,7 @@ fi
 : "${DSPARK_MODEL:=deepseek-ai/DeepSeek-V4-Flash-DSpark}"
 : "${DSPARK_MODEL_REVISION:?DSPARK_MODEL_REVISION must pin the Hugging Face snapshot commit}"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
-: "${HF_DOWNLOAD_WORKERS:=1}"
+: "${HF_DOWNLOAD_WORKERS:=4}"
 : "${PREPARE_DOWNLOAD:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
 # Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
