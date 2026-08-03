@@ -165,31 +165,53 @@ assert report["accepted"] is False
 assert report["gates"]["fabric"] and report["gates"]["artifacts"] and report["gates"]["direct"]
 PY
 
-spend_count() {
-  docker exec dspark-private-litellm-postgres-1 psql -X -A -t \
-    -U litellm_smoke -d litellm_smoke -c 'SELECT count(*) FROM "LiteLLM_SpendLogs";' | tr -d '[:space:]'
+benchmark_spend_count() {
+  local benchmark_file="$1"
+  python3 - "$benchmark_file" <<'PY' | docker exec -i dspark-private-litellm-postgres-1 \
+    psql -X -A -t -U litellm_smoke -d litellm_smoke | tr -d '[:space:]'
+import json
+import re
+from pathlib import Path
+import sys
+
+benchmark = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+rows = [benchmark["cold"], *benchmark["discarded_warmups"], *benchmark["samples"]]
+request_ids = [row["client_request_id"] for row in rows]
+if len(request_ids) != 24 or len(set(request_ids)) != 24:
+    raise SystemExit("benchmark request IDs are missing or duplicated")
+if not all(re.fullmatch(r"dspark-(?:cold|warmup|measured)-[a-f0-9-]{36}", item) for item in request_ids):
+    raise SystemExit("benchmark request ID format is invalid")
+patterns = ",".join("'%" + item + "%'" for item in request_ids)
+print(
+    'SELECT count(*) FROM "LiteLLM_SpendLogs" AS t '
+    f'WHERE to_jsonb(t)::text LIKE ANY (ARRAY[{patterns}]::text[]);'
+)
+PY
 }
 
-wait_for_spend_delta() {
-  local before="$1" expected="$2" current=""
-  for _ in $(seq 1 60); do
-    current="$(spend_count)"
-    [ "$((current - before))" -eq "$expected" ] && { printf '%s\n' "$current"; return 0; }
+wait_for_benchmark_spend() {
+  local benchmark_file="$1" expected="$2" current=""
+  for _ in $(seq 1 120); do
+    current="$(benchmark_spend_count "$benchmark_file")"
+    [ "$current" -eq "$expected" ] && { printf '%s\n' "$current"; return 0; }
+    [ "$current" -lt "$expected" ] || {
+      echo "Benchmark request IDs produced duplicate spend rows: $current > $expected." >&2
+      return 1
+    }
     sleep 1
   done
-  echo "LiteLLM spend-log delta did not reach $expected." >&2
+  echo "LiteLLM spend rows for benchmark request IDs did not reach $expected (last=$current)." >&2
   return 1
 }
 
 FAILURE_STAGE="gateway"
 "$SCRIPT_DIR/litellm/smoke.sh" --all-interfaces
-gateway_count_before="$(spend_count)"
 python3 "$SCRIPT_DIR/scripts/benchmark.py" --layer litellm --warmups 3 --samples 20 --concurrency 1 \
   --base-url "http://${HEAD_TAILSCALE_IP}:4001/v1" --key-file "$LITELLM_VIRTUAL_KEY_FILE" \
   --model deepseek-v4-flash-0731-smoke \
   --origin-metrics-base-url "http://${VLLM_PROXY_HOST:-172.30.0.1}:${VLLM_PROXY_PORT:-8888}/v1" \
   --origin-key-file "$VLLM_ORIGIN_KEY_FILE" --output "$GATEWAY_BENCHMARK"
-wait_for_spend_delta "$gateway_count_before" 24 >/dev/null
+wait_for_benchmark_spend "$GATEWAY_BENCHMARK" 24 >/dev/null
 
 FAILURE_STAGE="hermes"
 mapfile -t hermes_files < <(find "$HERMES_RESULTS" -maxdepth 1 -type f -name 'hermes-smoke-*.json' -print | sort)

@@ -78,7 +78,10 @@ case "$MODE" in
     check_forward_rule REJECT
     ;;
   --remove)
-    [ -t 0 ] || { echo "egress policy removal requires an interactive terminal" >&2; exit 1; }
+    [ -t 0 ] || [ "${DSPARK_EGRESS_NONINTERACTIVE_REMOVE:-0}" = "1" ] || {
+      echo "egress policy removal requires an interactive terminal" >&2
+      exit 1
+    }
     while iptables_cmd -D INPUT -s 172.30.0.10 -d 172.30.0.1 -p tcp --dport 8888 -m comment --comment "$COMMENT" -j ACCEPT 2>/dev/null; do :; done
     while iptables_cmd -D INPUT -s 172.30.0.10 -d 172.30.0.1 -m comment --comment "$COMMENT" -j REJECT 2>/dev/null; do :; done
     while iptables_cmd -D INPUT -s 172.31.0.10 -d 172.31.0.1 -m comment --comment "$COMMENT" -j REJECT 2>/dev/null; do :; done

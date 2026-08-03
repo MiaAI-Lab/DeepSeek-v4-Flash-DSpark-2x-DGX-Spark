@@ -27,7 +27,7 @@ if "$DOCKER_BIN" volume inspect "$PRISMA_CACHE_VOLUME" >/dev/null 2>&1 &&
    ! "$DOCKER_BIN" volume rm "$PRISMA_CACHE_VOLUME" >/dev/null; then
   failed=1
 fi
-if ! "$EGRESS_POLICY_BIN" --remove; then
+if ! DSPARK_EGRESS_NONINTERACTIVE_REMOVE=1 "$EGRESS_POLICY_BIN" --remove; then
   failed=1
 fi
 

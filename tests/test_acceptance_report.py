@@ -66,6 +66,7 @@ class AcceptanceReportTest(unittest.TestCase):
             "cleanup_failed_acceptance", "cleanup-acceptance.sh",
             "public_gateway_unchanged", "purge_eligible", "sample_error_limit",
             "BatchMode=yes", "ConnectTimeout=3", "ConnectionAttempts=1",
+            "benchmark_spend_count", "wait_for_benchmark_spend", "client_request_id",
         ):
             self.assertIn(required, text)
         for forbidden in ("docker start urbanplan-qwen", "compose start qwen", "purge-qwen.sh --gate-report"):
@@ -120,6 +121,14 @@ class AcceptanceReportTest(unittest.TestCase):
                 self.assertIn(expected, calls)
             self.assertNotIn("qwen", calls.lower())
             self.assertIn("cleanup was incomplete", result.stderr)
+
+    def test_egress_cleanup_has_scoped_noninteractive_override(self):
+        policy = (DEPLOY / "litellm/egress-policy.sh").read_text()
+        cleanup = (DEPLOY / "scripts/cleanup-acceptance.sh").read_text()
+        self.assertIn("DSPARK_EGRESS_NONINTERACTIVE_REMOVE", policy)
+        self.assertIn("DSPARK_EGRESS_NONINTERACTIVE_REMOVE=1", cleanup)
+        install = policy.split("--install)", 1)[1].split("--check)", 1)[0]
+        self.assertNotIn("DSPARK_EGRESS_NONINTERACTIVE_REMOVE", install)
 
 
 if __name__ == "__main__":
