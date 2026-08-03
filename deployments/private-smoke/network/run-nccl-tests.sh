@@ -65,6 +65,8 @@ for host in "$HEAD_HOST" "$WORKER_HOST"; do
   esac
 done
 
-mpirun --mca btl_tcp_if_include "$IFACE" --host "$HEAD_HOST:1,$WORKER_HOST:1" -np 2 \
+mpi_head_host="${HEAD_HOST#*@}"
+mpi_worker_host="${WORKER_HOST#*@}"
+mpirun --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
   -x HCA -x IFACE -x NCCL_TESTS_IMAGE \
   "$remote_wrapper" "$@"

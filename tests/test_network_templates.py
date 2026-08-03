@@ -100,6 +100,8 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn("trap cleanup EXIT", script)
         self.assertIn("--volume /tmp:/tmp", script)
         self.assertIn("--volume /run:/run", script)
+        self.assertIn('mpi_worker_host="${WORKER_HOST#*@}"', script)
+        self.assertIn('$mpi_head_host:1,$mpi_worker_host:1', script)
         self.assertNotIn('  "$wrapper" "$@"', script)
 
 
