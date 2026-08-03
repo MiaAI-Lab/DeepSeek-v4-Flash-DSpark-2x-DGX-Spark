@@ -130,4 +130,10 @@ if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   scp "$SCRIPT_DIR/scripts/verify-artifact-manifest.py" "${WORKER_HOST}:${WORKER_DIR}/scripts/verify-artifact-manifest.py"
   scp "$WORKER_ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
   ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ./prepare-dspark-model-cache.sh"
+  worker_manifest_remote="$WORKER_DIR/artifacts/model-manifest.json"
+  worker_manifest_local="${WORKER_ARTIFACT_MANIFEST_FILE:-$SCRIPT_DIR/artifacts/model-manifest.worker.json}"
+  scp "${WORKER_HOST}:${worker_manifest_remote}" "$worker_manifest_local"
+  python3 "$SCRIPT_DIR/scripts/verify-artifact-manifest.py" compare \
+    --left "$manifest_file" --right "$worker_manifest_local"
+  echo "worker_artifact_manifest=$worker_manifest_local"
 fi

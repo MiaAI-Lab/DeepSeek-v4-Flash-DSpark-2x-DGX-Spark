@@ -18,8 +18,16 @@ command -v mpirun >/dev/null 2>&1 || {
   exit 1
 }
 
+run_host() {
+  local host="$1" command="$2"
+  case "$host" in
+    localhost|127.0.0.1) bash -lc "$command" ;;
+    *) ssh "$host" "$command" ;;
+  esac
+}
+
 for host in "$HEAD_HOST" "$WORKER_HOST"; do
-  ssh "$host" "docker image inspect '$NCCL_TESTS_IMAGE' >/dev/null"
+  run_host "$host" "docker image inspect '$NCCL_TESTS_IMAGE' >/dev/null"
 done
 
 # OpenMPI starts this wrapper once per host. The wrapper passes only the MPI
@@ -29,7 +37,7 @@ remote_wrapper="/tmp/dspark-nccl-wrapper-$$-$RANDOM"
 cleanup() {
   find "$wrapper" -maxdepth 0 -type f -delete 2>/dev/null || true
   for host in "$HEAD_HOST" "$WORKER_HOST"; do
-    ssh "$host" "find '$remote_wrapper' -maxdepth 0 -type f -delete" 2>/dev/null || true
+    run_host "$host" "find '$remote_wrapper' -maxdepth 0 -type f -delete" 2>/dev/null || true
   done
 }
 trap cleanup EXIT
@@ -51,8 +59,10 @@ EOF
 chmod 0700 "$wrapper"
 
 for host in "$HEAD_HOST" "$WORKER_HOST"; do
-  scp -q "$wrapper" "$host:$remote_wrapper"
-  ssh "$host" "chmod 0700 '$remote_wrapper'"
+  case "$host" in
+    localhost|127.0.0.1) install -m 0700 "$wrapper" "$remote_wrapper" ;;
+    *) scp -q "$wrapper" "$host:$remote_wrapper"; ssh "$host" "chmod 0700 '$remote_wrapper'" ;;
+  esac
 done
 
 mpirun --mca btl_tcp_if_include "$IFACE" --host "$HEAD_HOST:1,$WORKER_HOST:1" -np 2 \
