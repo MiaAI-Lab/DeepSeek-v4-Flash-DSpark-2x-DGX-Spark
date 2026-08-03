@@ -77,6 +77,11 @@ def stream_sample(base_url: str, key: str, model: str, request_id: str) -> dict:
         "max_tokens": 512,
         "temperature": 0.6,
         "top_p": 0.95,
+        # Measure token-by-token decode rather than the reasoning parser's
+        # buffered think block.  Reasoning semantics are gated separately by
+        # smoke-openai-compat.py; the official DSpark decode lane also uses
+        # thinking=false.
+        "chat_template_kwargs": {"thinking": False},
         "stream": True,
         "stream_options": {"include_usage": True},
     }
@@ -198,7 +203,13 @@ def main() -> int:
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "layer": args.layer,
-        "workload": {"max_tokens": 512, "temperature": 0.6, "top_p": 0.95, "concurrency": 1},
+        "workload": {
+            "max_tokens": 512,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "concurrency": 1,
+            "thinking": "off",
+        },
         "cold": cold,
         "discarded_warmups": warmups,
         "samples": samples,
