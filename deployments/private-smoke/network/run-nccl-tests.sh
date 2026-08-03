@@ -72,7 +72,8 @@ done
 
 mpi_head_host="${HEAD_HOST#*@}"
 mpi_worker_host="${WORKER_HOST#*@}"
-"$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
+LD_LIBRARY_PATH="$mpi_runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
   --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
   -x HCA -x IFACE -x NCCL_TESTS_IMAGE \
   "$remote_wrapper" "$@"
