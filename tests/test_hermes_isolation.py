@@ -28,6 +28,7 @@ class HermesIsolationTest(unittest.TestCase):
             "transport: chat_completions",
             "discover_models: false",
             "fallback_providers: []",
+            "streaming: false",
             "cli: [terminal]",
             'backend: "docker"',
             'cwd: "/workspace"',
