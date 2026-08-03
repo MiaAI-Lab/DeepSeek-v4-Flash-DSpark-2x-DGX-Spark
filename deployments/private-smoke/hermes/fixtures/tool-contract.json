@@ -2,7 +2,13 @@
   "schema_version": 1,
   "allowed_toolsets": ["terminal"],
   "network": "none",
-  "host_mounts": [],
+  "host_mounts": [
+    {
+      "source_scope": "isolated_profile_cache",
+      "destination_prefix": "/root/.hermes/cache/",
+      "read_only": true
+    }
+  ],
   "forwarded_environment": [],
   "fallback_models": [],
   "negative_checks": {

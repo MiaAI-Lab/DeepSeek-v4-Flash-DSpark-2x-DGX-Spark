@@ -119,7 +119,11 @@ class HermesIsolationTest(unittest.TestCase):
         self.assertEqual({row["scope"] for row in transform["rows"]}, {"personal", "plexiz"})
         self.assertEqual(contract["allowed_toolsets"], ["terminal"])
         self.assertEqual(contract["network"], "none")
-        self.assertEqual(contract["host_mounts"], [])
+        self.assertEqual(contract["host_mounts"], [{
+            "source_scope": "isolated_profile_cache",
+            "destination_prefix": "/root/.hermes/cache/",
+            "read_only": True,
+        }])
         self.assertEqual(contract["fallback_models"], [])
         for surface in ("skills", "mcp", "memory", "gateway", "host_paths", "network"):
             self.assertIn(surface, contract["negative_checks"])

@@ -213,14 +213,16 @@ capture_containers() {
 }
 
 validate_container_observations() {
-  local observations="$1"
-  python3 - "$observations" <<'PY'
+  local observations="$1" profile_home="$2"
+  python3 - "$observations" "$profile_home" <<'PY'
 import json
 from pathlib import Path
 import sys
 
+observations, profile_home = sys.argv[1:]
+profile_cache = (Path(profile_home) / "cache").resolve()
 rows = []
-for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+for line in Path(observations).read_text(encoding="utf-8").splitlines():
     try:
         rows.append(json.loads(line))
     except json.JSONDecodeError:
@@ -231,8 +233,15 @@ task_rows = {}
 for row in rows:
     if row.get("HostConfig", {}).get("NetworkMode") != "none":
         raise SystemExit("terminal container did not use --network=none")
-    if row.get("Mounts"):
-        raise SystemExit("terminal container unexpectedly had host or volume mounts")
+    for mount in row.get("Mounts") or []:
+        source = Path(str(mount.get("Source", ""))).resolve()
+        destination = str(mount.get("Destination", ""))
+        try:
+            source.relative_to(profile_cache)
+        except ValueError:
+            raise SystemExit(f"terminal container mount escaped isolated cache: {source}")
+        if not destination.startswith("/root/.hermes/cache/") or mount.get("RW") is not False:
+            raise SystemExit(f"unsafe isolated cache mount: {destination}")
     labels = row.get("Config", {}).get("Labels") or {}
     if labels.get("hermes-agent") != "1" or "hermes-profile" not in labels:
         raise SystemExit("terminal container lacks Hermes isolation labels")
@@ -317,14 +326,15 @@ PY
 
 assemble_result() {
   local request_id="$1" usage="$2" response="$3" observations="$4" workspace_evidence="$5" before="$6" after="$7" output="$8"
-  python3 - "$request_id" "$usage" "$response" "$observations" "$workspace_evidence" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" <<'PY'
+  local profile_home="$9"
+  python3 - "$request_id" "$usage" "$response" "$observations" "$workspace_evidence" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" "$profile_home" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import re
 import sys
 
-request_id, usage_path, response_path, observations, workspace_path, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path = sys.argv[1:]
+request_id, usage_path, response_path, observations, workspace_path, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path, profile_home = sys.argv[1:]
 usage = json.loads(Path(usage_path).read_text(encoding="utf-8"))
 response = Path(response_path).read_text(encoding="utf-8").strip()
 match = re.fullmatch(r'HERMES_SMOKE_RESULT=(\{.*\})', response)
@@ -361,7 +371,13 @@ default_rows = [
 if len({row["Id"] for row in default_rows}) != 1:
     raise SystemExit("missing unique default-task Docker confinement evidence")
 container_isolated = all(
-    row.get("HostConfig", {}).get("NetworkMode") == "none" and not row.get("Mounts")
+    row.get("HostConfig", {}).get("NetworkMode") == "none"
+    and all(
+        Path(str(mount.get("Source", ""))).resolve().is_relative_to((Path(profile_home) / "cache").resolve())
+        and str(mount.get("Destination", "")).startswith("/root/.hermes/cache/")
+        and mount.get("RW") is False
+        for mount in row.get("Mounts") or []
+    )
     for row in default_rows
 )
 if not container_isolated:
@@ -551,7 +567,7 @@ for iteration in $(seq 1 "$REPEAT"); do
   assert_profile_inventory "$profile_home"
   write_prompt "$prompt_file"
   run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations"
-  validate_container_observations "$observations"
+  validate_container_observations "$observations" "$profile_home"
   copy_workspace_evidence "$observations" "$workspace_evidence"
 
   # The process-scoped environment and profile must not leave a gateway,
@@ -560,7 +576,7 @@ for iteration in $(seq 1 "$REPEAT"); do
   assert_profile_inventory "$profile_home"
   snapshot_shared_state "$RUN_TMP/shared-after-${iteration}.json"
   assemble_result "$request_id" "$usage_file" "$response_file" "$observations" "$workspace_evidence" \
-    "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file"
+    "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file" "$profile_home"
   DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 \
     | while IFS= read -r container; do
         [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" rm -f -- "$container" >/dev/null
