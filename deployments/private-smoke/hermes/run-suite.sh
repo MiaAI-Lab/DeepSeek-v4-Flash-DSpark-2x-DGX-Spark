@@ -385,6 +385,7 @@ run_failure_probe() {
   local profile_home="$RUN_TMP/profile-${mode}"
   local usage_file="$RUN_TMP/usage-${mode}.json"
   local response_file="$RUN_TMP/response-${mode}.txt"
+  local stderr_file="$RUN_TMP/stderr-${mode}.txt"
 
   printf 'sk-%s\n' 'synthetic-failure-probe-only' >"$key_file"
   chmod 0600 "$key_file"
@@ -403,7 +404,12 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         self.rfile.read(length)
         with Path(count_path).open("a", encoding="utf-8") as handle:
-            handle.write("1\n")
+            handle.write(json.dumps({
+                "method": "POST",
+                "path": self.path,
+                "request_id": self.headers.get("X-Request-ID", ""),
+                "user_agent": self.headers.get("User-Agent", ""),
+            }, sort_keys=True) + "\n")
         if mode == "timeout":
             time.sleep(4)
             body = b'{}'
@@ -447,20 +453,25 @@ PY
     HERMES_TELEMETRY_DISABLED=1 DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
     "$HERMES_BIN" -z "Return the word impossible; do not call tools." \
       --usage-file "$usage_file" --provider "$PROVIDER" --model "$MODEL" \
-      --toolsets terminal --ignore-rules >"$response_file" 2>/dev/null || status=$?
+      --toolsets terminal --ignore-rules >"$response_file" 2>"$stderr_file" || status=$?
   kill "$STUB_PID" >/dev/null 2>&1 || true
   wait "$STUB_PID" 2>/dev/null || true
   STUB_PID=""
 
-  python3 - "$mode" "$status" "$count_file" "$usage_file" <<'PY'
+  python3 - "$mode" "$status" "$count_file" "$usage_file" "$stderr_file" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-mode, status, count_path, usage_path = sys.argv[1:]
-attempts = len([line for line in Path(count_path).read_text().splitlines() if line.strip()])
+mode, status, count_path, usage_path, stderr_path = sys.argv[1:]
+request_lines = [line for line in Path(count_path).read_text().splitlines() if line.strip()]
+attempts = len(request_lines)
 if attempts != 1:
-    raise SystemExit(f"{mode} probe made {attempts} attempts; expected exactly one")
+    stderr_tail = Path(stderr_path).read_text(errors="replace")[-4000:]
+    raise SystemExit(
+        f"{mode} probe made {attempts} attempts; expected exactly one; "
+        f"requests={request_lines!r}; stderr_tail={stderr_tail!r}"
+    )
 usage_file = Path(usage_path)
 usage = json.loads(usage_file.read_text()) if usage_file.exists() else {}
 if int(status) == 0 and not usage.get("failed"):
