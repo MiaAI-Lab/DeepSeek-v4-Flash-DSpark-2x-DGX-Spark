@@ -66,7 +66,7 @@ sudo cp -a /etc/netplan/. "$check_root/etc/netplan/"
 sudo install -m 0600 "$TEMPLATE" "$check_root$TARGET"
 sudo netplan generate --root-dir "$check_root"
 merged="$(sudo netplan get --root-dir "$check_root" "ethernets.$IFACE")"
-for expected in "$ADDRESS" "mtu: 9000" "dhcp4: false" "dhcp6: false" "accept-ra: false" "link-local: []"; do
+for expected in "$ADDRESS" "mtu: 9000" "dhcp4: false" "dhcp6: false" "accept-ra: false" "link-local: []" 'connection.autoconnect: "true"'; do
   printf '%s\n' "$merged" | grep -F "$expected" >/dev/null || {
     echo "Merged netplan did not preserve required setting: $expected" >&2
     exit 1
@@ -108,6 +108,10 @@ sudo systemd-run --unit "$rollback_unit" --on-active=120s /bin/sh -c "$rollback"
 echo "Timed rollback armed as $rollback_unit for 120 seconds."
 sudo nmcli connection reload
 sudo nmcli connection up "$CONNECTION" ifname "$IFACE"
+test "$(nmcli -g connection.autoconnect connection show "$CONNECTION")" = "yes" || {
+  echo "CX-7 connection is not configured to autoconnect; rollback remains armed." >&2
+  exit 1
+}
 ip -4 address show dev "$IFACE" | grep -F "$ADDRESS" >/dev/null
 test "$(ip -4 route show default)" = "$default_before" || {
   echo "The IPv4 default route changed; rollback remains armed." >&2

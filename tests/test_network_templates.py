@@ -25,6 +25,8 @@ class NetworkTemplatesTest(unittest.TestCase):
                 self.assertIn("accept-ra: false", text)
                 self.assertIn("link-local: []", text)
                 self.assertIn("optional: true", text)
+                self.assertIn("renderer: NetworkManager", text)
+                self.assertIn('connection.autoconnect: "true"', text)
                 for forbidden in ("gateway4:", "gateway6:", "nameservers:", "routes:", "never-default"):
                     self.assertNotIn(forbidden, text)
 
@@ -37,6 +39,7 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn("Merged CX-7 configuration unexpectedly adds", script)
         self.assertIn('nmcli connection up "$CONNECTION" ifname "$IFACE"', script)
         self.assertIn("nmcli device disconnect", script)
+        self.assertIn("connection.autoconnect", script)
         self.assertNotIn("netplan try", script)
         self.assertNotIn("netplan apply", script)
         self.assertIn("systemd-run", script)

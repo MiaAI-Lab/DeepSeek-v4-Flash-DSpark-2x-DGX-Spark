@@ -2,6 +2,7 @@ network:
   version: 2
   ethernets:
     enp1s0f0np0:
+      renderer: NetworkManager
       addresses:
         - 10.77.77.1/30
       mtu: 9000
@@ -10,3 +11,6 @@ network:
       accept-ra: false
       link-local: []
       optional: true
+      networkmanager:
+        passthrough:
+          connection.autoconnect: "true"
