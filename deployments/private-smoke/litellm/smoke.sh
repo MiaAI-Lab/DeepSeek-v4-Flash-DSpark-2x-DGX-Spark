@@ -93,16 +93,14 @@ if before != {"public_catalog": current}:
     raise AssertionError("active public gateway catalog/container identity changed")
 PY
 
-container_key="/tmp/smoke-virtual.key"
-docker cp "$LITELLM_VIRTUAL_KEY_FILE" "dspark-private-litellm-litellm-1:$container_key"
-docker exec -i dspark-private-litellm-litellm-1 python3 - <<'PY'
+docker exec -i dspark-private-litellm-litellm-1 python3 -c '
 import json
-from pathlib import Path
+import sys
 import urllib.error
 import urllib.request
 
 base = "http://127.0.0.1:4001"
-key = Path("/tmp/smoke-virtual.key").read_text().strip()
+key = sys.stdin.read().strip()
 
 def call(path, *, token=key, body=None, expected=(200,)):
     data = None if body is None else json.dumps(body).encode()
@@ -137,9 +135,7 @@ call("/v1/models", token="wrong-key", expected=(401, 403))
 call("/v1/chat/completions", body={"model": "wrong-model", "messages": [{"role": "user", "content": "x"}]}, expected=(400, 403, 404))
 for admin_path in ("/key/generate", "/config"):
     call(admin_path, body={} if admin_path == "/key/generate" else None, expected=(401, 403, 404, 405))
-PY
-docker exec dspark-private-litellm-litellm-1 python3 -c \
-  'from pathlib import Path; Path("/tmp/smoke-virtual.key").unlink(missing_ok=True)'
+' <"$LITELLM_VIRTUAL_KEY_FILE"
 
 docker exec -i dspark-private-litellm-litellm-1 python3 - <<'PY'
 import os

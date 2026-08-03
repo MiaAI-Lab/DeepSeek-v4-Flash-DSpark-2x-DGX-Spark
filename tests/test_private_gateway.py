@@ -49,7 +49,7 @@ class PrivateGatewayTest(unittest.TestCase):
         self.assertIn("/key/generate", bootstrap)
         self.assertIn('"models": ["deepseek-v4-flash-0731-smoke"]', bootstrap)
         self.assertIn("http://127.0.0.1:4001/key/generate", bootstrap)
-        self.assertIn("docker cp", bootstrap)
+        self.assertIn("umask 077", bootstrap)
         self.assertIn("chmod 0600", bootstrap)
 
     def test_deploy_populates_pinned_prisma_cache_without_network(self):
@@ -68,7 +68,7 @@ class PrivateGatewayTest(unittest.TestCase):
             "--all-interfaces", "/key/generate", "/config", "wrong-model",
             "HEAD_TAILSCALE_IP", "127.0.0.1", "4001", "public_catalog",
             "docker.sock", "1.1.1.1", "172.30.0.1", "4000", "no fallback",
-            "docker cp", "http://127.0.0.1:4001",
+            "sys.stdin.read", "http://127.0.0.1:4001",
         ):
             self.assertIn(required, text)
 
