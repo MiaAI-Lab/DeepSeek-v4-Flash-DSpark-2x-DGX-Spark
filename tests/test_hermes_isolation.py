@@ -89,6 +89,7 @@ class HermesIsolationTest(unittest.TestCase):
         self.assertTrue({
             "schema_version", "run_id", "accepted", "provider", "model",
             "tasks", "negative_checks", "shared_state", "usage", "request_ids",
+            "suite_pin_sha256",
         }.issubset(required))
         self.assertFalse(schema["additionalProperties"])
 

@@ -6,23 +6,50 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MANIFEST="${QWEN_MANIFEST:-$ROOT_DIR/artifacts/qwen-manifest.json}"
 GATE_REPORT=""
 QUARANTINE_ROOT="${QWEN_QUARANTINE_ROOT:-/home/plexiz/.dspark-qwen-quarantine}"
+VERIFY_ONLY=0
 
-usage() { echo "Usage: purge-qwen.sh --gate-report FILE [--manifest FILE]"; }
+usage() { echo "Usage: purge-qwen.sh --gate-report FILE [--manifest FILE] | --verify-only"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --manifest) shift; MANIFEST="${1:-}" ;;
     --gate-report) shift; GATE_REPORT="${1:-}" ;;
+    --verify-only) VERIFY_ONLY=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
 
+if [ "$VERIFY_ONLY" -eq 1 ]; then
+  # Static, nondestructive operator check. If explicit evidence paths are
+  # supplied, also validate their hash binding and freshness.
+  grep -F 'PURGE QWEN' "$0" >/dev/null
+  grep -F 'DELETE QWEN' "$0" >/dev/null
+  grep -F 'find "$quarantine" -depth -delete' "$0" >/dev/null
+  if [ -n "$GATE_REPORT" ]; then
+    [ -f "$MANIFEST" ] && [ -n "$GATE_REPORT" ] && [ -f "$GATE_REPORT" ] || {
+      echo "Live verify-only requires both manifest and gate report." >&2
+      exit 1
+    }
+    python3 "$SCRIPT_DIR/sanitize-evidence.py" \
+      --schema "$ROOT_DIR/deployments/private-smoke/schemas/acceptance.schema.json" \
+      --input "$GATE_REPORT" >/dev/null
+    python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-report \
+      --manifest "$MANIFEST" --report "$GATE_REPORT" --max-age-hours 24 \
+      --required-gate fabric --required-gate artifacts --required-gate direct --required-gate hermes
+  fi
+  echo "Qwen purge contract is present; no target was changed."
+  exit 0
+fi
+
 [ -f "$MANIFEST" ] || { echo "Missing manifest." >&2; exit 1; }
 [ -n "$GATE_REPORT" ] && [ -f "$GATE_REPORT" ] || { echo "Missing accepted gate report." >&2; exit 1; }
 # The helper compares manifest_sha256, accepted, run_id, realpath, st_dev,
 # st_ino, owner, type, and symlink state immediately before quarantine.
 python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-live --manifest "$MANIFEST" --max-age-hours 24
+python3 "$SCRIPT_DIR/sanitize-evidence.py" \
+  --schema "$ROOT_DIR/deployments/private-smoke/schemas/acceptance.schema.json" \
+  --input "$GATE_REPORT" >/dev/null
 python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-report \
   --manifest "$MANIFEST" --report "$GATE_REPORT" --max-age-hours 24 \
   --required-gate fabric --required-gate artifacts --required-gate direct --required-gate hermes

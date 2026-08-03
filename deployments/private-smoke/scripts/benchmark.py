@@ -146,6 +146,8 @@ def main() -> int:
     parser.add_argument("--layer", choices=("direct", "litellm", "hermes"), required=True)
     parser.add_argument("--base-url", default="http://172.30.0.1:8888/v1")
     parser.add_argument("--key-file", type=Path, required=True)
+    parser.add_argument("--origin-metrics-base-url")
+    parser.add_argument("--origin-key-file", type=Path)
     parser.add_argument("--model", default="deepseek-v4-flash-0731")
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--samples", type=int, default=20)
@@ -154,8 +156,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.concurrency != 1 or args.samples < 20 or args.warmups < 3:
         raise SystemExit("acceptance requires concurrency=1, at least 3 warmups, and 20 samples")
+    if bool(args.origin_metrics_base_url) != bool(args.origin_key_file):
+        raise SystemExit("--origin-metrics-base-url and --origin-key-file must be used together")
     key = args.key_file.read_text().strip()
-    before = success_counter(args.base_url, key)
+    metrics_base_url = args.origin_metrics_base_url or args.base_url
+    metrics_key = args.origin_key_file.read_text().strip() if args.origin_key_file else key
+    before = success_counter(metrics_base_url, metrics_key)
     cold = stream_sample(args.base_url, key, args.model, f"dspark-cold-{uuid.uuid4()}")
     warmups = [
         stream_sample(args.base_url, key, args.model, f"dspark-warmup-{uuid.uuid4()}")
@@ -165,7 +171,7 @@ def main() -> int:
         stream_sample(args.base_url, key, args.model, f"dspark-measured-{uuid.uuid4()}")
         for _ in range(args.samples)
     ]
-    after = success_counter(args.base_url, key)
+    after = success_counter(metrics_base_url, metrics_key)
     expected_completions = 1 + args.warmups + args.samples
     metric_delta = after - before
     if metric_delta != expected_completions:
@@ -203,7 +209,7 @@ def main() -> int:
     else:
         print(rendered, end="")
     if not accepted:
-        raise SystemExit("direct performance threshold failed")
+        raise SystemExit(f"{args.layer} performance threshold failed")
     return 0
 
 

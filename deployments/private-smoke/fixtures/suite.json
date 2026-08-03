@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "fixture_id": "dual-dgx-deepseek-v4-flash-0731-smoke-v1",
+  "model": "deepseek-v4-flash-0731-smoke",
+  "performance": {
+    "cold_runs": 1,
+    "warmups": 3,
+    "samples": 20,
+    "concurrency": 1,
+    "prompt_tokens_min": 180,
+    "prompt_tokens_max": 360,
+    "max_tokens": 512,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "median_decode_tokens_per_second_min": 50.0,
+    "p95_ttft_seconds_max": 5.0
+  },
+  "soak": {
+    "duration_seconds": 1800,
+    "sample_interval_seconds": 5,
+    "concurrency": 1,
+    "max_tokens": 128,
+    "max_idle_gap_seconds": 1.0,
+    "min_mem_available_gib": 4.0,
+    "max_requests_waiting": 0,
+    "max_requests_running": 1,
+    "max_rank_restarts": 0,
+    "max_preemptions": 0
+  },
+  "synthetic_expenses": {
+    "dataset": "synthetic-expenses",
+    "expected_rows": 4,
+    "expected_personal_centavos": 97150,
+    "expected_plexiz_centavos": 276875,
+    "expected_grand_total_centavos": 374025
+  }
+}

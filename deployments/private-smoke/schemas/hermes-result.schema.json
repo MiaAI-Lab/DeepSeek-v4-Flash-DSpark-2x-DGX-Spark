@@ -14,7 +14,8 @@
     "negative_checks",
     "shared_state",
     "usage",
-    "request_ids"
+    "request_ids",
+    "suite_pin_sha256"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -74,6 +75,7 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^hermes-smoke-[a-f0-9-]{8,64}$"}
-    }
+    },
+    "suite_pin_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
   }
 }

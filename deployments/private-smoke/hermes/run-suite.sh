@@ -289,13 +289,14 @@ PY
 
 assemble_result() {
   local request_id="$1" usage="$2" response="$3" observations="$4" before="$5" after="$6" output="$7"
-  python3 - "$request_id" "$usage" "$response" "$observations" "$before" "$after" "$output" "$MODEL" "$PROVIDER" <<'PY'
+  python3 - "$request_id" "$usage" "$response" "$observations" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" <<'PY'
+import hashlib
 import json
 from pathlib import Path
 import re
 import sys
 
-request_id, usage_path, response_path, observations, before_path, after_path, output_path, model, provider = sys.argv[1:]
+request_id, usage_path, response_path, observations, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path = sys.argv[1:]
 usage = json.loads(Path(usage_path).read_text(encoding="utf-8"))
 response = Path(response_path).read_text(encoding="utf-8").strip()
 match = re.fullmatch(r'HERMES_SMOKE_RESULT=(\{.*\})', response)
@@ -336,6 +337,9 @@ result = {
     "shared_state": {"before_sha256": before, "after_sha256": after, "unchanged": True},
     "usage": usage,
     "request_ids": [request_id],
+    "suite_pin_sha256": hashlib.sha256(
+        b"".join(Path(path).read_bytes() for path in (config_path, fixture_path, contract_path))
+    ).hexdigest(),
 }
 
 run_failure_probe() {
