@@ -102,8 +102,18 @@ def stream_sample(base_url: str, key: str, model: str, request_id: str) -> dict:
             if chunk.get("usage"):
                 usage_blocks.append(chunk["usage"])
             for choice in chunk.get("choices") or []:
-                content = (choice.get("delta") or {}).get("content")
-                if content:
+                delta = choice.get("delta") or {}
+                # DeepSeek V4 emits thinking tokens before final content.  The
+                # pinned runtime names that stream ``reasoning`` while other
+                # OpenAI-compatible paths use ``reasoning_content``.  TTFT and
+                # decode timing cover every generated token, not only the final
+                # answer, so any of the three fields advances the clock.
+                generated = (
+                    delta.get("reasoning")
+                    or delta.get("reasoning_content")
+                    or delta.get("content")
+                )
+                if generated:
                     now = time.monotonic()
                     first_token = now if first_token is None else first_token
                     last_token = now

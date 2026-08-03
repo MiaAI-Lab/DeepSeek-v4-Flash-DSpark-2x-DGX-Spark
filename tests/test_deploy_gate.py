@@ -50,7 +50,8 @@ class DeployGateTest(unittest.TestCase):
             "temperature", "0.6", "top_p", "0.95", "stream_options",
             "completion_tokens", "first_token", "last_token", "finish_reason",
             "median", "p95", "50.0", "5.0", "X-Request-Id",
-            "request_success_total", "metric_delta",
+            "request_success_total", "metric_delta", 'delta.get("reasoning")',
+            'delta.get("reasoning_content")',
         ):
             self.assertIn(required, text)
 
