@@ -19,6 +19,7 @@ fi
 : "${DSPARK_MODEL_REVISION:?DSPARK_MODEL_REVISION must pin the Hugging Face snapshot commit}"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
+: "${PREPARE_DOWNLOAD:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
 # Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
 : "${IMAGE_PYTHON:=/usr/bin/python3}"
@@ -48,9 +49,6 @@ need_cmd docker
 need_cmd python3
 mkdir -p "$HF_CACHE"
 verify_local_image
-
-# Serve profiles keep HF_HUB_OFFLINE=1; download must ignore that for this run only.
-echo "prepare: forcing HF online for download (serve can keep HF_HUB_OFFLINE=1)" >&2
 
 run_download() {
   docker run --rm -i \
@@ -100,7 +98,14 @@ if missing:
 PY
 }
 
-run_download
+case "$PREPARE_DOWNLOAD" in
+  1)
+    echo "prepare: forcing HF online for download (serve can keep HF_HUB_OFFLINE=1)" >&2
+    run_download
+    ;;
+  0) echo "prepare: using transferred cache; skipping online download" >&2 ;;
+  *) echo "PREPARE_DOWNLOAD must be 0 or 1" >&2; exit 2 ;;
+esac
 verify_cache
 
 model_cache_name="models--${DSPARK_MODEL//\//--}"
@@ -119,17 +124,23 @@ if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   WORKER_HF_CACHE="${WORKER_HF_CACHE:-$HF_CACHE}"
   need_cmd ssh
   need_cmd scp
+  need_cmd rsync
   WORKER_ENV_FILE="${WORKER_ENV_FILE:-$SCRIPT_DIR/.env.dspark.worker}"
   python3 "$SCRIPT_DIR/scripts/generate-node-env.py" \
     --source "$ENV_FILE" \
     --head-output "${HEAD_ENV_FILE:-$SCRIPT_DIR/.env.dspark.head}" \
     --worker-output "$WORKER_ENV_FILE"
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "mkdir -p '$WORKER_DIR/scripts' '$WORKER_HF_CACHE'"
+  worker_model_cache_dir="$WORKER_HF_CACHE/hub/$model_cache_name"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" \
+    "command -v rsync >/dev/null; mkdir -p '$WORKER_DIR/scripts' '$worker_model_cache_dir'"
   verify_worker_image
+  echo "Transferring verified model cache to $WORKER_HOST over the private fabric." >&2
+  rsync -a --partial --safe-links --info=progress2 \
+    "$HF_CACHE/hub/$model_cache_name/" "$WORKER_HOST:$worker_model_cache_dir/"
   scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
   scp "$SCRIPT_DIR/scripts/verify-artifact-manifest.py" "${WORKER_HOST}:${WORKER_DIR}/scripts/verify-artifact-manifest.py"
   scp "$WORKER_ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
-  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ./prepare-dspark-model-cache.sh"
+  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 PREPARE_DOWNLOAD=0 ./prepare-dspark-model-cache.sh"
   worker_manifest_remote="$WORKER_DIR/artifacts/model-manifest.json"
   worker_manifest_local="${WORKER_ARTIFACT_MANIFEST_FILE:-$SCRIPT_DIR/artifacts/model-manifest.worker.json}"
   scp "${WORKER_HOST}:${worker_manifest_remote}" "$worker_manifest_local"

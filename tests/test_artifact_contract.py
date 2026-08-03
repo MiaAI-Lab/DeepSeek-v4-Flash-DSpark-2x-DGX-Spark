@@ -108,6 +108,9 @@ class ArtifactContractTest(unittest.TestCase):
         self.assertIn("local_files_only=True", script)
         offline_section = script.split("verify_cache()", 1)[1]
         self.assertIn("HF_HUB_OFFLINE=1", offline_section)
+        self.assertIn("rsync -a --partial --safe-links", script)
+        self.assertIn("PREPARE_DOWNLOAD=0", script)
+        self.assertNotIn("rsync -a --delete", script)
 
     def test_manifest_is_deterministic_full_snapshot_and_detects_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
