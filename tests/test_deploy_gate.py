@@ -32,6 +32,7 @@ class DeployGateTest(unittest.TestCase):
         self.assertEqual(text.count('docker build -t "$nccl_image"'), 1)
         self.assertIn('docker save "$nccl_image"', text)
         self.assertIn('ssh -o BatchMode=yes "$WORKER_HOST" docker load', text)
+        self.assertIn('if [ "$head_nccl" != "$worker_nccl" ]', text)
         self.assertIn('NCCL test image IDs differ between ranks.', text)
 
     def test_benchmark_enforces_workload_timing_usage_and_correlation(self):

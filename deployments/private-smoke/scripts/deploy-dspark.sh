@@ -31,11 +31,14 @@ if [ "$MODE" = "prepare" ]; then
   trap 'find "$nccl_context" -depth -delete' EXIT
   docker build -t "$nccl_image" -f - "$nccl_context" \
     <"$ROOT_DIR/deployments/private-smoke/network/Dockerfile.nccl-tests"
+  head_nccl="$(docker image inspect "$nccl_image" -f '{{.Id}}')"
+  worker_nccl="$(ssh "$WORKER_HOST" "docker image inspect '$nccl_image' -f '{{.Id}}'" 2>/dev/null || true)"
   # Build once and transfer the exact image. Independent builds can differ in
   # image metadata even when their source and filesystem contents are equal.
-  docker save "$nccl_image" | \
-    ssh -o BatchMode=yes "$WORKER_HOST" docker load >/dev/null
-  head_nccl="$(docker image inspect "$nccl_image" -f '{{.Id}}')"
+  if [ "$head_nccl" != "$worker_nccl" ]; then
+    docker save "$nccl_image" | \
+      ssh -o BatchMode=yes "$WORKER_HOST" docker load >/dev/null
+  fi
   worker_nccl="$(ssh "$WORKER_HOST" "docker image inspect '$nccl_image' -f '{{.Id}}'")"
   [ "$head_nccl" = "$worker_nccl" ] || { echo "NCCL test image IDs differ between ranks." >&2; exit 1; }
   ENV_FILE="$ENV_FILE" "$ROOT_DIR/prepare-dspark-model-cache.sh"
