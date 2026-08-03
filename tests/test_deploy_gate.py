@@ -63,7 +63,9 @@ class DeployGateTest(unittest.TestCase):
             "--direct-base-url", "--proxy-base-url", "deepcopy(payload)",
             "list(reversed(paths))", '"paired_payloads": True',
             '"proxy_is_primary_bottleneck"', 'delta.get("reasoning")',
-            'delta.get("reasoning_content")',
+            'delta.get("reasoning_content")', '"seed": seed',
+            'choices=("off", "low")', '"deterministic_paired_seed": True',
+            '"paired_samples": paired_comparisons', "args.samples % 2",
         ):
             self.assertIn(required, text)
 

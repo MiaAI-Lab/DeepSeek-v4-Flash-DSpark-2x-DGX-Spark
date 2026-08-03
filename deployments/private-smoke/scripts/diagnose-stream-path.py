@@ -26,17 +26,23 @@ def synthetic_prompt(nonce: str) -> str:
     )
 
 
-def make_payload(model: str, nonce: str) -> dict:
-    return {
+def make_payload(model: str, nonce: str, seed: int, thinking: str) -> dict:
+    payload = {
         "model": model,
         "messages": [{"role": "user", "content": synthetic_prompt(nonce)}],
         "max_tokens": 512,
         "temperature": 0.6,
         "top_p": 0.95,
-        "chat_template_kwargs": {"thinking": False},
+        "seed": seed,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    payload["chat_template_kwargs"] = (
+        {"thinking": False}
+        if thinking == "off"
+        else {"thinking": True, "reasoning_effort": "low"}
+    )
+    return payload
 
 
 def stream_sample(base_url: str, key: str, payload: dict, request_id: str) -> dict:
@@ -118,12 +124,13 @@ def main() -> int:
     parser.add_argument("--proxy-base-url", default="http://172.30.0.1:8888/v1")
     parser.add_argument("--key-file", type=Path, required=True)
     parser.add_argument("--model", default="deepseek-v4-flash-0731")
+    parser.add_argument("--thinking", choices=("off", "low"), default="off")
     parser.add_argument("--warmups", type=int, default=1)
-    parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--samples", type=int, default=4)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    if args.warmups < 1 or args.samples < 3:
-        raise SystemExit("diagnosis requires at least one warmup and three paired samples")
+    if args.warmups < 1 or args.samples < 4 or args.samples % 2:
+        raise SystemExit("diagnosis requires at least one warmup and an even sample count >= 4")
 
     key = args.key_file.read_text().strip()
     paths = {
@@ -134,23 +141,41 @@ def main() -> int:
     # Warm each path symmetrically. The same immutable payload is serialized for
     # both paths; only the URL and transport-level request ID differ.
     for index in range(args.warmups):
-        payload = make_payload(args.model, f"warmup-{index}-{uuid.uuid4()}")
+        payload = make_payload(
+            args.model, f"warmup-{index}-{uuid.uuid4()}", 100_000 + index, args.thinking
+        )
         for name in paths:
             stream_sample(
                 paths[name], key, deepcopy(payload), f"diagnostic-{name}-{uuid.uuid4()}"
             )
 
     samples = {name: [] for name in paths}
+    paired_comparisons = []
     for index in range(args.samples):
-        payload = make_payload(args.model, f"pair-{index}-{uuid.uuid4()}")
+        payload = make_payload(
+            args.model, f"pair-{index}-{uuid.uuid4()}", 200_000 + index, args.thinking
+        )
         # Alternate order so thermal drift and cache warmth do not favor a path.
         order = list(paths) if index % 2 == 0 else list(reversed(paths))
         for name in order:
-            samples[name].append(
-                stream_sample(
-                    paths[name], key, deepcopy(payload), f"diagnostic-{name}-{uuid.uuid4()}"
-                )
+            sample = stream_sample(
+                paths[name], key, deepcopy(payload), f"diagnostic-{name}-{uuid.uuid4()}"
             )
+            samples[name].append(sample)
+        direct_sample = samples["loopback"][-1]
+        proxy_sample = samples["authenticated_proxy"][-1]
+        for field in ("prompt_tokens", "completion_tokens", "finish_reason"):
+            if direct_sample[field] != proxy_sample[field]:
+                raise AssertionError(f"paired deterministic responses differ in {field}")
+        paired_comparisons.append(
+            {
+                "completion_tokens": direct_sample["completion_tokens"],
+                "loopback_to_proxy_decode_ratio": (
+                    direct_sample["decode_tokens_per_second"]
+                    / proxy_sample["decode_tokens_per_second"]
+                ),
+            }
+        )
 
     summaries = {name: summarize(items) for name, items in samples.items()}
     direct = summaries["loopback"]["median_decode_tokens_per_second"]
@@ -162,7 +187,8 @@ def main() -> int:
             "max_tokens": 512,
             "temperature": 0.6,
             "top_p": 0.95,
-            "thinking": "off",
+            "thinking": args.thinking,
+            "deterministic_paired_seed": True,
             "paired_payloads": True,
             "alternating_path_order": True,
         },
@@ -170,6 +196,7 @@ def main() -> int:
         "comparison": {
             "loopback_to_proxy_decode_ratio": direct / proxied,
             "proxy_is_primary_bottleneck": direct >= 50.0 and direct / proxied >= 1.15,
+            "paired_samples": paired_comparisons,
         },
     }
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
