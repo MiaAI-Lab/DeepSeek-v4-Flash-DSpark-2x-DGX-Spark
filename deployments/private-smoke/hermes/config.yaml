@@ -15,6 +15,8 @@ providers:
     discover_models: false
     transport: chat_completions
     request_timeout_seconds: __REQUEST_TIMEOUT__
+    extra_body:
+      temperature: 0
     extra_headers:
       X-Request-ID: __REQUEST_ID__
 

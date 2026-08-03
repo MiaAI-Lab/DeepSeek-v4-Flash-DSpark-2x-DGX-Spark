@@ -26,6 +26,7 @@ class HermesIsolationTest(unittest.TestCase):
             "default: deepseek-v4-flash-0731-smoke",
             "key_env: DEEPSEEK_SMOKE_API_KEY",
             "transport: chat_completions",
+            "extra_body:", "temperature: 0",
             "discover_models: false",
             "fallback_providers: []",
             "cli: [terminal]",
