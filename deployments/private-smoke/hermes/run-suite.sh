@@ -408,6 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                 "method": "POST",
                 "path": self.path,
                 "request_id": self.headers.get("X-Request-ID", ""),
+                "sdk_retry_count": self.headers.get("X-Stainless-Retry-Count", ""),
                 "user_agent": self.headers.get("User-Agent", ""),
             }, sort_keys=True) + "\n")
         if mode == "timeout":
