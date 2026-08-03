@@ -31,8 +31,14 @@ def assert_message(payload, *, require_reasoning=False):
     message = choices[0].get("message")
     if not isinstance(message, dict):
         raise AssertionError("choice has no message")
-    if require_reasoning and not message.get("reasoning_content"):
-        raise AssertionError("reasoning response has no reasoning_content")
+    # The pinned DSpark runtime exposes generated thinking as ``reasoning``.
+    # Some OpenAI-compatible clients and vLLM paths normalize the same value to
+    # ``reasoning_content``.  Both are valid representations of the DeepSeek V4
+    # chat-template contract, so the gate must accept either without weakening
+    # the requirement that reasoning is actually present.
+    reasoning = message.get("reasoning") or message.get("reasoning_content")
+    if require_reasoning and not reasoning:
+        raise AssertionError("reasoning response has no reasoning or reasoning_content")
     return message
 
 

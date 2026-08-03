@@ -139,6 +139,7 @@ class LifecycleContractTest(unittest.TestCase):
             "choices", "message", "--runs",
         ):
             self.assertIn(required, text)
+        self.assertIn('message.get("reasoning") or message.get("reasoning_content")', text)
 
 
 if __name__ == "__main__":
