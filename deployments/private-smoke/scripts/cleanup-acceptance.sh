@@ -10,6 +10,7 @@ STATUS_DSPARK_BIN="${STATUS_DSPARK_BIN:-$ROOT_DIR/status-deepseek-v4-flash-dspar
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 EGRESS_POLICY_BIN="${EGRESS_POLICY_BIN:-$ROOT_DIR/deployments/private-smoke/litellm/egress-policy.sh}"
 COMPOSE_FILE="${LITELLM_COMPOSE_FILE:-$ROOT_DIR/deployments/private-smoke/litellm/docker-compose.yml}"
+PRISMA_CACHE_VOLUME="${PRISMA_CACHE_VOLUME:-dspark-private-litellm-prisma-cache}"
 failed=0
 
 if ! ENV_FILE="$ENV_FILE" "$STOP_DSPARK_BIN"; then
@@ -20,6 +21,10 @@ if ! ENV_FILE="$ENV_FILE" "$STATUS_DSPARK_BIN" --expect stopped; then
 fi
 if ! "$DOCKER_BIN" compose -p dspark-private-litellm --env-file "$LITELLM_ENV_FILE" \
   -f "$COMPOSE_FILE" down --remove-orphans; then
+  failed=1
+fi
+if "$DOCKER_BIN" volume inspect "$PRISMA_CACHE_VOLUME" >/dev/null 2>&1 &&
+   ! "$DOCKER_BIN" volume rm "$PRISMA_CACHE_VOLUME" >/dev/null; then
   failed=1
 fi
 if ! "$EGRESS_POLICY_BIN" --remove; then

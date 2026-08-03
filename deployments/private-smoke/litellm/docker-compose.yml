@@ -46,12 +46,14 @@ services:
       LITELLM_MODE: PRODUCTION
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
       NO_DOCS: "True"
+      PRISMA_HOME_DIR: /app/cache
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./secret-entrypoint.sh:/app/secret-entrypoint.sh:ro
       - ${LITELLM_MASTER_KEY_FILE:?set LITELLM_MASTER_KEY_FILE}:/run/secrets/master-key:ro
       - ${VLLM_ORIGIN_KEY_FILE:?set VLLM_ORIGIN_KEY_FILE}:/run/secrets/origin-key:ro
       - ${LITELLM_DB_PASSWORD_FILE:?set LITELLM_DB_PASSWORD_FILE}:/run/secrets/database-password:ro
+      - prisma-cache:/app/cache/.cache/prisma-python:ro
     tmpfs:
       - /tmp:size=256m,mode=1777
       - /app/cache:size=64m,uid=1000,gid=1000,mode=0700
@@ -82,3 +84,8 @@ networks:
       config:
         - subnet: 172.31.0.0/24
           gateway: 172.31.0.1
+
+volumes:
+  prisma-cache:
+    name: dspark-private-litellm-prisma-cache
+    external: true

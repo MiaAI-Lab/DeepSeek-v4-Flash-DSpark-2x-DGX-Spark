@@ -106,6 +106,7 @@ To stop only the private gateway:
 docker compose -p dspark-private-litellm \
   --env-file deployments/private-smoke/litellm/.env \
   -f deployments/private-smoke/litellm/docker-compose.yml down --remove-orphans
+docker volume rm dspark-private-litellm-prisma-cache
 deployments/private-smoke/litellm/egress-policy.sh --remove
 ```
 
