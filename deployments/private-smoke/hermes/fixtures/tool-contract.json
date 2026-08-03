@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "allowed_toolsets": ["terminal"],
+  "network": "none",
+  "host_mounts": [],
+  "forwarded_environment": [],
+  "fallback_models": [],
+  "negative_checks": {
+    "skills": "No skills tool or populated skills directory is available.",
+    "mcp": "No MCP configuration or MCP tool is available.",
+    "memory": "Rules and persistent memory injection are disabled.",
+    "gateway": "No gateway, channel, cron, or supervisor is started.",
+    "host_paths": "Mac mini home, SSH material, Hermes roots, and repositories are not mounted.",
+    "network": "Terminal containers use Docker network mode none."
+  },
+  "expected_totals": {
+    "personal_centavos": 97150,
+    "plexiz_centavos": 276875,
+    "grand_total_centavos": 374025
+  }
+}

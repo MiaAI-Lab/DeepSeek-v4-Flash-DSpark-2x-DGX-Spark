@@ -1,0 +1,48 @@
+model:
+  default: deepseek-v4-flash-0731-smoke
+  provider: custom:deepseek-smoke
+  base_url: __BASE_URL__
+
+providers:
+  deepseek-smoke:
+    name: deepseek-smoke
+    api: __BASE_URL__
+    key_env: DEEPSEEK_SMOKE_API_KEY
+    default_model: deepseek-v4-flash-0731-smoke
+    models:
+      deepseek-v4-flash-0731-smoke:
+        context_length: 131072
+    discover_models: false
+    transport: chat_completions
+    request_timeout_seconds: __REQUEST_TIMEOUT__
+    extra_headers:
+      X-Request-ID: __REQUEST_ID__
+
+fallback_providers: []
+
+agent:
+  api_max_retries: 1
+  max_turns: 24
+  tool_use_enforcement: true
+
+platform_toolsets:
+  cli: [terminal]
+
+terminal:
+  backend: "docker"
+  cwd: "/workspace"
+  home_mode: "profile"
+  timeout: 120
+  lifetime_seconds: 180
+  docker_image: "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+  container_cpu: 1
+  container_memory: 1024
+  container_disk: 2048
+  container_persistent: false
+  docker_persist_across_processes: false
+  docker_orphan_reaper: false
+  docker_volumes: []
+  docker_mount_cwd_to_workspace: false
+  docker_forward_env: []
+  docker_env: {}
+  docker_network: false

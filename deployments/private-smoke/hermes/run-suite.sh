@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+CREATE_PROFILE="$SCRIPT_DIR/create-profile.sh"
+FIXTURE="$SCRIPT_DIR/fixtures/transform-input.json"
+CONTRACT="$SCRIPT_DIR/fixtures/tool-contract.json"
+MODEL="deepseek-v4-flash-0731-smoke"
+PROVIDER="custom:deepseek-smoke"
+TERMINAL_IMAGE="python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+REPEAT=1
+BASE_URL="${HERMES_SMOKE_BASE_URL:-}"
+KEY_FILE="${HERMES_SMOKE_KEY_FILE:-}"
+OUTPUT_DIR="${HERMES_SMOKE_OUTPUT_DIR:-$ROOT_DIR/artifacts/hermes}"
+COLIMA_BIN="${COLIMA_BIN:-colima}"
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+HERMES_BIN="${HERMES_BIN:-hermes}"
+RUN_TMP=""
+COLIMA_PROFILE=""
+DOCKER_HOST=""
+DOCKER_CONFIG_DIR=""
+STUB_PID=""
+
+usage() {
+  echo "Usage: HERMES_SMOKE_BASE_URL=http://TAILNET_IP:4001/v1 HERMES_SMOKE_KEY_FILE=PATH $0 [--repeat N]" >&2
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repeat) REPEAT="${2:?missing --repeat value}"; shift 2 ;;
+    --base-url) BASE_URL="${2:?missing --base-url value}"; shift 2 ;;
+    --key-file) KEY_FILE="${2:?missing --key-file value}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+
+[[ "$REPEAT" =~ ^[1-9][0-9]*$ ]] && [ "$REPEAT" -le 10 ] || { echo "--repeat must be 1..10" >&2; exit 2; }
+[ -n "$BASE_URL" ] && [ -n "$KEY_FILE" ] || { usage; exit 2; }
+
+command -v "$COLIMA_BIN" >/dev/null || { echo "Colima is required." >&2; exit 1; }
+command -v "$DOCKER_BIN" >/dev/null || { echo "Docker CLI is required; Colima alone does not provide the client." >&2; exit 1; }
+command -v "$HERMES_BIN" >/dev/null || { echo "Hermes CLI is required." >&2; exit 1; }
+command -v python3 >/dev/null || { echo "Python 3 is required." >&2; exit 1; }
+
+safe_remove_run_tmp() {
+  [ -n "$RUN_TMP" ] || return 0
+  case "$RUN_TMP" in
+    "${TMPDIR:-/tmp}"/dspark-hermes-smoke.*) rm -rf -- "$RUN_TMP" ;;
+    *) echo "Refusing to remove unexpected temp path: $RUN_TMP" >&2; return 1 ;;
+  esac
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [ -n "$STUB_PID" ]; then
+    kill "$STUB_PID" >/dev/null 2>&1 || true
+    wait "$STUB_PID" 2>/dev/null || true
+  fi
+  if [ -n "$DOCKER_HOST" ]; then
+    DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 2>/dev/null \
+      | while IFS= read -r container; do
+          [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" rm -f -- "$container" >/dev/null 2>&1 || true
+        done
+  fi
+  if [ -n "$COLIMA_PROFILE" ]; then
+    "$COLIMA_BIN" stop --profile "$COLIMA_PROFILE" >/dev/null 2>&1 || true
+    "$COLIMA_BIN" delete --profile "$COLIMA_PROFILE" --force >/dev/null 2>&1 || true
+  fi
+  safe_remove_run_tmp || true
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dspark-hermes-smoke.XXXXXX")"
+chmod 0700 "$RUN_TMP"
+DOCKER_CONFIG_DIR="$RUN_TMP/docker-config"
+mkdir -m 0700 "$DOCKER_CONFIG_DIR"
+export DOCKER_CONFIG="$DOCKER_CONFIG_DIR"
+RUN_ID="hermes-smoke-$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(8))
+PY
+)"
+COLIMA_PROFILE="dspark-hermes-smoke-${RUN_ID##*-}"
+DOCKER_HOST="unix://${HOME}/.colima/${COLIMA_PROFILE}/docker.sock"
+
+snapshot_shared_state() {
+  local destination="$1"
+  python3 - "$HOME" "$destination" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+home, destination = map(Path, sys.argv[1:])
+hermes_root = home / ".hermes"
+targets = [
+    hermes_root,
+    hermes_root / "profiles",
+    hermes_root / "config.yaml",
+    hermes_root / ".env",
+    hermes_root / "active_profile",
+    hermes_root / "profiles.json",
+    hermes_root / "registry.json",
+    hermes_root / "profiles" / "default",
+    hermes_root / "profiles" / "hermesia",
+    home / ".docker" / "config.json",
+    home / ".colima" / "default" / "colima.yaml",
+    home / ".colima" / "plexiz-inference" / "colima.yaml",
+]
+targets.extend(sorted((home / ".local" / "bin").glob("*hermes*")))
+targets.extend(sorted((home / "Library" / "LaunchAgents").glob("*hermes*")))
+
+def record(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return {"path": str(path), "type": "missing"}
+    item = {
+        "path": str(path),
+        "mode": oct(stat.S_IMODE(info.st_mode)),
+        "uid": info.st_uid,
+        "gid": info.st_gid,
+        "size": info.st_size,
+        "mtime_ns": info.st_mtime_ns,
+    }
+    if path.is_symlink():
+        item.update(type="symlink", target=os.readlink(path))
+    elif path.is_file():
+        item.update(type="file", sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    elif path.is_dir():
+        item.update(type="directory")
+    else:
+        item.update(type="other")
+    return item
+
+rows = []
+seen = set()
+stable_profile_names = {
+    ".env", "SOUL.md", "auth.json", "channel_directory.json", "config.yaml",
+    "profile.yaml", "slack-manifest.json",
+}
+stable_profile_roots = {"bin", "hooks", "memories", "skills"}
+for target in targets:
+    key = str(target)
+    if key not in seen:
+        rows.append(record(target)); seen.add(key)
+    # Hermesia is live. Fingerprint its credentials, rules, config, skills,
+    # hooks, memory and executable registry, but exclude logs, sessions,
+    # SQLite WALs, gateway heartbeats and caches that its existing service
+    # legitimately changes while this isolated suite runs.
+    if target.is_dir() and target.parent.name == "profiles":
+        for child in sorted(target.rglob("*")):
+            relative = child.relative_to(target)
+            root_name = relative.parts[0]
+            if root_name not in stable_profile_roots and str(relative) not in stable_profile_names:
+                continue
+            if child.name in {".usage.json", ".usage.json.lock"}:
+                continue
+            key = str(child)
+            if key not in seen:
+                rows.append(record(child)); seen.add(key)
+
+encoded = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+payload = {"sha256": hashlib.sha256(encoded).hexdigest(), "entries": rows}
+destination.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+destination.chmod(0o600)
+PY
+}
+
+assert_profile_inventory() {
+  local profile_home="$1"
+  python3 - "$profile_home" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+home = Path(sys.argv[1])
+if stat.S_IMODE(home.stat().st_mode) != 0o700:
+    raise SystemExit("isolated home mode is not 0700")
+for name in (".env", "config.yaml", ".no-bundled-skills"):
+    path = home / name
+    if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) != 0o600:
+        raise SystemExit(f"unsafe isolated profile file: {name}")
+for forbidden in (
+    "skills", "optional-skills", "mcp.json", "mcp_servers.json", "memory",
+    "memories", "gateway.pid", "gateway_state.json", "cron", "plugins",
+    "platforms", "active_profile",
+):
+    if (home / forbidden).exists() or (home / forbidden).is_symlink():
+        raise SystemExit(f"forbidden inherited surface: {forbidden}")
+env_lines = (home / ".env").read_text(encoding="utf-8").splitlines()
+if len(env_lines) != 1 or not env_lines[0].startswith("DEEPSEEK_SMOKE_API_KEY=sk-"):
+    raise SystemExit("isolated .env must contain exactly the inference key")
+PY
+}
+
+monitor_containers() {
+  local pid="$1" output="$2"
+  : >"$output"
+  while kill -0 "$pid" 2>/dev/null; do
+    DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -q --filter label=hermes-agent=1 2>/dev/null \
+      | while IFS= read -r container; do
+          [ -z "$container" ] || DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
+            --format '{{json .}}' "$container" >>"$output" 2>/dev/null || true
+        done
+    sleep 0.1
+  done
+}
+
+validate_container_observations() {
+  local observations="$1"
+  python3 - "$observations" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+rows = []
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    try:
+        rows.append(json.loads(line))
+    except json.JSONDecodeError:
+        pass
+if not rows:
+    raise SystemExit("no Hermes terminal container was observed")
+for row in rows:
+    if row.get("HostConfig", {}).get("NetworkMode") != "none":
+        raise SystemExit("terminal container did not use --network=none")
+    if row.get("Mounts"):
+        raise SystemExit("terminal container unexpectedly had host or volume mounts")
+    labels = row.get("Config", {}).get("Labels") or {}
+    if labels.get("hermes-agent") != "1" or "hermes-profile" not in labels:
+        raise SystemExit("terminal container lacks Hermes isolation labels")
+PY
+}
+
+run_hermes() {
+  local profile_home="$1" prompt_file="$2" usage_file="$3" response_file="$4" observations="$5"
+  env -i \
+    PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
+    HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
+    HERMES_TELEMETRY_DISABLED=1 DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+    "$HERMES_BIN" -z "$(<"$prompt_file")" \
+      --usage-file "$usage_file" \
+      --provider "$PROVIDER" --model "$MODEL" --toolsets terminal --ignore-rules \
+      >"$response_file" 2>"$RUN_TMP/hermes-stderr.log" &
+  local hermes_pid=$!
+  monitor_containers "$hermes_pid" "$observations" &
+  local monitor_pid=$!
+  local status=0
+  wait "$hermes_pid" || status=$?
+  wait "$monitor_pid" || true
+  [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
+}
+
+write_prompt() {
+  local destination="$1"
+  python3 - "$FIXTURE" "$CONTRACT" "$destination" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+fixture = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+contract = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+prompt = f"""You are running a synthetic, isolated acceptance task. You have exactly one toolset: terminal.
+You MUST call terminal and do all work inside /workspace. Do not solve this only in your head.
+
+1. Use terminal to create /workspace/input.json with this exact JSON:
+{json.dumps(fixture, sort_keys=True)}
+2. Use terminal to read the file back and validate dataset, currency, four row ids, scopes, and decimal amounts.
+3. Use terminal with Python decimal arithmetic to create /workspace/output.json containing integer centavo totals grouped by scope and a grand total.
+4. Use terminal to prove these host paths are absent: /Users/gunter/.ssh, /Users/gunter/.hermes, /home/gunter/.ssh, /root/.ssh.
+5. Use terminal Python sockets to prove a connection to 1.1.1.1:53 is blocked.
+6. Read /workspace/output.json back. Expected totals are {json.dumps(contract['expected_totals'], sort_keys=True)}.
+
+Your final response must be exactly one line, with no markdown, in this form:
+HERMES_SMOKE_RESULT={{"created":true,"read":true,"transformed":true,"personal_centavos":97150,"plexiz_centavos":276875,"grand_total_centavos":374025,"host_paths_blocked":true,"network_blocked":true}}
+Only emit true after terminal evidence proves it.
+"""
+Path(sys.argv[3]).write_text(prompt, encoding="utf-8")
+PY
+}
+
+assemble_result() {
+  local request_id="$1" usage="$2" response="$3" observations="$4" before="$5" after="$6" output="$7"
+  python3 - "$request_id" "$usage" "$response" "$observations" "$before" "$after" "$output" "$MODEL" "$PROVIDER" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+request_id, usage_path, response_path, observations, before_path, after_path, output_path, model, provider = sys.argv[1:]
+usage = json.loads(Path(usage_path).read_text(encoding="utf-8"))
+response = Path(response_path).read_text(encoding="utf-8").strip()
+match = re.fullmatch(r'HERMES_SMOKE_RESULT=(\{.*\})', response)
+if not match:
+    raise SystemExit("Hermes did not return the fixed result contract")
+reported = json.loads(match.group(1))
+expected = {
+    "created": True, "read": True, "transformed": True,
+    "personal_centavos": 97150, "plexiz_centavos": 276875,
+    "grand_total_centavos": 374025, "host_paths_blocked": True,
+    "network_blocked": True,
+}
+if reported != expected:
+    raise SystemExit("Hermes result did not match the synthetic fixture contract")
+if usage.get("failed") or not usage.get("completed") or int(usage.get("api_calls") or 0) < 1:
+    raise SystemExit("Hermes usage report is incomplete or failed")
+if usage.get("model") not in (model, f"openai/{model}"):
+    raise SystemExit("Hermes usage report changed model")
+if str(usage.get("provider", "")) not in {provider, "custom", "deepseek-smoke"}:
+    raise SystemExit("Hermes usage report changed provider")
+before = json.loads(Path(before_path).read_text(encoding="utf-8"))["sha256"]
+after = json.loads(Path(after_path).read_text(encoding="utf-8"))["sha256"]
+if before != after:
+    raise SystemExit("shared default/hermesia state changed during isolated run")
+if not Path(observations).read_text(encoding="utf-8").strip():
+    raise SystemExit("missing Docker confinement evidence")
+result = {
+    "schema_version": 1,
+    "run_id": request_id,
+    "accepted": True,
+    "provider": provider,
+    "model": model,
+    "tasks": {"create": True, "read": True, "transform": True},
+    "negative_checks": {
+        "skills": True, "mcp": True, "memory": True, "gateway": True,
+        "host_paths": True, "network": True, "fallback": True,
+    },
+    "shared_state": {"before_sha256": before, "after_sha256": after, "unchanged": True},
+    "usage": usage,
+    "request_ids": [request_id],
+}
+
+run_failure_probe() {
+  local mode="$1" timeout="$2"
+  local probe_id="${RUN_ID}-${mode}"
+  local port_file="$RUN_TMP/${mode}.port"
+  local count_file="$RUN_TMP/${mode}.count"
+  local key_file="$RUN_TMP/${mode}.key"
+  local profile_home="$RUN_TMP/profile-${mode}"
+  local usage_file="$RUN_TMP/usage-${mode}.json"
+  local response_file="$RUN_TMP/response-${mode}.txt"
+
+  printf 'sk-%s\n' 'synthetic-failure-probe-only' >"$key_file"
+  chmod 0600 "$key_file"
+  : >"$count_file"
+  python3 - "$mode" "$port_file" "$count_file" <<'PY' &
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+import sys
+import time
+
+mode, port_path, count_path = sys.argv[1:]
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("content-length", "0"))
+        self.rfile.read(length)
+        with Path(count_path).open("a", encoding="utf-8") as handle:
+            handle.write("1\n")
+        if mode == "timeout":
+            time.sleep(4)
+            body = b'{}'
+            self.send_response(504)
+            self.send_header("content-type", "application/json")
+        elif mode == "malformed":
+            body = b'{not-json'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+        else:
+            body = json.dumps({"error": {"message": "synthetic invalid model", "type": "invalid_request_error"}}).encode()
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass
+
+    def log_message(self, *_args):
+        pass
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+Path(port_path).write_text(str(server.server_port), encoding="utf-8")
+server.serve_forever()
+PY
+  STUB_PID=$!
+  for _ in $(seq 1 50); do [ -s "$port_file" ] && break; sleep 0.1; done
+  [ -s "$port_file" ] || { echo "Failure probe server did not start." >&2; return 1; }
+  local port
+  port="$(<"$port_file")"
+  ALLOW_LOOPBACK_PROVIDER=1 "$CREATE_PROFILE" --home "$profile_home" \
+    --base-url "http://127.0.0.1:${port}/v1" --key-file "$key_file" \
+    --request-id "$probe_id" --request-timeout "$timeout" >/dev/null
+
+  local status=0
+  env -i \
+    PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
+    HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
+    HERMES_TELEMETRY_DISABLED=1 DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+    "$HERMES_BIN" -z "Return the word impossible; do not call tools." \
+      --usage-file "$usage_file" --provider "$PROVIDER" --model "$MODEL" \
+      --toolsets terminal --ignore-rules >"$response_file" 2>/dev/null || status=$?
+  kill "$STUB_PID" >/dev/null 2>&1 || true
+  wait "$STUB_PID" 2>/dev/null || true
+  STUB_PID=""
+
+  python3 - "$mode" "$status" "$count_file" "$usage_file" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+mode, status, count_path, usage_path = sys.argv[1:]
+attempts = len([line for line in Path(count_path).read_text().splitlines() if line.strip()])
+if attempts != 1:
+    raise SystemExit(f"{mode} probe made {attempts} attempts; expected exactly one")
+usage_file = Path(usage_path)
+usage = json.loads(usage_file.read_text()) if usage_file.exists() else {}
+if int(status) == 0 and not usage.get("failed"):
+    raise SystemExit(f"{mode} probe did not fail explicitly")
+if int(usage.get("api_calls") or 0) > 1:
+    raise SystemExit(f"{mode} probe reported a retry")
+PY
+}
+target = Path(output_path)
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+target.chmod(0o600)
+PY
+}
+
+snapshot_shared_state "$RUN_TMP/shared-before.json"
+
+echo "Starting isolated Colima profile $COLIMA_PROFILE (existing profiles are not modified)."
+"$COLIMA_BIN" start --profile "$COLIMA_PROFILE" --runtime docker --cpu 2 --memory 4 --disk 20
+for _ in $(seq 1 60); do
+  [ -S "${DOCKER_HOST#unix://}" ] && DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" version >/dev/null 2>&1 && break
+  sleep 1
+done
+[ -S "${DOCKER_HOST#unix://}" ] || { echo "Dedicated Colima Docker socket did not appear." >&2; exit 1; }
+DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" version >/dev/null
+DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" pull "$TERMINAL_IMAGE" >/dev/null
+
+# Fail-closed provider behavior: the installed Hermes version must surface an
+# invalid request, a timeout, and malformed JSON after exactly one API attempt.
+# fallback_providers is empty, so any recovery through another model is a gate failure.
+run_failure_probe invalid 5
+run_failure_probe malformed 5
+run_failure_probe timeout 1
+
+mkdir -p "$OUTPUT_DIR"
+chmod 0700 "$OUTPUT_DIR"
+
+for iteration in $(seq 1 "$REPEAT"); do
+  request_id="${RUN_ID}-${iteration}"
+  profile_home="$RUN_TMP/profile-${iteration}"
+  usage_file="$RUN_TMP/usage-${iteration}.json"
+  response_file="$RUN_TMP/response-${iteration}.txt"
+  prompt_file="$RUN_TMP/prompt-${iteration}.txt"
+  observations="$RUN_TMP/docker-${iteration}.jsonl"
+  result_file="$OUTPUT_DIR/${request_id}.json"
+
+  "$CREATE_PROFILE" --home "$profile_home" --base-url "$BASE_URL" \
+    --key-file "$KEY_FILE" --request-id "$request_id"
+  assert_profile_inventory "$profile_home"
+  write_prompt "$prompt_file"
+  run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations"
+  validate_container_observations "$observations"
+
+  # The process-scoped environment and profile must not leave a gateway,
+  # cron scheduler, MCP registry, skills, memory, or persistent container.
+  assert_profile_inventory "$profile_home"
+  [ -z "$(DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1)" ] \
+    || { echo "Hermes left a persistent container in the smoke daemon." >&2; exit 1; }
+  snapshot_shared_state "$RUN_TMP/shared-after-${iteration}.json"
+  assemble_result "$request_id" "$usage_file" "$response_file" "$observations" \
+    "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file"
+  echo "Hermes isolated suite accepted: $result_file"
+done
+
+# Final before/after guard covers the whole repeated suite, including every
+# independent HERMES_HOME. readlink/stat/sha256 metadata are in each snapshot.
+snapshot_shared_state "$RUN_TMP/shared-after.json"
+python3 - "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+before = json.loads(Path(sys.argv[1]).read_text())["sha256"]
+after = json.loads(Path(sys.argv[2]).read_text())["sha256"]
+if before != after:
+    raise SystemExit("protected default/hermesia/active_profile/LaunchAgents state changed")
+print(f"shared-state-sha256={after}")
+PY
+
+echo "Hermes smoke suite passed $REPEAT consecutive isolated run(s)."

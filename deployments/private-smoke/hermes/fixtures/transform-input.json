@@ -1,0 +1,10 @@
+{
+  "dataset": "synthetic-expenses",
+  "currency": "MXN",
+  "rows": [
+    {"id": "syn-001", "scope": "personal", "category": "transport", "amount": "129.50"},
+    {"id": "syn-002", "scope": "plexiz", "category": "advertising", "amount": "2350.00"},
+    {"id": "syn-003", "scope": "personal", "category": "home", "amount": "842.00"},
+    {"id": "syn-004", "scope": "plexiz", "category": "software", "amount": "418.75"}
+  ]
+}
