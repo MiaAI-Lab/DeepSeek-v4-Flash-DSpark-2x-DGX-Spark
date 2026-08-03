@@ -41,7 +41,8 @@ check_node() {
   run_host "$host" \
     "set -eu; ip -4 address show dev '$IFACE' | grep -F '$address/30'; ip link show dev '$IFACE' | grep -F 'mtu 9000'; ! ip route show default | grep -F 'dev $IFACE'; command -v show_gids >/dev/null; show_gids | grep -F '$HCA' | grep -F '$address'; command -v ib_write_bw >/dev/null"
   if [ "$REQUIRE_PERSISTENT" = "1" ]; then
-    run_host "$host" "sudo netplan get ethernets.$IFACE | grep -F '$address/30'"
+    run_host "$host" \
+      "set -eu; test -f /etc/netplan/90-dspark-cx7.yaml; test \"\$(nmcli -g GENERAL.CONNECTION device show '$IFACE')\" = 'netplan-$IFACE'; test \"\$(nmcli -g connection.autoconnect connection show 'netplan-$IFACE')\" = yes"
   fi
 }
 

@@ -70,6 +70,7 @@ class NetworkTemplatesTest(unittest.TestCase):
             "all_reduce_perf",
             "NCCL_TESTS_COMMIT",
             "--require-persistent",
+            "connection.autoconnect",
         ):
             self.assertIn(required, script)
 
