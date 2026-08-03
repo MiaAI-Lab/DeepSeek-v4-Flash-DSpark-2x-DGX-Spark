@@ -53,6 +53,7 @@ class DeployGateTest(unittest.TestCase):
             "request_success_total", "metric_delta", 'delta.get("reasoning")',
             'delta.get("reasoning_content")',
             '"chat_template_kwargs": {"thinking": False}',
+            "Return exactly 128 numbered",
         ):
             self.assertIn(required, text)
 

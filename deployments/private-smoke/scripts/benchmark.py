@@ -66,7 +66,8 @@ def synthetic_prompt(nonce: str) -> str:
     )
     return (
         f"Nonce {nonce}. " + block * 10
-        + "Produce a detailed numbered technical assessment. Do not quote the prompt."
+        + "Use only fictional warehouse vocabulary. Return exactly 128 numbered "
+        "lowercase English words, then stop. Do not quote the prompt."
     )
 
 
