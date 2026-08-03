@@ -545,11 +545,15 @@ fi
 validate_compose
 
 if ! docker network inspect dspark-smoke >/dev/null 2>&1; then
-  docker network create --driver bridge --subnet 172.30.0.0/24 --gateway 172.30.0.1 dspark-smoke >/dev/null
+  docker network create --driver bridge --internal --subnet 172.30.0.0/24 --gateway 172.30.0.1 dspark-smoke >/dev/null
 fi
 network_config="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}} {{(index .IPAM.Config 0).Gateway}}' dspark-smoke)"
 [ "$network_config" = "172.30.0.0/24 172.30.0.1" ] || {
   echo "Existing dspark-smoke network has unexpected IPAM: $network_config" >&2
+  exit 1
+}
+[ "$(docker network inspect -f '{{.Internal}}' dspark-smoke)" = "true" ] || {
+  echo "Existing dspark-smoke network is not internal." >&2
   exit 1
 }
 

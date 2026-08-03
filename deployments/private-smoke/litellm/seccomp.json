@@ -1,0 +1,11 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"],
+  "syscalls": [
+    {
+      "names": ["acct", "add_key", "bpf", "delete_module", "finit_module", "init_module", "ioperm", "iopl", "keyctl", "kexec_file_load", "kexec_load", "mount", "move_mount", "open_by_handle_at", "open_tree", "perf_event_open", "pivot_root", "ptrace", "quotactl", "reboot", "request_key", "setns", "swapon", "swapoff", "syslog", "umount", "umount2", "unshare", "userfaultfd"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}

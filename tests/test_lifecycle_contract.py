@@ -107,6 +107,7 @@ class LifecycleContractTest(unittest.TestCase):
         self.assertIn("cleanup_partial_start", text)
         self.assertIn("verify_stopped", text)
         self.assertIn("head-proxy", text)
+        self.assertIn("--internal", text)
         smoke = (ROOT / "smoke-deepseek-v4-flash-dspark.sh").read_text()
         self.assertIn("stop-deepseek-v4-flash-dspark.sh", smoke)
         self.assertIn("--expect stopped", smoke)

@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres@sha256:b797483593b82cbea9a7ee41c88f324a90d10d9c2504d40e755d91c75456366d
+    user: "999:999"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:./seccomp.json
+    environment:
+      POSTGRES_USER: litellm_smoke
+      POSTGRES_DB: litellm_smoke
+      POSTGRES_PASSWORD_FILE: /run/secrets/database-password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ${POSTGRES_PASSWORD_FILE:?set POSTGRES_PASSWORD_FILE}:/run/secrets/database-password:ro
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /run/postgresql:size=16m,uid=999,gid=999,mode=0770
+      - /var/lib/postgresql/data:size=512m,uid=999,gid=999,mode=0700
+    networks:
+      database:
+        ipv4_address: 172.31.0.11
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm_smoke -d litellm_smoke"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  litellm:
+    image: ghcr.io/berriai/litellm-database@sha256:5fa5f99cd5576e359a0e50395ad14edbe922ef41c152f67c534e4f8b6238c5ec
+    user: "1000:1000"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:./seccomp.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MASTER_KEY_FILE: /run/secrets/master-key
+      ORIGIN_KEY_FILE: /run/secrets/origin-key
+      DATABASE_PASSWORD_FILE: /run/secrets/database-password
+      LITELLM_MODE: PRODUCTION
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      NO_DOCS: "True"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./secret-entrypoint.sh:/app/secret-entrypoint.sh:ro
+      - ${LITELLM_MASTER_KEY_FILE:?set LITELLM_MASTER_KEY_FILE}:/run/secrets/master-key:ro
+      - ${VLLM_ORIGIN_KEY_FILE:?set VLLM_ORIGIN_KEY_FILE}:/run/secrets/origin-key:ro
+      - ${LITELLM_DB_PASSWORD_FILE:?set LITELLM_DB_PASSWORD_FILE}:/run/secrets/database-password:ro
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /app/cache:size=64m,uid=1000,gid=1000,mode=0700
+    entrypoint: ["/bin/sh", "/app/secret-entrypoint.sh"]
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4001", "--num_workers", "1"]
+    ports:
+      - "${HEAD_TAILSCALE_IP}:4001:4001"
+    networks:
+      origin:
+        ipv4_address: 172.30.0.10
+      database:
+        ipv4_address: 172.31.0.10
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4001/health/liveliness', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    restart: "no"
+
+networks:
+  origin:
+    name: dspark-smoke
+    external: true
+  database:
+    name: dspark-smoke-database
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+          gateway: 172.31.0.1
