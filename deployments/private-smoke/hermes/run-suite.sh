@@ -16,6 +16,7 @@ OUTPUT_DIR="${HERMES_SMOKE_OUTPUT_DIR:-$ROOT_DIR/artifacts/hermes}"
 COLIMA_BIN="${COLIMA_BIN:-colima}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 HERMES_BIN="${HERMES_BIN:-hermes}"
+HERMES_PROCESS_TIMEOUT="${HERMES_SMOKE_PROCESS_TIMEOUT:-600}"
 RUN_TMP=""
 COLIMA_PROFILE=""
 DOCKER_HOST=""
@@ -37,6 +38,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 [[ "$REPEAT" =~ ^[1-9][0-9]*$ ]] && [ "$REPEAT" -le 10 ] || { echo "--repeat must be 1..10" >&2; exit 2; }
+[[ "$HERMES_PROCESS_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "HERMES_SMOKE_PROCESS_TIMEOUT must be a positive integer" >&2; exit 2; }
 [ -n "$BASE_URL" ] && [ -n "$KEY_FILE" ] || { usage; exit 2; }
 
 command -v "$COLIMA_BIN" >/dev/null || { echo "Colima is required." >&2; exit 1; }
@@ -298,8 +301,33 @@ run_hermes() {
       --provider "$PROVIDER" --model "$MODEL" --toolsets terminal --ignore-rules \
       >"$response_file" 2>"$RUN_TMP/hermes-stderr.log" &
   local hermes_pid=$!
-  local status=0
-  wait "$hermes_pid" || status=$?
+  local status=0 elapsed=0 process_state=""
+  while kill -0 "$hermes_pid" >/dev/null 2>&1; do
+    # An exited, unreaped child is still visible to kill -0 as a zombie.
+    # Break so wait can collect its real exit status instead of timing out.
+    process_state="$(ps -p "$hermes_pid" -o state= 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$process_state" ] || break
+    case "$process_state" in Z*) break ;; esac
+    if [ "$elapsed" -ge "$HERMES_PROCESS_TIMEOUT" ]; then
+      echo "Hermes one-shot exceeded ${HERMES_PROCESS_TIMEOUT}s; terminating test process $hermes_pid." >&2
+      kill -TERM "$hermes_pid" >/dev/null 2>&1 || true
+      for _ in $(seq 1 10); do
+        kill -0 "$hermes_pid" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      if kill -0 "$hermes_pid" >/dev/null 2>&1; then
+        kill -KILL "$hermes_pid" >/dev/null 2>&1 || true
+      fi
+      wait "$hermes_pid" 2>/dev/null || true
+      status=124
+      break
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  if [ "$status" -eq 0 ]; then
+    wait "$hermes_pid" || status=$?
+  fi
   [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
   capture_containers "$observations"
 }

@@ -23,8 +23,12 @@ fallback_providers: []
 agent:
   # Hermes counts total attempts here: 1 means one request and zero retries.
   api_max_retries: 1
-  max_turns: 24
+  # The task needs one terminal turn and one final-answer turn. Eight leaves
+  # recovery room without allowing a non-tool continuation loop to run
+  # indefinitely against the single-concurrency acceptance key.
+  max_turns: 8
   tool_use_enforcement: true
+  intent_ack_continuation: true
 
 platform_toolsets:
   cli: [terminal]
