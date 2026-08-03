@@ -122,6 +122,7 @@ class ArtifactContractTest(unittest.TestCase):
         offline_section = script.split("verify_cache()", 1)[1]
         self.assertIn("HF_HUB_OFFLINE=1", offline_section)
         self.assertIn("rsync -a --partial --safe-links", script)
+        self.assertIn("--exclude='*.incomplete' --exclude='trees/'", script)
         self.assertIn("PREPARE_DOWNLOAD=0", script)
         self.assertIn('${HF_DOWNLOAD_WORKERS:=4}', script)
         self.assertNotIn("rsync -a --delete", script)

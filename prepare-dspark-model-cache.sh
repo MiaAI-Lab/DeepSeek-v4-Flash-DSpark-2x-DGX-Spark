@@ -136,7 +136,7 @@ if [ "${PREPARE_WORKER:-1}" = "1" ]; then
     "command -v rsync >/dev/null; mkdir -p '$WORKER_DIR/scripts' '$worker_model_cache_dir'"
   verify_worker_image
   echo "Transferring verified model cache to $WORKER_HOST over the private fabric." >&2
-  rsync -a --partial --safe-links --info=progress2 \
+  rsync -a --partial --safe-links --exclude='*.incomplete' --exclude='trees/' --info=progress2 \
     "$HF_CACHE/hub/$model_cache_name/" "$WORKER_HOST:$worker_model_cache_dir/"
   scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
   scp "$SCRIPT_DIR/scripts/verify-artifact-manifest.py" "${WORKER_HOST}:${WORKER_DIR}/scripts/verify-artifact-manifest.py"
