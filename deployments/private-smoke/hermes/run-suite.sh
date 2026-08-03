@@ -23,6 +23,7 @@ COLIMA_PROFILE=""
 DOCKER_HOST=""
 DOCKER_CONFIG_DIR=""
 STUB_PID=""
+CAPTURE_PID=""
 
 usage() {
   echo "Usage: HERMES_SMOKE_BASE_URL=http://TAILNET_IP:4001/v1 HERMES_SMOKE_KEY_FILE=PATH $0 [--repeat N]" >&2
@@ -64,6 +65,10 @@ cleanup() {
   if [ -n "$STUB_PID" ]; then
     kill "$STUB_PID" >/dev/null 2>&1 || true
     wait "$STUB_PID" 2>/dev/null || true
+  fi
+  if [ -n "$CAPTURE_PID" ]; then
+    kill "$CAPTURE_PID" >/dev/null 2>&1 || true
+    wait "$CAPTURE_PID" 2>/dev/null || true
   fi
   if [ -n "$DOCKER_HOST" ]; then
     DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1 2>/dev/null \
@@ -579,15 +584,15 @@ PY_PROMPT
 
 assemble_result() {
   local request_id="$1" usage="$2" response="$3" observations="$4" workspace_evidence="$5" before="$6" after="$7" output="$8"
-  local profile_home="$9"
-  python3 - "$request_id" "$usage" "$response" "$observations" "$workspace_evidence" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" "$profile_home" <<'PY'
+  local profile_home="$9" capture_evidence="${10}"
+  python3 - "$request_id" "$usage" "$response" "$observations" "$workspace_evidence" "$before" "$after" "$output" "$MODEL" "$PROVIDER" "$SCRIPT_DIR/config.yaml" "$FIXTURE" "$CONTRACT" "$profile_home" "$capture_evidence" <<'PY'
 import hashlib
 import json
 from pathlib import Path
 import re
 import sys
 
-request_id, usage_path, response_path, observations, workspace_path, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path, profile_home = sys.argv[1:]
+request_id, usage_path, response_path, observations, workspace_path, before_path, after_path, output_path, model, provider, config_path, fixture_path, contract_path, profile_home, capture_path = sys.argv[1:]
 usage = json.loads(Path(usage_path).read_text(encoding="utf-8"))
 response = Path(response_path).read_text(encoding="utf-8").strip()
 match = re.fullmatch(r'HERMES_SMOKE_RESULT=(\{.*\})', response)
@@ -612,6 +617,24 @@ if usage.get("model") not in (model, f"openai/{model}"):
     raise SystemExit("Hermes usage report changed model")
 if str(usage.get("provider", "")) not in {provider, "custom", "deepseek-smoke"}:
     raise SystemExit("Hermes usage report changed provider")
+capture_rows = [
+    json.loads(line)
+    for line in Path(capture_path).read_text(encoding="utf-8").splitlines()
+    if line.strip()
+]
+api_calls = int(usage.get("api_calls") or 0)
+if len(capture_rows) != api_calls:
+    raise SystemExit("captured inference count does not match Hermes usage")
+origin_response_ids = []
+for row in capture_rows:
+    ids = row.get("response_ids") or []
+    if row.get("request_id") != request_id or row.get("status") != 200 or len(ids) != 1:
+        raise SystemExit("captured gateway response evidence is incomplete")
+    origin_response_ids.extend(ids)
+if len(set(origin_response_ids)) != api_calls or not all(
+    re.fullmatch(r"chatcmpl-[a-f0-9]{16}", item) for item in origin_response_ids
+):
+    raise SystemExit("captured gateway response IDs are missing, duplicated, or invalid")
 before = json.loads(Path(before_path).read_text(encoding="utf-8"))["sha256"]
 after = json.loads(Path(after_path).read_text(encoding="utf-8"))["sha256"]
 if before != after:
@@ -669,6 +692,7 @@ result = {
     "shared_state": {"before_sha256": before, "after_sha256": after, "unchanged": True},
     "usage": usage,
     "request_ids": [request_id],
+    "origin_response_ids": origin_response_ids,
     "tool_evidence_sha256": workspace_sha256,
     "suite_pin_sha256": hashlib.sha256(
         b"".join(Path(path).read_bytes() for path in (config_path, fixture_path, contract_path))
@@ -679,6 +703,22 @@ target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 target.chmod(0o600)
 PY
+}
+
+start_capture_proxy() {
+  local evidence_file="$1" port_file="$2"
+  python3 "$SCRIPT_DIR/capture-proxy.py" --target-base-url "$BASE_URL" \
+    --evidence-file "$evidence_file" --port-file "$port_file" &
+  CAPTURE_PID=$!
+  for _ in $(seq 1 50); do [ -s "$port_file" ] && break; sleep 0.1; done
+  [ -s "$port_file" ] || { echo "Hermes capture proxy did not start." >&2; return 1; }
+}
+
+stop_capture_proxy() {
+  [ -n "$CAPTURE_PID" ] || return 0
+  kill "$CAPTURE_PID" >/dev/null 2>&1 || true
+  wait "$CAPTURE_PID" 2>/dev/null || true
+  CAPTURE_PID=""
 }
 
 run_failure_probe() {
@@ -834,14 +874,20 @@ for iteration in $(seq 1 "$REPEAT"); do
   observations="$RUN_TMP/docker-${iteration}.jsonl"
   workspace_evidence="$RUN_TMP/workspace-output-${iteration}.json"
   writer_observation="$RUN_TMP/workspace-writer-${iteration}.json"
+  capture_evidence="$RUN_TMP/gateway-response-ids-${iteration}.jsonl"
+  capture_port_file="$RUN_TMP/gateway-capture-${iteration}.port"
   result_file="$OUTPUT_DIR/${request_id}.json"
 
-  "$CREATE_PROFILE" --home "$profile_home" --base-url "$BASE_URL" \
+  start_capture_proxy "$capture_evidence" "$capture_port_file"
+  capture_port="$(<"$capture_port_file")"
+  ALLOW_LOOPBACK_PROVIDER=1 "$CREATE_PROFILE" --home "$profile_home" \
+    --base-url "http://127.0.0.1:${capture_port}/v1" \
     --key-file "$KEY_FILE" --request-id "$request_id"
   assert_profile_inventory "$profile_home"
   write_prompt "$prompt_file"
   run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations" \
     "$workspace_evidence" "$writer_observation"
+  stop_capture_proxy
   validate_container_observations "$observations" "$profile_home"
 
   # The process-scoped environment and profile must not leave a gateway,
@@ -850,7 +896,8 @@ for iteration in $(seq 1 "$REPEAT"); do
   assert_profile_inventory "$profile_home"
   snapshot_shared_state "$RUN_TMP/shared-after-${iteration}.json"
   assemble_result "$request_id" "$usage_file" "$response_file" "$observations" "$workspace_evidence" \
-    "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file" "$profile_home"
+    "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file" "$profile_home" \
+    "$capture_evidence"
   remove_hermes_containers
   [ -z "$(DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1)" ] \
     || { echo "Hermes terminal container cleanup was incomplete." >&2; exit 1; }

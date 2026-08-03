@@ -225,21 +225,32 @@ import json
 import re
 import subprocess
 import sys
+import time
 
-def spend_rows(request_id):
-    if not re.fullmatch(r"hermes-smoke-[a-f0-9-]{8,64}", request_id):
-        raise AssertionError("invalid Hermes request id")
+def spend_rows(response_ids):
+    if not response_ids or not all(re.fullmatch(r"chatcmpl-[a-f0-9]{16}", item) for item in response_ids):
+        raise AssertionError("invalid Hermes origin response ids")
+    ids = ",".join("'" + item + "'" for item in response_ids)
     sql = (
         'SELECT row_to_json(t)::text FROM "LiteLLM_SpendLogs" AS t '
-        f"WHERE to_jsonb(t)::text LIKE '%{request_id}%';"
+        f"WHERE t.request_id IN ({ids});"
     )
-    output = subprocess.check_output([
+    command = [
         "docker", "exec", "dspark-private-litellm-postgres-1",
         "psql", "-X", "-A", "-t", "-U", "litellm_smoke", "-d", "litellm_smoke",
         "-c", sql,
-    ], text=True)
-    return [json.loads(line) for line in output.splitlines() if line.strip()]
+    ]
+    for _ in range(120):
+        output = subprocess.check_output(command, text=True)
+        rows = [json.loads(line) for line in output.splitlines() if line.strip()]
+        if len(rows) == len(response_ids):
+            return rows
+        if len(rows) > len(response_ids):
+            raise AssertionError("duplicate Hermes spend rows")
+        time.sleep(1)
+    raise AssertionError("Hermes spend rows did not become visible")
 
+all_origin_response_ids = []
 for path in sys.argv[1:]:
     item = json.load(open(path))
     assert item["accepted"] is True
@@ -248,13 +259,16 @@ for path in sys.argv[1:]:
     assert item["shared_state"]["unchanged"] is True
     assert all(item["negative_checks"].values())
     assert item["request_ids"] == [item["run_id"]]
-    rows = spend_rows(item["run_id"])
+    assert len(item["origin_response_ids"]) == item["usage"]["api_calls"]
+    assert len(set(item["origin_response_ids"])) == item["usage"]["api_calls"]
+    rows = spend_rows(item["origin_response_ids"])
     assert len(rows) == item["usage"]["api_calls"]
     for row in rows:
         encoded = json.dumps(row, sort_keys=True)
-        assert item["run_id"] in encoded
         assert "deepseek-v4-flash-0731-smoke" in encoded
         assert "hermes-deepseek-smoke" in encoded
+    all_origin_response_ids.extend(item["origin_response_ids"])
+assert len(set(all_origin_response_ids)) == len(all_origin_response_ids)
 assert len({item["suite_pin_sha256"] for item in map(lambda p: json.load(open(p)), sys.argv[1:])}) == 1
 PY
 

@@ -15,6 +15,7 @@
     "shared_state",
     "usage",
     "request_ids",
+    "origin_response_ids",
     "suite_pin_sha256",
     "tool_evidence_sha256"
   ],
@@ -76,6 +77,12 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^hermes-smoke-[a-f0-9-]{8,64}$"}
+    },
+    "origin_response_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^chatcmpl-[a-f0-9]{16}$"}
     },
     "suite_pin_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "tool_evidence_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}

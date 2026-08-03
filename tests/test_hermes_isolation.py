@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +13,22 @@ SCHEMA = ROOT / "deployments/private-smoke/schemas/hermes-result.schema.json"
 
 
 class HermesIsolationTest(unittest.TestCase):
+    def test_capture_proxy_extracts_only_stable_stream_response_ids(self):
+        path = HERMES / "capture-proxy.py"
+        spec = importlib.util.spec_from_file_location("hermes_capture_proxy", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        body = (
+            b'data: {"id":"chatcmpl-0123456789abcdef","choices":[{}]}\n\n'
+            b'data: {"id":"chatcmpl-0123456789abcdef","choices":[]}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        self.assertEqual(module.response_ids(body), ["chatcmpl-0123456789abcdef"])
+        self.assertEqual(module.response_ids(b'{"id":"chatcmpl-fedcba9876543210"}'), [
+            "chatcmpl-fedcba9876543210",
+        ])
+        self.assertEqual(module.response_ids(b'{"error":"synthetic"}'), [])
+
     def test_shell_entrypoints_parse(self):
         for script in sorted(HERMES.glob("*.sh")):
             with self.subTest(script=script.name):
@@ -99,6 +116,8 @@ class HermesIsolationTest(unittest.TestCase):
             "_dspark_workspace_writer", "at most one rotated default container",
             "summarize_request_diagnostics", "nested_arguments", "content_prefix",
             "observation_candidate", "Configuration is immutable",
+            "capture-proxy.py", "origin_response_ids", "start_capture_proxy",
+            "captured inference count does not match Hermes usage",
         ):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):
@@ -166,6 +185,7 @@ class HermesIsolationTest(unittest.TestCase):
         self.assertTrue({
             "schema_version", "run_id", "accepted", "provider", "model",
             "tasks", "negative_checks", "shared_state", "usage", "request_ids",
+            "origin_response_ids",
             "suite_pin_sha256",
             "tool_evidence_sha256",
         }.issubset(required))
