@@ -224,6 +224,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 benchmark_path, worker, gateway_url, gateway_key_path, origin_url, origin_key_path, duration_raw, interval_raw, output = sys.argv[1:]
 duration, interval = int(duration_raw), int(interval_raw)
@@ -254,29 +255,40 @@ def node_value(command, remote=False):
     argv = ["ssh", worker, command] if remote else ["bash", "-lc", command]
     return subprocess.check_output(argv, text=True, timeout=4).strip()
 
+def node_sample(remote=False):
+    output = node_value(
+        "awk '/MemAvailable/ {print $2/1024/1024}' /proc/meminfo; "
+        "docker inspect -f '{{.RestartCount}}' deepseek-v4-flash-vllm-dspark-1",
+        remote,
+    ).splitlines()
+    if len(output) != 2:
+        raise RuntimeError("node sample did not return memory and restart count")
+    return float(output[0]), int(output[1])
+
 def sampler():
     next_at = time.monotonic()
-    while not stop.is_set():
-        started = time.monotonic()
-        try:
-            head_mem = float(node_value("awk '/MemAvailable/ {print $2/1024/1024}' /proc/meminfo"))
-            worker_mem = float(node_value("awk '/MemAvailable/ {print $2/1024/1024}' /proc/meminfo", True))
-            head_restart = int(node_value("docker inspect -f '{{.RestartCount}}' deepseek-v4-flash-vllm-dspark-1"))
-            worker_restart = int(node_value("docker inspect -f '{{.RestartCount}}' deepseek-v4-flash-vllm-dspark-1", True))
-            metrics = prometheus()
-            node_rows.append((started, head_mem, worker_mem, head_restart, worker_restart))
-            specs = [float(line.rsplit(" ", 1)[1]) for line in metrics.splitlines() if "spec" in line.lower() and "accept" in line.lower() and not line.startswith("#")]
-            metric_rows.append((
-                metric(metrics, "vllm:num_requests_running"),
-                metric(metrics, "vllm:num_requests_waiting"),
-                metric(metrics, "vllm:kv_cache_usage_perc"),
-                metric(metrics, "vllm:num_preemptions_total"),
-                statistics.mean(specs) if specs else None,
-            ))
-        except Exception as error:
-            sample_errors.append(type(error).__name__)
-        next_at += interval
-        stop.wait(max(0.0, next_at - time.monotonic()))
+    with ThreadPoolExecutor(max_workers=2) as node_pool:
+        while not stop.is_set():
+            started = time.monotonic()
+            try:
+                head_future = node_pool.submit(node_sample)
+                worker_future = node_pool.submit(node_sample, True)
+                head_mem, head_restart = head_future.result()
+                worker_mem, worker_restart = worker_future.result()
+                metrics = prometheus()
+                node_rows.append((started, head_mem, worker_mem, head_restart, worker_restart))
+                specs = [float(line.rsplit(" ", 1)[1]) for line in metrics.splitlines() if "spec" in line.lower() and "accept" in line.lower() and not line.startswith("#")]
+                metric_rows.append((
+                    metric(metrics, "vllm:num_requests_running"),
+                    metric(metrics, "vllm:num_requests_waiting"),
+                    metric(metrics, "vllm:kv_cache_usage_perc"),
+                    metric(metrics, "vllm:num_preemptions_total"),
+                    statistics.mean(specs) if specs else None,
+                ))
+            except Exception as error:
+                sample_errors.append(type(error).__name__)
+            next_at += interval
+            stop.wait(max(0.0, next_at - time.monotonic()))
 
 def one_request(request_id):
     payload = json.dumps({

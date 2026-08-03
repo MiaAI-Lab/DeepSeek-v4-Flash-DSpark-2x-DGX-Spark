@@ -70,7 +70,6 @@ def main() -> int:
     args = parser.parse_args()
     values = parse_env(args.source)
 
-    head = dict(values)
     worker = {key: values[key] for key in COMMON_KEYS if key in values}
     worker.update({
         "NODE_RANK": "1",
@@ -86,7 +85,7 @@ def main() -> int:
         "VLLM_PORT": values.get("VLLM_PORT", "8889"),
         "VLLM_HOST_IP": values.get("WORKER_VLLM_HOST_IP", ""),
     })
-    write_env(args.head_output, head, COMMON_KEYS + HEAD_ONLY_KEYS + LOCAL_KEYS)
+    write_env(args.head_output, values, COMMON_KEYS + HEAD_ONLY_KEYS + LOCAL_KEYS)
     write_env(args.worker_output, worker, COMMON_KEYS + LOCAL_KEYS)
     return 0
 

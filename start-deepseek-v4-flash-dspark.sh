@@ -544,8 +544,11 @@ if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
 fi
 validate_compose
 
-if ! docker network inspect dspark-smoke >/dev/null 2>&1; then
-  docker network create --driver bridge --internal --subnet 172.30.0.0/24 --gateway 172.30.0.1 dspark-smoke >/dev/null
+network_create_status=0
+network_create_output="$(docker network create --driver bridge --internal --subnet 172.30.0.0/24 --gateway 172.30.0.1 dspark-smoke 2>&1)" || network_create_status=$?
+if [ "$network_create_status" -ne 0 ] && ! docker network inspect dspark-smoke >/dev/null 2>&1; then
+  printf '%s\n' "$network_create_output" >&2
+  exit "$network_create_status"
 fi
 network_config="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}} {{(index .IPAM.Config 0).Gateway}}' dspark-smoke)"
 [ "$network_config" = "172.30.0.0/24 172.30.0.1" ] || {

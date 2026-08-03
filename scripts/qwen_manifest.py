@@ -118,23 +118,25 @@ def supervisor_units() -> list[dict]:
 
 
 def litellm_success_count(model_names: tuple[str, ...]) -> dict:
-    result = subprocess.run(
+    process = subprocess.Popen(
         ["docker", "logs", "--since", "720h", "--tail", "200000", "plexiz-litellm"],
-        check=False, text=True, capture_output=True,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     count = 0
-    for line in (result.stdout + result.stderr).splitlines():
+    assert process.stdout is not None
+    for line in process.stdout:
         lower = line.lower()
         if any(name.lower() in lower for name in model_names) and any(
             marker in lower for marker in ('"status_code": 200', "status_code=200", "success")
         ):
             count += 1
+    returncode = process.wait()
     return {
         "source": "plexiz-litellm container logs",
         "window_hours": 720,
         "successful_line_count": count,
         "semantics": "lines containing a Qwen model name and an explicit 200/success marker",
-        "source_available": result.returncode == 0,
+        "source_available": returncode == 0,
     }
 
 
