@@ -47,6 +47,7 @@ services:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
       NO_DOCS: "True"
       PRISMA_HOME_DIR: /app/cache
+      PRISMA_QUERY_ENGINE_BINARY: /app/cache/.cache/prisma-python/binaries/5.4.2/ac9d7041ed77bcc8a8dbd2ab6616b39013829574/node_modules/prisma/query-engine-linux-arm64-openssl-3.0.x
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./secret-entrypoint.sh:/app/secret-entrypoint.sh:ro
