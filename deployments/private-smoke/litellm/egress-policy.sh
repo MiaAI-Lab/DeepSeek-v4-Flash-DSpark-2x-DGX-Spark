@@ -13,14 +13,16 @@ rule() {
 }
 
 apply_rule() {
-  local action="$1" source="$2" destination="$3" port="${4:-}" args=(INPUT -s "$source" -d "$destination")
+  local action="$1" source="$2" destination="$3" port="${4:-}"
+  local args=(INPUT -s "$source" -d "$destination")
   [ -z "$port" ] || args+=(-p tcp --dport "$port")
   args+=(-m comment --comment "$COMMENT" -j "$action")
   sudo iptables -C "${args[@]}" 2>/dev/null || sudo iptables -I "${args[@]}"
 }
 
 check_rule() {
-  local action="$1" source="$2" destination="$3" port="${4:-}" args=(INPUT -s "$source" -d "$destination")
+  local action="$1" source="$2" destination="$3" port="${4:-}"
+  local args=(INPUT -s "$source" -d "$destination")
   [ -z "$port" ] || args+=(-p tcp --dport "$port")
   args+=(-m comment --comment "$COMMENT" -j "$action")
   sudo iptables -C "${args[@]}"

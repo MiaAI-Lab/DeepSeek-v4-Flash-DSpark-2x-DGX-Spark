@@ -1,4 +1,7 @@
 from pathlib import Path
+import os
+import subprocess
+import tempfile
 import unittest
 
 
@@ -51,6 +54,21 @@ class PrivateGatewayTest(unittest.TestCase):
             "docker.sock", "1.1.1.1", "172.30.0.1", "4000", "no fallback",
         ):
             self.assertIn(required, text)
+
+    def test_egress_policy_builds_rules_under_nounset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            sudo = Path(temporary) / "sudo"
+            sudo.write_text("#!/bin/sh\nexit 0\n")
+            sudo.chmod(0o755)
+            environment = dict(os.environ)
+            environment["PATH"] = f"{temporary}:{environment['PATH']}"
+            result = subprocess.run(
+                [str(GATEWAY / "egress-policy.sh"), "--check"],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
