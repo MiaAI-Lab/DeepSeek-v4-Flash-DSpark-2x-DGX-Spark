@@ -26,6 +26,7 @@ DOCKER_HOST=""
 DOCKER_CONFIG_DIR=""
 STUB_PID=""
 CAPTURE_PID=""
+FAILURE_STAGE="initialization"
 
 usage() {
   echo "Usage: HERMES_SMOKE_BASE_URL=http://TAILNET_IP:4001/v1 HERMES_SMOKE_KEY_FILE=PATH $0 [--repeat N]" >&2
@@ -63,6 +64,12 @@ safe_remove_run_tmp() {
   esac
 }
 
+report_error_stage() {
+  local status="$1" line="$2"
+  echo "Hermes suite failed at safe stage '${FAILURE_STAGE}' (line ${line}, status ${status})." >&2
+  return "$status"
+}
+
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
@@ -97,6 +104,7 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT INT TERM
+trap 'report_error_stage "$?" "$LINENO"' ERR
 
 start_colima_profile() {
   local started_at=$SECONDS
@@ -811,6 +819,7 @@ stop_capture_proxy() {
 
 run_failure_probe() {
   local mode="$1" timeout="$2"
+  FAILURE_STAGE="failure-probe-${mode}"
   local probe_id="${RUN_ID}-${mode}"
   local port_file="$RUN_TMP/${mode}.port"
   local count_file="$RUN_TMP/${mode}.count"
@@ -934,7 +943,9 @@ PY
 snapshot_shared_state "$RUN_TMP/shared-before.json"
 
 echo "Starting isolated Colima profile $COLIMA_PROFILE (existing profiles are not modified)."
+FAILURE_STAGE="colima-start"
 start_colima_profile
+FAILURE_STAGE="colima-docker-readiness"
 for _ in $(seq 1 60); do
   [ -S "${DOCKER_HOST#unix://}" ] && DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" version >/dev/null 2>&1 && break
   sleep 1
@@ -966,26 +977,37 @@ for iteration in $(seq 1 "$REPEAT"); do
   capture_port_file="$RUN_TMP/gateway-capture-${iteration}.port"
   result_file="$OUTPUT_DIR/${request_id}.json"
 
+  FAILURE_STAGE="iteration-${iteration}-capture-start"
   start_capture_proxy "$capture_evidence" "$capture_port_file"
   capture_port="$(<"$capture_port_file")"
+  FAILURE_STAGE="iteration-${iteration}-profile-create"
   ALLOW_LOOPBACK_PROVIDER=1 "$CREATE_PROFILE" --home "$profile_home" \
     --base-url "http://127.0.0.1:${capture_port}/v1" \
     --key-file "$KEY_FILE" --request-id "$request_id"
+  FAILURE_STAGE="iteration-${iteration}-profile-inventory-before"
   assert_profile_inventory "$profile_home"
+  FAILURE_STAGE="iteration-${iteration}-prompt-build"
   write_prompt "$prompt_file"
+  FAILURE_STAGE="iteration-${iteration}-hermes"
   run_hermes "$profile_home" "$prompt_file" "$usage_file" "$response_file" "$observations" \
     "$workspace_evidence" "$writer_observation"
+  FAILURE_STAGE="iteration-${iteration}-capture-stop"
   stop_capture_proxy
+  FAILURE_STAGE="iteration-${iteration}-container-validation"
   validate_container_observations "$observations" "$profile_home"
 
   # The process-scoped environment and profile must not leave a gateway,
   # cron scheduler, MCP registry, skills, or memory. The terminal container
   # persists only long enough to recover its work product, then is removed.
+  FAILURE_STAGE="iteration-${iteration}-profile-inventory-after"
   assert_profile_inventory "$profile_home"
+  FAILURE_STAGE="iteration-${iteration}-shared-state"
   snapshot_shared_state "$RUN_TMP/shared-after-${iteration}.json"
+  FAILURE_STAGE="iteration-${iteration}-result-assembly"
   assemble_result "$request_id" "$usage_file" "$response_file" "$observations" "$workspace_evidence" \
     "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after-${iteration}.json" "$result_file" "$profile_home" \
     "$capture_evidence"
+  FAILURE_STAGE="iteration-${iteration}-container-cleanup"
   remove_hermes_containers
   [ -z "$(DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq --filter label=hermes-agent=1)" ] \
     || { echo "Hermes terminal container cleanup was incomplete." >&2; exit 1; }
@@ -994,6 +1016,7 @@ done
 
 # Final before/after guard covers the whole repeated suite, including every
 # independent HERMES_HOME. readlink/stat/sha256 metadata are in each snapshot.
+FAILURE_STAGE="final-shared-state"
 snapshot_shared_state "$RUN_TMP/shared-after.json"
 python3 - "$RUN_TMP/shared-before.json" "$RUN_TMP/shared-after.json" <<'PY'
 import json
