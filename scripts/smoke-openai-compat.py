@@ -87,7 +87,7 @@ def run_once(base_url: str, key: str, model: str) -> None:
         {
             "model": model,
             "messages": [{"role": "user", "content": "Think briefly, then answer: 2+2?"}],
-            "reasoning_effort": "low",
+            "chat_template_kwargs": {"thinking": True, "reasoning_effort": "low"},
             "temperature": 0,
         },
     )

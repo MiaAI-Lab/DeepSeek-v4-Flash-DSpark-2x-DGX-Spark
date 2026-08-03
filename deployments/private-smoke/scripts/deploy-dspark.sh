@@ -5,13 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.dspark}"
 MODE=""
+RESUME_RUN_DIR=""
 QWEN_STOPPED=0
 
-usage() { echo "Usage: deploy-dspark.sh --prepare-only|--direct-gate"; }
+usage() { echo "Usage: deploy-dspark.sh --prepare-only|--direct-gate|--resume-direct RUN_DIR"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --prepare-only) MODE="prepare" ;;
     --direct-gate) MODE="direct" ;;
+    --resume-direct) shift; MODE="resume"; RESUME_RUN_DIR="${1:-}" ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -45,10 +47,24 @@ if [ "$MODE" = "prepare" ]; then
   exit 0
 fi
 
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-RUN_DIR="$ROOT_DIR/artifacts/acceptance/$timestamp"
-mkdir -p "$RUN_DIR"
-chmod 0700 "$RUN_DIR"
+ACCEPTANCE_ROOT="$ROOT_DIR/artifacts/acceptance"
+if [ "$MODE" = "resume" ]; then
+  [ -n "$RESUME_RUN_DIR" ] && [ -d "$RESUME_RUN_DIR" ] || {
+    echo "--resume-direct requires an existing acceptance run directory." >&2
+    exit 1
+  }
+  acceptance_root="$(realpath "$ACCEPTANCE_ROOT")"
+  RUN_DIR="$(realpath "$RESUME_RUN_DIR")"
+  case "$RUN_DIR/" in
+    "$acceptance_root"/*/) ;;
+    *) echo "Resume run must be inside $acceptance_root." >&2; exit 1 ;;
+  esac
+else
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  RUN_DIR="$ACCEPTANCE_ROOT/$timestamp"
+  mkdir -p "$RUN_DIR"
+  chmod 0700 "$RUN_DIR"
+fi
 QWEN_MANIFEST="$RUN_DIR/qwen-manifest.json"
 PRESTOP_REPORT="$RUN_DIR/prestop-gates.json"
 FINAL_REPORT="$RUN_DIR/acceptance.json"
@@ -65,11 +81,27 @@ cleanup_failed_deploy() {
 }
 trap cleanup_failed_deploy ERR
 
-"$SCRIPT_DIR/inventory-qwen.sh" --output "$QWEN_MANIFEST"
-ENV_FILE="$ENV_FILE" "$SCRIPT_DIR/preflight.sh" --all \
-  --manifest "$QWEN_MANIFEST" --report "$PRESTOP_REPORT"
-"$SCRIPT_DIR/stop-qwen.sh" --manifest "$QWEN_MANIFEST" --gate-report "$PRESTOP_REPORT"
-QWEN_STOPPED=1
+if [ "$MODE" = "resume" ]; then
+  [ -f "$QWEN_MANIFEST" ] && [ -f "$PRESTOP_REPORT" ] || {
+    echo "Resume run is missing its Qwen manifest or pre-stop gate report." >&2
+    exit 1
+  }
+  [ ! -e "$FINAL_REPORT" ] || { echo "Resume run already has a final report." >&2; exit 1; }
+  "$SCRIPT_DIR/stop-qwen.sh" --verify-only
+  python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-live \
+    --manifest "$QWEN_MANIFEST" --max-age-hours 24
+  python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-report \
+    --manifest "$QWEN_MANIFEST" --report "$PRESTOP_REPORT" --max-age-hours 24 \
+    --required-gate fabric --required-gate artifacts
+  QWEN_STOPPED=1
+  echo "Resuming direct gate from verified stopped-Qwen evidence: $RUN_DIR"
+else
+  "$SCRIPT_DIR/inventory-qwen.sh" --output "$QWEN_MANIFEST"
+  ENV_FILE="$ENV_FILE" "$SCRIPT_DIR/preflight.sh" --all \
+    --manifest "$QWEN_MANIFEST" --report "$PRESTOP_REPORT"
+  "$SCRIPT_DIR/stop-qwen.sh" --manifest "$QWEN_MANIFEST" --gate-report "$PRESTOP_REPORT"
+  QWEN_STOPPED=1
+fi
 
 ENV_FILE="$ENV_FILE" "$ROOT_DIR/start-deepseek-v4-flash-dspark.sh"
 python3 "$ROOT_DIR/scripts/smoke-openai-compat.py" --profile direct --runs 2 \

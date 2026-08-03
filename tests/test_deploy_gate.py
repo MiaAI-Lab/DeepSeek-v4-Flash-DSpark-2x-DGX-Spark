@@ -22,10 +22,18 @@ class DeployGateTest(unittest.TestCase):
             "--direct-gate", "inventory-qwen.sh", "stop-qwen.sh",
             "start-deepseek-v4-flash-dspark.sh", "smoke-openai-compat.py",
             "benchmark.py", "collect-node-evidence.sh", "cleanup_failed_deploy",
+            "--resume-direct", "stop-qwen.sh\" --verify-only", "verify-report",
         ):
             self.assertIn(required, text)
         self.assertNotIn("docker start urbanplan-qwen", text)
         self.assertNotIn("compose start qwen", text)
+
+    def test_reasoning_smoke_uses_deepseek_v4_chat_template_contract(self):
+        text = (ROOT / "scripts/smoke-openai-compat.py").read_text()
+        self.assertIn(
+            '"chat_template_kwargs": {"thinking": True, "reasoning_effort": "low"}',
+            text,
+        )
 
     def test_prepare_transfers_one_exact_nccl_image_to_worker(self):
         text = (DEPLOY / "scripts/deploy-dspark.sh").read_text()
