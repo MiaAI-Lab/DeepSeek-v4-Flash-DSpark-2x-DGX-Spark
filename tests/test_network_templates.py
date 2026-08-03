@@ -115,6 +115,7 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn('export NCCL_IB_HCA="$HCA" NCCL_SOCKET_IFNAME="$IFACE"', script)
         self.assertIn('mpi_worker_host="${WORKER_HOST#*@}"', script)
         self.assertIn('$mpi_head_host:1,$mpi_worker_host:1', script)
+        self.assertIn('--mca btl self,vader,tcp', script)
         self.assertIn('"$mpi_runtime/bin/$test_binary" "$@"', script)
         self.assertNotIn('exec docker run', script)
 

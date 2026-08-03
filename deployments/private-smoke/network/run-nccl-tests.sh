@@ -60,6 +60,7 @@ done < <(env)
 timeout --signal=TERM --kill-after=10s "${NCCL_TEST_TIMEOUT_SECONDS}s" \
   env OPAL_PREFIX="$mpi_runtime" LD_LIBRARY_PATH="$mpi_runtime/lib" \
   "$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
-  --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
+  --mca btl self,vader,tcp --mca btl_tcp_if_include "$IFACE" \
+  --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
   "${mpi_export_args[@]}" \
   "$mpi_runtime/bin/$test_binary" "$@"
