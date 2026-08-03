@@ -39,7 +39,9 @@ terminal:
   home_mode: "profile"
   timeout: 120
   lifetime_seconds: 180
-  docker_image: "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+  # Hermes' Docker terminal backend invokes /bin/bash. Debian slim provides
+  # it; Alpine does not and fails every otherwise-valid tool call with 127.
+  docker_image: "python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
   container_cpu: 1
   container_memory: 1024
   container_disk: 2048

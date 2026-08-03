@@ -39,7 +39,7 @@ class HermesIsolationTest(unittest.TestCase):
             "docker_mount_cwd_to_workspace: false",
             "docker_forward_env: []",
             "docker_network: false",
-            "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df",
+            "python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
         ):
             self.assertIn(required, text)
         for forbidden in (
