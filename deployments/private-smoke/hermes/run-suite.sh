@@ -402,13 +402,18 @@ mode, port_path, count_path = sys.argv[1:]
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("content-length", "0"))
-        self.rfile.read(length)
+        payload = self.rfile.read(length)
+        try:
+            stream_requested = bool(json.loads(payload).get("stream", False))
+        except (AttributeError, json.JSONDecodeError):
+            stream_requested = False
         with Path(count_path).open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({
                 "method": "POST",
                 "path": self.path,
                 "request_id": self.headers.get("X-Request-ID", ""),
                 "sdk_retry_count": self.headers.get("X-Stainless-Retry-Count", ""),
+                "stream": stream_requested,
                 "user_agent": self.headers.get("User-Agent", ""),
             }, sort_keys=True) + "\n")
         if mode == "timeout":
