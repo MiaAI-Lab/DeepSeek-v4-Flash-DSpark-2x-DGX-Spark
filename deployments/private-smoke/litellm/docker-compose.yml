@@ -55,7 +55,9 @@ services:
       - ${LITELLM_DB_PASSWORD_FILE:?set LITELLM_DB_PASSWORD_FILE}:/run/secrets/database-password:ro
       # The generated Prisma client pins its engine under /root/.cache. Hide the
       # image's /root and expose only the immutable engine cache at that path.
+      # The migration CLI resolves the same cache through PRISMA_HOME_DIR.
       - prisma-cache:/root/.cache/prisma-python:ro
+      - prisma-cache:/app/cache/.cache/prisma-python:ro
     tmpfs:
       - /tmp:size=256m,mode=1777
       - /app/cache:size=64m,uid=1000,gid=1000,mode=0700

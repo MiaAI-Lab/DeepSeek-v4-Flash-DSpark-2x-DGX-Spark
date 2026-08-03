@@ -18,6 +18,7 @@ class PrivateGatewayTest(unittest.TestCase):
             "cap_drop", "ALL", "read_only: true", "no-new-privileges:true",
             "seccomp.json", "tmpfs", "internal: true", "ipv4_address",
             "PRISMA_HOME_DIR", "prisma-cache:/root/.cache/prisma-python:ro",
+            "prisma-cache:/app/cache/.cache/prisma-python:ro",
             "/root:size=1m,uid=0,gid=0,mode=0711",
             "dspark-private-litellm-prisma-cache", "external: true",
             "${HEAD_TAILSCALE_IP:?set HEAD_TAILSCALE_IP to the head tailnet address}:4001:4001",
