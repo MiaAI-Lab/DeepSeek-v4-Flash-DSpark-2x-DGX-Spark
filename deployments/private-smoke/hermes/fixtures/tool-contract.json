@@ -22,7 +22,7 @@
     "memory": "Rules and persistent memory injection are disabled.",
     "gateway": "No gateway, channel, cron, or supervisor is started.",
     "host_paths": "Mac mini home, SSH material, Hermes roots, and repositories are not mounted.",
-    "network": "Terminal containers use Docker network mode none."
+    "network": "The default work container uses Docker network mode none; the fixed Hermes backend metadata probe may use its compatibility bridge."
   },
   "expected_totals": {
     "personal_centavos": 97150,

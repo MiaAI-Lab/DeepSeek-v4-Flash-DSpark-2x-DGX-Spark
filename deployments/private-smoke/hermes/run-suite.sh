@@ -256,15 +256,19 @@ if not rows:
     raise SystemExit("no Hermes terminal container was observed")
 task_rows = {}
 for row in rows:
-    if row.get("HostConfig", {}).get("NetworkMode") != "none":
-        raise SystemExit("terminal container did not use --network=none")
+    labels = row.get("Config", {}).get("Labels") or {}
+    task_id = labels.get("hermes-task-id", "")
+    network_mode = row.get("HostConfig", {}).get("NetworkMode")
+    if task_id == "default" and network_mode != "none":
+        raise SystemExit("default work container did not use --network=none")
+    if task_id == "prompt-backend-probe" and network_mode not in {"none", "default", "bridge"}:
+        raise SystemExit(f"unsafe prompt backend probe network mode: {network_mode}")
     for mount in row.get("Mounts") or []:
         if not mount_is_safe(mount):
             raise SystemExit(
                 "unsafe terminal mount: "
                 f"{mount.get('Source', '')} -> {mount.get('Destination', '')}"
             )
-    labels = row.get("Config", {}).get("Labels") or {}
     if labels.get("hermes-agent") != "1" or "hermes-profile" not in labels:
         raise SystemExit("terminal container lacks Hermes isolation labels")
     task_rows.setdefault(labels.get("hermes-task-id", ""), []).append(row)

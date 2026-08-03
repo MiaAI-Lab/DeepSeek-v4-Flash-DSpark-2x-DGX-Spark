@@ -119,6 +119,8 @@ class HermesIsolationTest(unittest.TestCase):
         self.assertEqual({row["scope"] for row in transform["rows"]}, {"personal", "plexiz"})
         self.assertEqual(contract["allowed_toolsets"], ["terminal"])
         self.assertEqual(contract["network"], "none")
+        self.assertIn("default work container", contract["negative_checks"]["network"])
+        self.assertIn("metadata probe", contract["negative_checks"]["network"])
         self.assertEqual(contract["host_mounts"], [
             {
                 "source_scope": "isolated_profile_cache",
