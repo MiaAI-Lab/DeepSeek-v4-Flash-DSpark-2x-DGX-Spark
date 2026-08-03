@@ -93,11 +93,12 @@ class HermesIsolationTest(unittest.TestCase):
             "--provider", "custom:deepseek-smoke", "--model",
             "deepseek-v4-flash-0731-smoke", "--toolsets", "terminal",
             "--repeat", "docker.sock", "--network=none", '"$DOCKER_BIN" inspect',
-            "capture_workspace_evidence_if_present", "merge_workspace_writer_observation",
+            "capture_default_container_observation", "recover_tool_evidence",
+            "merge_workspace_writer_observation",
             "workspace writer observation lacks a container ID",
             "_dspark_workspace_writer", "at most one rotated default container",
             "summarize_request_diagnostics", "nested_arguments", "content_prefix",
-            "observation_candidate", "configuration is immutable",
+            "observation_candidate", "Configuration is immutable",
         ):
             self.assertIn(required, text)
         for forbidden in ("--safe-mode", "--ignore-user-config", "profile use"):
@@ -116,7 +117,7 @@ class HermesIsolationTest(unittest.TestCase):
         text = (HERMES / "run-suite.sh").read_text()
         for required in (
             "Your FIRST action MUST be exactly one terminal call",
-            "TERMINAL_EVIDENCE_OK",
+            "TERMINAL_EVIDENCE_JSON",
             "from decimal import Decimal",
             "probe.connect(('1.1.1.1', 53))",
             "assert not Path(host_path).exists()",

@@ -223,30 +223,70 @@ capture_containers() {
       done
 }
 
-capture_workspace_evidence_if_present() {
-  local destination="$1" writer_observation="$2"
-  local container candidate observation_candidate
-  candidate="${destination}.candidate"
+capture_default_container_observation() {
+  local writer_observation="$1"
+  local container observation_candidate
   observation_candidate="${writer_observation}.candidate"
   DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" ps -aq \
     --filter label=hermes-agent=1 --filter label=hermes-task-id=default \
     | while IFS= read -r container; do
         [ -n "$container" ] || continue
-        rm -f -- "$candidate" "$observation_candidate"
-        # Container configuration is immutable. Capture it before copying the
-        # file so a fast Hermes teardown cannot remove the writer between a
-        # successful docker cp and the confinement observation.
+        rm -f -- "$observation_candidate"
+        # Configuration is immutable and the tmpfs writer may exist for less
+        # than one polling interval. Capture confinement as soon as the
+        # default backend exists; the tool result independently proves that
+        # this backend completed the synthetic program.
         if DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" inspect \
-          --format '{{json .}}' "$container" >"$observation_candidate" 2>/dev/null \
-          && DOCKER_HOST="$DOCKER_HOST" "$DOCKER_BIN" cp \
-            "$container:/workspace/output.json" "$candidate" 2>/dev/null; then
-          chmod 0600 "$candidate"
-          mv -f -- "$candidate" "$destination"
+          --format '{{json .}}' "$container" >"$observation_candidate" 2>/dev/null; then
           chmod 0600 "$observation_candidate"
           mv -f -- "$observation_candidate" "$writer_observation"
         fi
       done
-  rm -f -- "$candidate" "$observation_candidate"
+  rm -f -- "$observation_candidate"
+}
+
+recover_tool_evidence() {
+  local profile_home="$1" destination="$2"
+  python3 - "$profile_home" "$destination" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+profile, destination = map(Path, sys.argv[1:])
+expected = {
+    "created": True,
+    "read": True,
+    "transformed": True,
+    "personal_centavos": 97150,
+    "plexiz_centavos": 276875,
+    "grand_total_centavos": 374025,
+    "host_paths_blocked": True,
+    "network_blocked": True,
+}
+evidence = []
+for dump_path in sorted(profile.rglob("request_dump_*.json")):
+    body = json.loads(dump_path.read_text(encoding="utf-8"))["request"]["body"]
+    for message in body.get("messages") or []:
+        if message.get("role") != "tool":
+            continue
+        try:
+            result = json.loads(str(message.get("content") or ""))
+        except json.JSONDecodeError:
+            continue
+        if result.get("exit_code") != 0:
+            continue
+        for line in str(result.get("output") or "").splitlines():
+            if line.startswith("TERMINAL_EVIDENCE_JSON="):
+                evidence.append(json.loads(line.split("=", 1)[1]))
+canonical = {json.dumps(item, sort_keys=True) for item in evidence}
+if canonical != {json.dumps(expected, sort_keys=True)}:
+    raise SystemExit("Hermes tool-result evidence is missing, conflicting, or incomplete")
+totals = {key: expected[key] for key in (
+    "personal_centavos", "plexiz_centavos", "grand_total_centavos"
+)}
+destination.write_text(json.dumps(totals, sort_keys=True) + "\n", encoding="utf-8")
+destination.chmod(0o600)
+PY
 }
 
 merge_workspace_writer_observation() {
@@ -402,7 +442,10 @@ run_hermes() {
     PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" TERM="${TERM:-dumb}" NO_COLOR=1 \
     HERMES_HOME="$profile_home" HERMES_SAFE_MODE=1 HERMES_IGNORE_RULES=1 \
     HERMES_TELEMETRY_DISABLED=1 HERMES_STREAM_RETRIES=0 \
-    HERMES_DUMP_REQUESTS="$HERMES_DUMP_REQUESTS" \
+    # Always record the redacted synthetic request history: Hermes destroys
+    # the tmpfs immediately after the tool result, so this is the durable
+    # source for the executed program's stdout contract.
+    HERMES_DUMP_REQUESTS=1 \
     DOCKER_HOST="$DOCKER_HOST" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
     "$HERMES_BIN" -z "$(<"$prompt_file")" \
       --usage-file "$usage_file" \
@@ -415,7 +458,7 @@ run_hermes() {
     # a turn. Recover the synthetic output while the writer is still alive;
     # the captured inspect row proves the writer itself had the required
     # network and mount confinement.
-    capture_workspace_evidence_if_present "$workspace_evidence" "$writer_observation"
+    capture_default_container_observation "$writer_observation"
     # An exited, unreaped child is still visible to kill -0 as a zombie.
     # Break so wait can collect its real exit status instead of timing out.
     process_state="$(ps -p "$hermes_pid" -o state= 2>/dev/null | tr -d '[:space:]')"
@@ -442,7 +485,11 @@ run_hermes() {
     wait "$hermes_pid" || status=$?
   fi
   [ "$status" -eq 0 ] || { echo "Hermes one-shot failed with status $status" >&2; return "$status"; }
-  capture_workspace_evidence_if_present "$workspace_evidence" "$writer_observation"
+  capture_default_container_observation "$writer_observation"
+  recover_tool_evidence "$profile_home" "$workspace_evidence" || {
+    summarize_request_diagnostics "$profile_home"
+    return 1
+  }
   [ -s "$workspace_evidence" ] && [ -s "$writer_observation" ] \
     || {
       echo "Hermes did not leave recoverable terminal workspace evidence." >&2
@@ -502,7 +549,15 @@ finally:
 assert network_blocked
 output_path.write_text(json.dumps(computed, sort_keys=True), encoding='utf-8')
 assert json.loads(output_path.read_text(encoding='utf-8')) == expected
-print('TERMINAL_EVIDENCE_OK')"""
+evidence = dict(computed)
+evidence.update({{
+    'created': True,
+    'read': True,
+    'transformed': True,
+    'host_paths_blocked': True,
+    'network_blocked': network_blocked,
+}})
+print('TERMINAL_EVIDENCE_JSON=' + json.dumps(evidence, sort_keys=True))"""
 prompt = f"""You are running a synthetic, isolated acceptance task. You have exactly one toolset: terminal.
 Your FIRST action MUST be exactly one terminal call. Do not run exploratory commands and do not nest an arguments object.
 Pass this exact multiline string as terminal's command argument:
@@ -512,7 +567,7 @@ python3 - <<'PY'
 PY
 
 The command creates, reads, validates, and transforms the synthetic expense fixture with Decimal arithmetic. It also proves the four host paths are absent and the network connection is blocked.
-Only after terminal returns TERMINAL_EVIDENCE_OK, return the fixed result below.
+Only after terminal returns TERMINAL_EVIDENCE_JSON with every expected field, return the fixed result below.
 
 Your final response must be exactly one line, with no markdown, in this form:
 HERMES_SMOKE_RESULT={{"created":true,"read":true,"transformed":true,"personal_centavos":97150,"plexiz_centavos":276875,"grand_total_centavos":374025,"host_paths_blocked":true,"network_blocked":true}}
