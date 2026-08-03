@@ -34,7 +34,7 @@ prepare_prisma_cache() {
     docker volume create --label dspark-smoke-cache=prisma "$PRISMA_CACHE_VOLUME" >/dev/null
   if docker run --rm --network none --read-only --cap-drop ALL \
       --security-opt no-new-privileges:true --user 1000:1000 \
-      -v "$PRISMA_CACHE_VOLUME:/cache:ro" --entrypoint test "$LITELLM_IMAGE" \
+      -v "$PRISMA_CACHE_VOLUME:/cache:ro" --entrypoint /usr/bin/test "$LITELLM_IMAGE" \
       -r "/cache/$PRISMA_CACHE_SENTINEL"; then
     return
   fi
@@ -44,7 +44,7 @@ prepare_prisma_cache() {
     'find /cache -mindepth 1 -delete; cp -a /root/.cache/prisma-python/. /cache/'
   docker run --rm --network none --read-only --cap-drop ALL \
     --security-opt no-new-privileges:true --user 1000:1000 \
-    -v "$PRISMA_CACHE_VOLUME:/cache:ro" --entrypoint test "$LITELLM_IMAGE" \
+    -v "$PRISMA_CACHE_VOLUME:/cache:ro" --entrypoint /usr/bin/test "$LITELLM_IMAGE" \
     -r "/cache/$PRISMA_CACHE_SENTINEL"
 }
 

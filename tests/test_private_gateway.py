@@ -54,7 +54,7 @@ class PrivateGatewayTest(unittest.TestCase):
             "prepare_prisma_cache", "--network none", "--read-only",
             "--cap-drop ALL", "no-new-privileges:true", "--user 1000:1000",
             "/root/.cache/prisma-python", "PRISMA_CACHE_SENTINEL",
-            "docker volume rm",
+            "docker volume rm", "--entrypoint /usr/bin/test",
         ):
             self.assertIn(required, text)
 
