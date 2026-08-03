@@ -96,13 +96,14 @@ class NetworkTemplatesTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-    def test_nccl_launcher_stages_remote_wrapper_and_cleans_up(self):
+    def test_nccl_launcher_extracts_pinned_host_runtime_and_cleans_up(self):
         script = (NETWORK / "run-nccl-tests.sh").read_text()
-        self.assertIn("scp -q", script)
-        self.assertIn('remote_wrapper="/tmp/dspark-nccl-wrapper-', script)
         self.assertIn('mpi_runtime="/tmp/dspark-openmpi-runtime-', script)
         self.assertIn('docker cp', script)
         self.assertIn('/opt/openmpi/.', script)
+        self.assertIn('/opt/nccl-tests/build/all_reduce_perf', script)
+        self.assertIn('/usr/lib/aarch64-linux-gnu/libnccl.so.2.28.9', script)
+        self.assertIn("ldd '$mpi_runtime/bin/all_reduce_perf'", script)
         self.assertIn('--prefix "$mpi_runtime"', script)
         self.assertIn('LD_LIBRARY_PATH="$mpi_runtime/lib', script)
         self.assertIn('OPAL_PREFIX="$mpi_runtime"', script)
@@ -110,17 +111,12 @@ class NetworkTemplatesTest(unittest.TestCase):
         self.assertIn("trap cleanup EXIT", script)
         self.assertIn('NCCL_TEST_TIMEOUT_SECONDS="${NCCL_TEST_TIMEOUT_SECONDS:-120}"', script)
         self.assertIn('timeout --signal=TERM --kill-after=10s', script)
-        self.assertIn('label=com.plexiz.dspark.nccl-run=', script)
-        self.assertIn('--label "com.plexiz.dspark.nccl-run=$NCCL_TEST_RUN_ID"', script)
-        self.assertIn("--network host --ipc host --pid host", script)
-        self.assertIn('--user "$rank_uid:$rank_gid"', script)
-        self.assertIn('group_args+=(--group-add "$gid")', script)
         self.assertIn('case "$key" in NCCL_*) mpi_export_args+=(-x "$key")', script)
-        self.assertIn("--volume /tmp:/tmp", script)
-        self.assertIn("--volume /run:/run", script)
+        self.assertIn('export NCCL_IB_HCA="$HCA" NCCL_SOCKET_IFNAME="$IFACE"', script)
         self.assertIn('mpi_worker_host="${WORKER_HOST#*@}"', script)
         self.assertIn('$mpi_head_host:1,$mpi_worker_host:1', script)
-        self.assertNotIn('  "$wrapper" "$@"', script)
+        self.assertIn('"$mpi_runtime/bin/$test_binary" "$@"', script)
+        self.assertNotIn('exec docker run', script)
 
 
 if __name__ == "__main__":

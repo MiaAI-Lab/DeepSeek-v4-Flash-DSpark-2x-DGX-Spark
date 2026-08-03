@@ -31,64 +31,29 @@ for host in "$HEAD_HOST" "$WORKER_HOST"; do
   run_host "$host" "docker image inspect '$NCCL_TESTS_IMAGE' >/dev/null"
 done
 
-# OpenMPI starts this wrapper once per host. The wrapper passes only the MPI
-# coordination variables into an isolated host-networked test container.
-wrapper="$(mktemp "${TMPDIR:-/tmp}/dspark-nccl-wrapper.XXXXXX")"
-remote_wrapper="/tmp/dspark-nccl-wrapper-$$-$RANDOM"
+# Extract the pinned diagnostic runtime to an identical path on both hosts.
+# Running the rank directly avoids crossing a Docker/PMIx security boundary:
+# the host daemons and rank processes retain the same UID and PMIx namespace.
 mpi_runtime="/tmp/dspark-openmpi-runtime-$$-$RANDOM"
-nccl_test_run_id="$$-$RANDOM"
 cleanup() {
-  find "$wrapper" -maxdepth 0 -type f -delete 2>/dev/null || true
   for host in "$HEAD_HOST" "$WORKER_HOST"; do
-    run_host "$host" "ids=\$(docker ps -aq --filter 'label=com.plexiz.dspark.nccl-run=$nccl_test_run_id'); [ -z \"\$ids\" ] || docker rm -f \$ids >/dev/null" 2>/dev/null || true
-    run_host "$host" "find '$remote_wrapper' -maxdepth 0 -type f -delete" 2>/dev/null || true
+    run_host "$host" "pkill -TERM -f '^$mpi_runtime/' 2>/dev/null || true; sleep 1; pkill -KILL -f '^$mpi_runtime/' 2>/dev/null || true" 2>/dev/null || true
     run_host "$host" "find '$mpi_runtime' -depth -delete" 2>/dev/null || true
   done
 }
 trap cleanup EXIT
 
-# Extract one identical OpenMPI runtime from the pinned image on both hosts.
-# This avoids mixing the host distribution's external PMIx with the image's
-# embedded PMIx when mpirun starts the containerized ranks.
+# Extract one identical OpenMPI runtime, nccl-tests binary, and NCCL library
+# from the pinned image on both hosts. CUDA and the NVIDIA driver remain the
+# host-provided DGX stack.
 for host in "$HEAD_HOST" "$WORKER_HOST"; do
-  run_host "$host" "set -e; mkdir -p '$mpi_runtime'; cid=\$(docker create '$NCCL_TESTS_IMAGE'); trap 'docker rm -f \"\$cid\" >/dev/null 2>&1 || true' EXIT; docker cp \"\$cid:/opt/openmpi/.\" '$mpi_runtime'; docker rm \"\$cid\" >/dev/null; trap - EXIT; OPAL_PREFIX='$mpi_runtime' LD_LIBRARY_PATH='$mpi_runtime/lib' '$mpi_runtime/bin/mpirun' -V | grep -F '4.1.6' >/dev/null"
-done
-
-cat >"$wrapper" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-env_args=()
-while IFS='=' read -r key _; do
-  case "$key" in OMPI_*|PMIX_*|NCCL_*|CUDA_VISIBLE_DEVICES) env_args+=(--env "$key") ;; esac
-done < <(env)
-rank_uid="$(id -u)"
-rank_gid="$(id -g)"
-group_args=()
-for gid in $(id -G); do
-  [ "$gid" = "$rank_gid" ] || group_args+=(--group-add "$gid")
-done
-exec docker run --rm --network host --ipc host --pid host --gpus all \
-  --user "$rank_uid:$rank_gid" "${group_args[@]}" \
-  --label "com.plexiz.dspark.nccl-run=$NCCL_TEST_RUN_ID" \
-  --volume /dev/infiniband:/dev/infiniband \
-  --volume /tmp:/tmp --volume /run:/run \
-  --ulimit memlock=-1:-1 \
-  "${env_args[@]}" \
-  --env NCCL_IB_HCA="$HCA" --env NCCL_SOCKET_IFNAME="$IFACE" \
-  "$NCCL_TESTS_IMAGE" "$@"
-EOF
-chmod 0700 "$wrapper"
-
-for host in "$HEAD_HOST" "$WORKER_HOST"; do
-  case "$host" in
-    localhost|127.0.0.1) install -m 0700 "$wrapper" "$remote_wrapper" ;;
-    *) scp -q "$wrapper" "$host:$remote_wrapper"; ssh "$host" "chmod 0700 '$remote_wrapper'" ;;
-  esac
+  run_host "$host" "set -e; mkdir -p '$mpi_runtime'; cid=\$(docker create '$NCCL_TESTS_IMAGE'); trap 'docker rm -f \"\$cid\" >/dev/null 2>&1 || true' EXIT; docker cp \"\$cid:/opt/openmpi/.\" '$mpi_runtime'; docker cp \"\$cid:/opt/nccl-tests/build/all_reduce_perf\" '$mpi_runtime/bin/all_reduce_perf'; docker cp \"\$cid:/usr/lib/aarch64-linux-gnu/libnccl.so.2.28.9\" '$mpi_runtime/lib/libnccl.so.2'; docker rm \"\$cid\" >/dev/null; trap - EXIT; chmod 0755 '$mpi_runtime/bin/all_reduce_perf'; OPAL_PREFIX='$mpi_runtime' LD_LIBRARY_PATH='$mpi_runtime/lib' '$mpi_runtime/bin/mpirun' -V | grep -F '4.1.6' >/dev/null; LD_LIBRARY_PATH='$mpi_runtime/lib' ldd '$mpi_runtime/bin/all_reduce_perf' | grep -F 'not found' && exit 1 || true"
 done
 
 mpi_head_host="${HEAD_HOST#*@}"
 mpi_worker_host="${WORKER_HOST#*@}"
-mpi_export_args=(-x HCA -x IFACE -x NCCL_TEST_RUN_ID="$nccl_test_run_id")
+export NCCL_IB_HCA="$HCA" NCCL_SOCKET_IFNAME="$IFACE"
+mpi_export_args=(-x HCA -x IFACE)
 while IFS='=' read -r key _; do
   case "$key" in NCCL_*) mpi_export_args+=(-x "$key") ;; esac
 done < <(env)
@@ -97,4 +62,4 @@ timeout --signal=TERM --kill-after=10s "${NCCL_TEST_TIMEOUT_SECONDS}s" \
   "$mpi_runtime/bin/mpirun" --prefix "$mpi_runtime" \
   --mca btl_tcp_if_include "$IFACE" --host "$mpi_head_host:1,$mpi_worker_host:1" -np 2 \
   "${mpi_export_args[@]}" \
-  "$remote_wrapper" "$@"
+  "$mpi_runtime/bin/$test_binary" "$@"
