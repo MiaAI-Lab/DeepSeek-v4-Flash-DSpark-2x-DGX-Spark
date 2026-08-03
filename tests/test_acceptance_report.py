@@ -66,7 +66,8 @@ class AcceptanceReportTest(unittest.TestCase):
             "cleanup_failed_acceptance", "cleanup-acceptance.sh",
             "public_gateway_unchanged", "purge_eligible", "sample_error_limit",
             "BatchMode=yes", "ConnectTimeout=3", "ConnectionAttempts=1",
-            "benchmark_spend_count", "wait_for_benchmark_spend", "client_request_id",
+            "benchmark_spend_count", "wait_for_benchmark_spend", "origin_request_id",
+            "WHERE t.request_id IN",
         ):
             self.assertIn(required, text)
         for forbidden in ("docker start urbanplan-qwen", "compose start qwen", "purge-qwen.sh --gate-report"):

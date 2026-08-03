@@ -176,15 +176,19 @@ import sys
 
 benchmark = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 rows = [benchmark["cold"], *benchmark["discarded_warmups"], *benchmark["samples"]]
-request_ids = [row["client_request_id"] for row in rows]
+# LiteLLM 1.92.0 keys LiteLLM_SpendLogs.request_id from the response object's
+# id (get_spend_logs_id), not from the caller's X-Request-ID header.  The
+# benchmark records that streamed response id as origin_request_id.  Match the
+# database primary key exactly so message logging can remain disabled.
+request_ids = [row["origin_request_id"] for row in rows]
 if len(request_ids) != 24 or len(set(request_ids)) != 24:
-    raise SystemExit("benchmark request IDs are missing or duplicated")
-if not all(re.fullmatch(r"dspark-(?:cold|warmup|measured)-[a-f0-9-]{36}", item) for item in request_ids):
-    raise SystemExit("benchmark request ID format is invalid")
-patterns = ",".join("'%" + item + "%'" for item in request_ids)
+    raise SystemExit("benchmark origin response IDs are missing or duplicated")
+if not all(re.fullmatch(r"chatcmpl-[a-f0-9]{16}", item) for item in request_ids):
+    raise SystemExit("benchmark origin response ID format is invalid")
+ids = ",".join("'" + item + "'" for item in request_ids)
 print(
     'SELECT count(*) FROM "LiteLLM_SpendLogs" AS t '
-    f'WHERE to_jsonb(t)::text LIKE ANY (ARRAY[{patterns}]::text[]);'
+    f'WHERE t.request_id IN ({ids});'
 )
 PY
 }
