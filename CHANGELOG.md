@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Raise `DEFAULT_THINKING` from `low` to `max`** in `.env.dspark.example`, enabling full reasoning effort by default. Request-level overrides still take precedence.
 - Make `deepseek-ai/DeepSeek-V4-Flash-0731` the default checkpoint for the two-Spark 1M profile.
 - Document the 0731 encoding, parser, and vision boundaries.
 - Add a streaming benchmark sweep that reports observed TTFT, output throughput, and aggregate throughput without imposing a server-side output cap.
