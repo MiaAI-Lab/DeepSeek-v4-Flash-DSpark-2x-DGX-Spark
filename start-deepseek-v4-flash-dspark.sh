@@ -398,6 +398,13 @@ print_resolved_profile() {
   echo "  worker dir: $WORKER_DIR"
   echo "  worker cache: ${WORKER_HF_CACHE:-${HF_CACHE:-}}"
   echo "  GB10 vLLM patch: $ENABLE_VLLM_GB10_PATCH"
+  if [ "${DSPARK_SKIP_HOTFIX:-0}" = "1" ]; then
+    echo "  Issue #22 hotfix: SKIPPED (DSPARK_SKIP_HOTFIX=1)"
+  elif [ -f "$SCRIPT_DIR/patches/hotfix-nvfp4-ds-mla-issue22.sh" ]; then
+    echo "  Issue #22 hotfix: will apply on start"
+  else
+    echo "  Issue #22 hotfix: not found"
+  fi
   if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
     echo "  GB10 vLLM patch dir: $VLLM_GB10_PATCH_DIR"
     echo "  GB10 hybrid NVFP4 M threshold: ${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}"
@@ -473,6 +480,11 @@ scp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_COMPOSE_FILE}"
 scp "$ENV_FILE" "${WORKER_HOST}:${REMOTE_ENV_FILE}"
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
 scp "$DSPARK_PROPOSER_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
+DSPARK_HOTFIX_FILE="$SCRIPT_DIR/patches/hotfix-nvfp4-ds-mla-issue22.sh"
+if [ -f "$DSPARK_HOTFIX_FILE" ]; then
+  echo "Syncing Issue #22 hotfix to ${WORKER_HOST}:${WORKER_DIR}"
+  scp "$DSPARK_HOTFIX_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/hotfix-nvfp4-ds-mla-issue22.sh"
+fi
 if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
   echo "Syncing GB10 vLLM patch to ${WORKER_HOST}:${WORKER_DIR}/vllm_patch_gb10"
   tar -C "$VLLM_GB10_PATCH_DIR" \
@@ -488,6 +500,32 @@ remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP=
 
 echo "Starting DSpark head..."
 compose_base 0 "" up -d
+
+# ---- Apply Issue #22 hotfix (nvfp4_ds_mla long-context decode) ----
+# Patches vLLM inside the running containers, then restarts them so the
+# patched files take effect.  Idempotent — skips already-applied patches.
+# Set DSPARK_SKIP_HOTFIX=1 to opt out.
+DSPARK_HOTFIX_FILE="$SCRIPT_DIR/patches/hotfix-nvfp4-ds-mla-issue22.sh"
+if [ "${DSPARK_SKIP_HOTFIX:-0}" != "1" ] && [ -f "$DSPARK_HOTFIX_FILE" ]; then
+  echo "Applying Issue #22 hotfix (nvfp4_ds_mla long-context decode fix)..."
+  # Head container
+  if docker ps --format '{{.Names}}' | grep -qx "${PROJECT_NAME}-vllm-dspark-1"; then
+    docker cp "$DSPARK_HOTFIX_FILE" "${PROJECT_NAME}-vllm-dspark-1:/tmp/hotfix-nvfp4-ds-mla-issue22.sh"
+    docker exec "${PROJECT_NAME}-vllm-dspark-1" bash /tmp/hotfix-nvfp4-ds-mla-issue22.sh || true
+  fi
+  # Worker container (via SSH)
+  REMOTE_HOTFIX="${REMOTE_WORKER_DIR}/hotfix-nvfp4-ds-mla-issue22.sh"
+  ssh "$WORKER_HOST" "if [ -f '$REMOTE_HOTFIX' ]; then docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1' && docker cp '$REMOTE_HOTFIX' '${PROJECT_NAME}-vllm-dspark-1:/tmp/hotfix-nvfp4-ds-mla-issue22.sh' && docker exec '${PROJECT_NAME}-vllm-dspark-1' bash /tmp/hotfix-nvfp4-ds-mla-issue22.sh; fi" || true
+  # Restart both containers so vLLM picks up the patched files
+  echo "Restarting DSpark containers to apply hotfix..."
+  ssh "$WORKER_HOST" "$REMOTE_COMPOSE $(remote_nccl_env) NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml restart vllm-dspark" || true
+  compose_base 0 "" restart vllm-dspark || true
+  echo "Hotfix applied and containers restarted."
+else
+  if [ "${DSPARK_SKIP_HOTFIX:-0}" = "1" ]; then
+    echo "Skipping Issue #22 hotfix (DSPARK_SKIP_HOTFIX=1)."
+  fi
+fi
 
 echo "Waiting for DSpark vLLM API..."
 print_initial_startup_logs

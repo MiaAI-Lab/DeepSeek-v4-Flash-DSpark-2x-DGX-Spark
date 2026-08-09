@@ -135,3 +135,41 @@ prefilling), detection was skipped and the code fell through to the rectangular
 GSM8K N=8 (200 Q) — the load that crashed pre-fix — now completes with **0 errors**,
 93.5% accuracy vs 95.0% sequential, **97.5% per-question agreement** (quality-neutral
 within batch FP-nondeterminism).
+
+---
+
+## Issue #22 — `nvfp4_ds_mla` long-context decode regression
+
+### Symptom
+With `--kv-cache-dtype nvfp4_ds_mla` (the recipe default), decode throughput
+drops to ~1 tok/s at 600K+ context, while `fp8_ds_mla` maintains ~17 tok/s at
+the same context length. Short-context throughput (~66 tok/s) is unaffected.
+
+### Root cause
+`flashmla_sparse.py` line 880 dispatches `nvfp4_ds_mla` to the slow
+`_forward_bf16_kv` kernel path instead of the fast `_forward_fp8_kv` path.
+The584-byte KV layout is identical for both dtypes on DSV4; only the kernel
+dispatch differs.
+
+```python
+# Line 880 in flashmla_sparse.py
+use_fp8_cache = self.kv_cache_dtype == "fp8_ds_mla"
+# nvfp4_ds_mla → False → slow _forward_bf16_kv (~1 tok/s at 600K)
+# fp8_ds_mla   → True  → fast _forward_fp8_kv (~17 tok/s at 600K)
+```
+
+### Fix
+```python
+use_fp8_cache = self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")
+```
+
+### Hotfix for running containers
+```bash
+docker exec <container> bash /path/to/hotfix-nvfp4-ds-mla-issue22.sh
+# Then restart the vLLM process inside the container.
+```
+
+### File changed
+| file | change |
+|---|---|
+| `v1/attention/backends/mla/flashmla_sparse.py` | `use_fp8_cache` check: include `nvfp4_ds_mla` |
