@@ -2,8 +2,9 @@
 
 ## Unreleased
 
+- **Raise `DEFAULT_THINKING` from `low` to `max`** in `.env.dspark.example`, enabling full reasoning effort by default. Request-level overrides still take precedence.
 - Add U5 fail-closed rollout tooling: exact mode-0600 SHA-256 rollback bundles, validated PostgreSQL logical dump/restore, tmpfs-to-volume key-preserving migration, and worker-first reverse recovery.
-- Preserve intentional `unless-stopped` policies for the long-running private LiteLLM/PostgreSQL services while temporary DSpark services remain `restart: "no"`.
+- Preserve intentional restart policies: PostgreSQL remains `unless-stopped`, while LiteLLM and temporary DSpark services remain operator-controlled with `restart: "no"` so egress policy installation stays fail-closed across reboot.
 - Add authoritative pre-change scheduler baseline capture, pinned isolated Minefield execution, LiteLLM virtual-key rotation/revocation proof, external gateway auth-negative/positive checks, and prompt/reasoning log-leak canaries.
 - Expand acceptance evidence with process/API/semantic readiness, configured KV bytes and reported capacity, both ranks, memory PSI/headroom, prefix/speculative deltas, and exact Minefield coverage counts.
 
