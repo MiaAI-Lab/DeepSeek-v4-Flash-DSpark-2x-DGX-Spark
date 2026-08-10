@@ -1005,3 +1005,8 @@ blaming the DSpark weights.
 - The next max-sequence ladder to try is approximately 1.25M, 1.5M, then
   1.75M, with the same boot/log/speed gates. Raw KV math alone is not enough
   because DeepSeek V4 sparse MLA also allocates max-length-dependent workspaces.
+
+## Vision (experimental)
+
+Native MoonViT on vLLM/DSpark: see [docs/VISION.md](docs/VISION.md) and [PLAN-VISION.md](PLAN-VISION.md).
+

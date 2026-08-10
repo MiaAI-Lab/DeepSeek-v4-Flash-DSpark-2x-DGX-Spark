@@ -22,6 +22,8 @@ services:
       # Anemll layout (vLLM ships DSpark under v1/worker/gpu/spec_decode).
       # GB10 hybrid plugin tree for ENABLE_VLLM_GB10_PATCH=1 only.
       - ${VLLM_GB10_PATCH_DIR:-./vllm_patch_gb10}:/opt/vllm-gb10-hybrid-nvfp4
+      # MoonViT native vision plugin (ENABLE_MOONVIT=1 / DSV4_MOONVIT_ENABLED=1).
+      - ${VLLM_MOONVIT_PLUGIN_DIR:-./plugins/dsv4_moonvit_vllm}:/opt/dsv4-moonvit-vllm
       - ${DSPARK_TMP_HOST:-${HOME}/.cache/dspark-tmp}:/tmp
 
     # Env surface is split by runtime image:
@@ -42,6 +44,12 @@ services:
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "${VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:-0}"
       ENABLE_VLLM_GB10_PATCH: "${ENABLE_VLLM_GB10_PATCH:-0}"
       GB10_HYBRID_NVFP4_M_THRESHOLD: "${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}"
+      ENABLE_MOONVIT: "${ENABLE_MOONVIT:-0}"
+      DSV4_MOONVIT_ENABLED: "${DSV4_MOONVIT_ENABLED:-${ENABLE_MOONVIT:-0}}"
+      DSV4_MOONVIT_TOWER: "${DSV4_MOONVIT_TOWER:-}"
+      DSV4_MOONVIT_PROJECTOR: "${DSV4_MOONVIT_PROJECTOR:-}"
+      DSV4_MOONVIT_MAX_IMAGE_TOKENS: "${DSV4_MOONVIT_MAX_IMAGE_TOKENS:-512}"
+      VLLM_PLUGINS: "${VLLM_PLUGINS:-}"
 
       VLLM_USE_FLASHINFER_SAMPLER: "${VLLM_USE_FLASHINFER_SAMPLER:-1}"
       VLLM_USE_BREAKABLE_CUDAGRAPH: "${VLLM_USE_BREAKABLE_CUDAGRAPH:-0}"
@@ -107,6 +115,32 @@ services:
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";
           VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
         fi;
+        VLLM_MM_ARGS="";
+        if [ "$${ENABLE_MOONVIT:-0}" = "1" ] || [ "$${DSV4_MOONVIT_ENABLED:-0}" = "1" ]; then
+          python3 -m pip install -e /opt/dsv4-moonvit-vllm --no-deps;
+          if [ -n "$${VLLM_PLUGINS:-}" ]; then
+            export VLLM_PLUGINS="$${VLLM_PLUGINS},dsv4_moonvit";
+          else
+            export VLLM_PLUGINS="dsv4_moonvit";
+          fi;
+          if [ -z "$${DSV4_MOONVIT_TOWER:-}" ]; then
+            for candidate in /cache/huggingface/webbrain-0731-moonvit-src/vision_tower.safetensors /cache/huggingface/dsv4-0731-moonvit/vision_tower.safetensors; do
+              if [ -f "$${candidate}" ]; then export DSV4_MOONVIT_TOWER="$${candidate}"; break; fi;
+            done;
+          fi;
+          if [ -z "$${DSV4_MOONVIT_PROJECTOR:-}" ]; then
+            for candidate in /cache/huggingface/webbrain-0731-moonvit-src/mm_projector.safetensors /cache/huggingface/dsv4-0731-moonvit/mm_projector.safetensors; do
+              if [ -f "$${candidate}" ]; then export DSV4_MOONVIT_PROJECTOR="$${candidate}"; break; fi;
+            done;
+          fi;
+          # Disable mm processor cache: deepseek_v4 encodes literal "<image>" as
+          # ordinary text tokens; the cache path re-tokenizes the prompt without
+          # our HF input_ids and breaks placeholder binding.
+          # mm-encoder-tp-mode=data: replicate full MoonViT on each rank (no
+          # weight-sharded TP) so BF16 vision tower loads 1:1 from WebBrain.
+          VLLM_MM_ARGS="--limit-mm-per-prompt {\"image\":4} --mm-processor-cache-gb 0 --mm-encoder-tp-mode data";
+          echo "MoonViT enabled: plugins=$${VLLM_PLUGINS} tower=$${DSV4_MOONVIT_TOWER:-unset} projector=$${DSV4_MOONVIT_PROJECTOR:-unset} mm_tp=data";
+        fi;
         SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}";
         case "$${DEFAULT_THINKING:-low}" in
           off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":false}' ;;
@@ -121,6 +155,7 @@ services:
         --port ${VLLM_PORT:-8888}
         --trust-remote-code
         $${VLLM_QUANTIZATION_ARGS}
+        $${VLLM_MM_ARGS}
         --tensor-parallel-size 2
         --pipeline-parallel-size 1
         --kv-cache-dtype nvfp4_ds_mla

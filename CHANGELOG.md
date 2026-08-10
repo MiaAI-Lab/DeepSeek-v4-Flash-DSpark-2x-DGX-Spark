@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+- **`scripts/smoke-moonvit-colors.py`**: N-trial solid-color QA gate for native MoonViT vision (DSpark ON, temp=0). Fails (exit≠0) when pass rates miss thresholds (red ≥0.90, black/white ≥0.80, green/blue ≥0.50), asserts text-only `VISION_TEXT_OK`, and captures spec-decode counters into `results/smoke-mm-status.json`.
+- **Unit tests** (`tests/test_moonvit_units.py`): projector weight binding bit-exactness vs WebBrain safetensors, RGB channel-order check, no-pad NaViT math, smoke-gate answer matching. 20 passed / 1 skipped in the Anemll container.
+- **Multi-image support (experimental)**: `--limit-mm-per-prompt` raised from `{"image":1}` to `{"image":4}`. Plugin processor accepts N>1 images per request; each `<image>` placeholder expands independently with palette phase restarting at 0 per span. Covers clients that re-attach the same image every turn (multiturn fix) and genuine 2–4 image prompts. **Experimental / unvalidated** — WebBrain trained 1 image/prompt; quality with N>1 is not benchmarked.
+
+### Changed (vision findings, 2026-08-10)
+- **MoonViT solid-color flakiness root-caused**: adapter-intrinsic hue weakness (frontend embeddings near-collinear, rel_l2 0.03–0.19; projector amplifies luminance 1.5–2.2×). DSpark exonerated (`max_tokens=1` prefill-only still flips); prefix/encoder caches exonerated; preprocess/projector/palette verified faithful; backbone A/B (official vs abliterated, both staged) shows red fails on both (0/10 vs 4–5/10) — abliteration is not the cause. Honest pass rates: red ~40–50%, black 100%, white 60–80%, green 30–40%, blue 0%. See `results/moonvit-native-vision.md` §Goal-2, `docs/HANDOFF-VISION.md` §15, `docs/VISION.md` reliability table.
+
 ### Fixed
 - **`nvfp4_ds_mla` long-context decode regression ([Issue #22](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/22))**: `nvfp4_ds_mla` was dispatched to the slow `_forward_bf16_kv` kernel path instead of the fast `_forward_fp8_kv` path, causing ~16x decode slowdown at 600K+ context (1.0 tok/s vs 17.3 tok/s with `fp8_ds_mla`).  The 584-byte KV layout is identical for both dtypes on DSV4; only the kernel dispatch differed.
 

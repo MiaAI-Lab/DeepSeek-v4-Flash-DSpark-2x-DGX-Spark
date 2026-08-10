@@ -1,0 +1,112 @@
+{
+  "ts": "2026-08-10T00:02:51Z",
+  "model": "deepseek-v4-flash-0731-vision",
+  "base_url": "http://127.0.0.1:8888",
+  "protocol": {
+    "prompt": "What color is this solid image? One word: red/green/blue/black/white.",
+    "temperature": 0,
+    "image_size": 256,
+    "content_order": "text_then_image",
+    "thinking": false
+  },
+  "colors": {
+    "red": {
+      "trials": 10,
+      "hits": 3,
+      "errors": 0,
+      "pass_rate": 0.3,
+      "answers": [
+        "Red.",
+        "Red.",
+        "White.",
+        "Black.",
+        "Red.",
+        "White.",
+        "Black.",
+        "White.",
+        "White.",
+        "Black."
+      ],
+      "threshold": 0.9,
+      "ok": false
+    },
+    "black": {
+      "trials": 10,
+      "hits": 10,
+      "errors": 0,
+      "pass_rate": 1.0,
+      "answers": [
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black.",
+        "Black."
+      ],
+      "threshold": 0.8,
+      "ok": true
+    },
+    "white": {
+      "trials": 10,
+      "hits": 3,
+      "errors": 0,
+      "pass_rate": 0.3,
+      "answers": [
+        "White.",
+        "Red.",
+        "White.",
+        "Red.",
+        "Red.",
+        "Red.",
+        "Red.",
+        "Red.",
+        "White.",
+        "Red."
+      ],
+      "threshold": 0.8,
+      "ok": false
+    }
+  },
+  "text_only": {
+    "ok": true,
+    "content": "VISION_TEXT_OK"
+  },
+  "dspark": {
+    "before": {
+      "accepted_tokens": 64.0,
+      "draft_tokens": 126.0,
+      "per_pos": {
+        "0": 19.0,
+        "1": 18.0,
+        "2": 10.0,
+        "3": 10.0,
+        "4": 6.0,
+        "5": 1.0
+      },
+      "accept_rate": 0.5079
+    },
+    "after": {
+      "accepted_tokens": 142.0,
+      "draft_tokens": 360.0,
+      "per_pos": {
+        "0": 55.0,
+        "1": 52.0,
+        "2": 14.0,
+        "3": 13.0,
+        "4": 7.0,
+        "5": 1.0
+      },
+      "accept_rate": 0.3944
+    },
+    "ok": true
+  },
+  "ok": false,
+  "failures": [
+    "red: pass_rate 0.30 < 0.90",
+    "white: pass_rate 0.30 < 0.80"
+  ]
+}

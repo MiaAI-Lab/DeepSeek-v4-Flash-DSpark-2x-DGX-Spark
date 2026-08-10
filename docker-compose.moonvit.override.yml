@@ -1,0 +1,36 @@
+# MoonViT native vision override for docker-compose.dspark.yml
+#
+# Usage (head):
+#   export DSV4_MOONVIT_ENABLED=1
+#   docker compose -f docker-compose.dspark.yml -f docker-compose.moonvit.override.yml up -d
+#
+# Requires:
+#   - scripts/prepare-moonvit-model-dir.py staged model dir
+#   - plugins/dsv4_moonvit_vllm installed in the container at start
+#   - DSpark MTP-5 stays on (do not strip speculative-config)
+
+services:
+  vllm-dspark:
+    volumes:
+      - ${VLLM_MOONVIT_PLUGIN_DIR:-./plugins/dsv4_moonvit_vllm}:/opt/dsv4-moonvit-vllm
+      - ${DSV4_MOONVIT_SRC:-${HF_CACHE:-${HOME}/.cache/huggingface}/webbrain-0731-moonvit-src}:/cache/huggingface/webbrain-0731-moonvit-src:ro
+      - ${DSPARK_MOONVIT_MODEL_DIR:-${HF_CACHE:-${HOME}/.cache/huggingface}/dsv4-0731-moonvit}:/cache/huggingface/dsv4-0731-moonvit:ro
+
+    environment:
+      DSV4_MOONVIT_ENABLED: "${DSV4_MOONVIT_ENABLED:-1}"
+      DSV4_MOONVIT_TOWER: "${DSV4_MOONVIT_TOWER:-/cache/huggingface/webbrain-0731-moonvit-src/vision_tower.safetensors}"
+      DSV4_MOONVIT_PROJECTOR: "${DSV4_MOONVIT_PROJECTOR:-/cache/huggingface/webbrain-0731-moonvit-src/mm_projector.safetensors}"
+      DSV4_MOONVIT_MAX_IMAGE_TOKENS: "${DSV4_MOONVIT_MAX_IMAGE_TOKENS:-512}"
+      # Point serve at the overlay model dir (symlinks + vision config).
+      DSPARK_MODEL: "${DSPARK_MOONVIT_MODEL:-/cache/huggingface/dsv4-0731-moonvit}"
+      SERVED_MODEL_NAME: "${SERVED_MODEL_NAME_VISION:-deepseek-v4-flash-0731-vision}"
+      # Slightly lower util to leave room for ~0.9GB BF16 tower+projector.
+      GPU_MEMORY_UTILIZATION: "${GPU_MEMORY_UTILIZATION_VISION:-0.78}"
+      VLLM_PLUGINS: "${VLLM_PLUGINS:-dsv4_moonvit}"
+
+    # Prepend plugin install + mm limit into the existing bash -lc serve command
+    # via a thin wrapper entrypoint override is hard with the multi-line command;
+    # start-deepseek-v4-flash-dspark.sh + ENABLE_MOONVIT=1 is the preferred path.
+    # When using compose alone, set:
+    #   ENABLE_MOONVIT_COMPOSE=1
+    # and use the command fragment below by exporting COMPOSE_MOONVIT=1 in start script.

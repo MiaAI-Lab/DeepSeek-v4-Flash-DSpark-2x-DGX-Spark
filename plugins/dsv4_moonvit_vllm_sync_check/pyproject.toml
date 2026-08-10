@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsv4-moonvit-vllm"
+version = "0.1.0"
+description = "Native MoonViT + PatchMerger vision plugin for DeepSeek-V4-Flash-0731 on vLLM/DSpark"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.entry-points."vllm.general_plugins"]
+dsv4_moonvit = "dsv4_moonvit_vllm:register"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dsv4_moonvit_vllm*"]
+
+[tool.setuptools.package-data]
+dsv4_moonvit_vllm = ["palette64.json"]
