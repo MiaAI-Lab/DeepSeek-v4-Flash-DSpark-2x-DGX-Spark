@@ -66,17 +66,21 @@ logic ships inside the image rather than as a host bind-mount.
 - model: `deepseek-ai/DeepSeek-V4-Flash-0731` (HF hub id; resolved offline from cache when `HF_HUB_OFFLINE=1`)
 - `max_model_len=1048576` (**1M** — keep this as the documented default)
 - `max_num_seqs=6`
-- `max_num_batched_tokens=8192`
+- `max_num_batched_tokens=8216`
+- `max_cudagraph_capture_size=32`
 - `kv_cache_dtype=nvfp4_ds_mla`
-- `gpu_memory_utilization=0.80`
+- `kv_cache_memory_bytes=12884901888` (12 GiB per rank)
+- `ENFORCE_EAGER=0`
 - `MTP_NUM_TOKENS=5` (checkpoint `dspark_block_size` is 5; k must be ≥ 5)
 - `DEFAULT_THINKING=low` (`off`, `low`, `high`, or `max`; request-level overrides still win)
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0` (keep regular CUDA graphs; Anemll auto-enables the slower breakable path when unset)
 - API bind address `0.0.0.0:8888`
 
-Local `.env.dspark` may lower `MAX_MODEL_LEN` (for example `512000`) or raise
-`MTP_NUM_TOKENS` / `GPU_MEMORY_UTILIZATION` for a specific cluster without
-changing the recipe default.
+Local `.env.dspark` may lower `MAX_MODEL_LEN` for a characterized profile.
+Fractional KV sizing is rollback-only: set `MEMORY_CONTROL=gpu-memory-utilization`
+and clear `KV_CACHE_MEMORY_BYTES`. Keep `GPU_MEMORY_UTILIZATION` explicit in
+both modes: pinned vLLM evaluates it as a startup admission/headroom guard
+before the explicit byte override controls KV sizing.
 
 > [!IMPORTANT]
 > This profile is meant for real deep-context agent serving: up to **1M tokens
@@ -91,8 +95,12 @@ changing the recipe default.
 > ```env
 > MAX_MODEL_LEN=1048576
 > MAX_NUM_SEQS=4
-> MAX_NUM_BATCHED_TOKENS=16384
-> GPU_MEMORY_UTILIZATION=0.87
+> MAX_NUM_BATCHED_TOKENS=8216
+> MAX_CUDAGRAPH_CAPTURE_SIZE=32
+> MEMORY_CONTROL=kv-cache-memory-bytes
+> KV_CACHE_MEMORY_BYTES=12884901888
+> GPU_MEMORY_UTILIZATION=0.80
+> ENFORCE_EAGER=0
 > ```
 
 This repo documents the validated 0731 1M NVFP4 agent profile, historical
@@ -135,7 +143,8 @@ Runtime:
 - served model name: `deepseek-v4-flash-0731`
 - `kv_cache_dtype=nvfp4_ds_mla`
 - recipe defaults: `max_model_len=1048576`, `max_num_seqs=6`,
-  `max_num_batched_tokens=8192`, `gpu_memory_utilization=0.80`, `MTP_NUM_TOKENS=5`
+  `max_num_batched_tokens=8216`, `max_cudagraph_capture_size=32`,
+  `kv_cache_memory_bytes=12884901888`, `MTP_NUM_TOKENS=5`, `ENFORCE_EAGER=0`
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0`
 - compose installs checkpoint `encoding/encoding_dsv4.py` into vLLM on both ranks
   (override with `DSPARK_ENCODING_FILE` when needed)
@@ -672,12 +681,14 @@ usage terms.
 | `docker-compose.stage-c.override.yml` | optional Stage-C-only env injection |
 | `start-deepseek-v4-flash-dspark.sh` | worker-first launch and smoke test; image must exist on both nodes |
 | `stop-deepseek-v4-flash-dspark.sh` | stops head and worker services |
-| `status-deepseek-v4-flash-dspark.sh` | shows head/worker container state |
+| `status-deepseek-v4-flash-dspark.sh` | cheap process/authenticated API liveness by default; `--semantic` adds one bounded generation |
 | `logs-deepseek-v4-flash-dspark.sh` | tails head/worker DSpark logs |
-| `smoke-deepseek-v4-flash-dspark.sh` | direct concurrent OpenAI-compatible smoke test |
+| `smoke-deepseek-v4-flash-dspark.sh` | explicit lifecycle smoke; failure intentionally stops both ranks |
 | `validate-dspark-config.sh` | renders and checks the local DSpark compose/env config |
 | `prepare-dspark-model-cache.sh` | downloads/verifies the model cache |
 | `scripts/benchmark-0731.py` | streaming concurrency/prefill sweep for the 0731 endpoint |
+| `scripts/probe-full-context.py` | authenticated near-max prefill/one-token-decode gate with memory/PSI evidence |
+| `scripts/benchmark-scheduler.py` | six-sequence MTP-5 scheduler gate with baseline latency and peak-memory evidence |
 | `results/deepseek-v4-flash-0731-2x-dgx-spark.json` | published two-Spark 0731 sweep measurements |
 | `build-dspark-vllm-runtime.sh` | optional Stage-C local image build (not required for Anemll) |
 | `recipe/overlay/` | Stage-C DSpark vLLM overlay sources for local image builds |
@@ -733,8 +744,12 @@ recipe default):
 - `VLLM_PORT=8888`
 - `MAX_MODEL_LEN=1048576` (**1M**)
 - `MAX_NUM_SEQS=6`
-- `MAX_NUM_BATCHED_TOKENS=8192`
-- `GPU_MEMORY_UTILIZATION=0.80`
+- `MAX_NUM_BATCHED_TOKENS=8216`
+- `MAX_CUDAGRAPH_CAPTURE_SIZE=32`
+- `MEMORY_CONTROL=kv-cache-memory-bytes`
+- `KV_CACHE_MEMORY_BYTES=12884901888`
+- `GPU_MEMORY_UTILIZATION=0.80` (startup admission/headroom guard; not KV sizing)
+- `ENFORCE_EAGER=0`
 - `MTP_NUM_TOKENS=5`
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0`
 - `HF_HUB_OFFLINE=1` after both nodes have a full model cache
@@ -845,17 +860,84 @@ unsupported `minimal`, `medium`, and `xhigh` levels:
 
 | Pi level | vLLM request |
 |---|---|
-| `off` | `chat_template_kwargs: {"thinking": false}` |
-| `low` | `chat_template_kwargs: {"thinking": true, "reasoning_effort": "low"}` |
-| `high` | `chat_template_kwargs: {"thinking": true, "reasoning_effort": "high"}` |
-| `max` | `chat_template_kwargs: {"thinking": true, "reasoning_effort": "max"}` |
+| `off` | `chat_template_kwargs: {"reasoning_effort": "none", "drop_thinking": false}` |
+| `low` | `chat_template_kwargs: {"thinking": true, "reasoning_effort": "low", "drop_thinking": false}` |
+| `high` | `chat_template_kwargs: {"thinking": true, "reasoning_effort": "high", "drop_thinking": false}` |
+| `max` | `chat_template_kwargs: {"thinking": true, "reasoning_effort": "max", "drop_thinking": false}` |
 
+Do not use `thinking: false` as the off switch: the pinned tokenizer accepts it
+without reliably disabling reasoning. Its effective off control is
+`reasoning_effort: "none"`; `thinking: true` is sent only for the enabled modes.
 Do not use pi's generic top-level OpenAI `reasoning_effort` mapping for this
 endpoint. The specialized DeepSeek V4 tokenizer reads these values from
-`chat_template_kwargs`. vLLM returns the generated reasoning in its `reasoning`
-stream field; pi recognizes that field, stores it as a thinking block, and
-replays it as `reasoning`. vLLM normalizes that to `reasoning_content` before
-the custom encoder runs, so tool-call reasoning is not lost.
+`chat_template_kwargs`. vLLM may return generated reasoning as `reasoning` or
+`reasoning_content`, but the pinned live request model preserves the replayed
+assistant history spelling `reasoning` at `/tokenize`; Pi uses that spelling.
+The custom encoder itself accepts both spellings when invoked directly.
+`drop_thinking: false` preserves the supported live history inside balanced
+`<think>...</think>` boundaries. Keep it explicit: omitting it restores the
+encoder default and drops prior assistant reasoning.
+
+## Private origin request and truncation contract
+
+The authenticated origin validates chat requests only at the exact request target
+`/v1/chat/completions`. Query strings, trailing or duplicate slashes,
+percent-encoded equivalents, and absolute-form targets are rejected with HTTP
+400 instead of bypassing validation. Other canonical vLLM routes continue to
+proxy normally. On the chat route, the body must be a JSON object and every
+top-level key must appear in the checked-in allowlist; an unsupported key is
+rejected before vLLM receives the request. Authentication still runs first, the
+32 MiB body ceiling still returns HTTP 413, and accepted streaming responses are
+flushed incrementally.
+
+The allowlist contract is
+[`scripts/chat-completion-request-fields.json`](scripts/chat-completion-request-fields.json).
+Its base is generated from `ChatCompletionRequest.model_fields` in the immutable
+runtime image and reconciled with the direct, LiteLLM, and Hermes request shapes
+used here. The proxy itself uses only the Python standard library and does not
+import Pydantic. Check the checked-in copies offline, then compare with the
+pinned container when changing the runtime image:
+
+```bash
+python3 scripts/verify-chat-completion-request-fields.py --check
+python3 scripts/verify-chat-completion-request-fields.py --check-container
+# After intentionally changing the pinned schema:
+python3 scripts/verify-chat-completion-request-fields.py --generate
+```
+
+A response with empty final `content` and `finish_reason: "length"` is a budget
+**truncation**, whether the response contains reasoning or not. It is not proof
+that the model is unavailable. Empty content with `finish_reason: "stop"`
+remains a semantic failure. The semantic smoke prints the cap-probe
+classification explicitly. Callers own any retry with a larger
+`max_completion_tokens`; the streaming origin proxy never retries or rewrites a
+completion.
+
+### Liveness versus semantic readiness
+
+`./status-deepseek-v4-flash-dspark.sh` checks both rank processes, immutable
+images, the origin authentication boundary, and authenticated model discovery;
+it does not generate tokens. Operators and deploy gates can request one
+non-destructive, thinking-off generation through both tensor-parallel ranks:
+
+```bash
+./status-deepseek-v4-flash-dspark.sh --semantic
+```
+
+The semantic canary has a 120-second generation wall deadline and reads its key
+from a regular mode-0600 file. A 401 is reported as `auth-required`, not
+`host-down`. A timed-out request accompanied by nonzero vLLM running/waiting
+metrics is `busy/degraded`; an idle timeout or generation failure is
+`unavailable/not-ready`. Status never stops or restarts the lane. Use
+`smoke-deepseek-v4-flash-dspark.sh` only for an explicit lifecycle check: that
+wrapper intentionally stops both ranks if its comprehensive reasoning,
+history, streaming, tool, validation, or cap-classification suite fails.
+
+Acceptance evidence records direct-origin and private-LiteLLM semantic canaries
+separately. Speculative acceptance is the before/after delta of
+`vllm:spec_decode_num_accepted_tokens_total` divided by the corresponding delta
+of `vllm:spec_decode_num_draft_tokens_total`, summed across labels. A zero draft
+delta is recorded as `null` and `not-observed`, never as a mean.
 
 ## Runtime Profile
 
@@ -983,13 +1065,15 @@ blaming the DSpark weights.
   confidence scheduler.
 - The **default** agent-serving profile is `DSPARK_MODEL=deepseek-ai/DeepSeek-V4-Flash-0731`,
   `SERVED_MODEL_NAME=deepseek-v4-flash-0731`,
-  `MAX_MODEL_LEN=1048576` (1M), `MAX_NUM_SEQS=6`, `MAX_NUM_BATCHED_TOKENS=8192`,
-  `GPU_MEMORY_UTILIZATION=0.80`, `MTP_NUM_TOKENS=5`,
-  `VLLM_USE_BREAKABLE_CUDAGRAPH=0`,
+  `MAX_MODEL_LEN=1048576` (1M), `MAX_NUM_SEQS=6`, `MAX_NUM_BATCHED_TOKENS=8216`,
+  `MAX_CUDAGRAPH_CAPTURE_SIZE=32`, `MEMORY_CONTROL=kv-cache-memory-bytes`,
+  `KV_CACHE_MEMORY_BYTES=12884901888`, `GPU_MEMORY_UTILIZATION=0.80` as the
+  separate pinned-runtime startup admission/headroom guard,
+  `MTP_NUM_TOKENS=5`, `ENFORCE_EAGER=0`, `VLLM_USE_BREAKABLE_CUDAGRAPH=0`,
   `DSPARK_VLLM_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1`,
   `VLLM_USE_FLASHINFER_SAMPLER=1`, `VLLM_USE_B12X_MOE=1`, no generation override.
-  Local `.env.dspark` may temporarily lower context (for example 512k) or raise
-  MTP / util without changing that recipe default.
+  The fractional `gpu-memory-utilization` selector is an explicit rollback
+  profile only; it is never combined with `KV_CACHE_MEMORY_BYTES`.
 - Worker-first startup avoids a race during multi-node `mp` initialization and
   validates rendered compose on both nodes before starting containers.
 - Requires matching images on both nodes, correct NCCL/RoCE settings, and a

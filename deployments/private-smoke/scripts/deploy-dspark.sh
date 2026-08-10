@@ -104,6 +104,9 @@ else
 fi
 
 ENV_FILE="$ENV_FILE" "$ROOT_DIR/start-deepseek-v4-flash-dspark.sh"
+# The deploy gate is a bounded, non-destructive generation. The comprehensive
+# direct suite below remains lifecycle smoke and is never called by status.
+ENV_FILE="$ENV_FILE" "$ROOT_DIR/status-deepseek-v4-flash-dspark.sh" --semantic
 python3 "$ROOT_DIR/scripts/smoke-openai-compat.py" --profile direct --runs 2 \
   --base-url "http://${VLLM_PROXY_HOST:-172.30.0.1}:${VLLM_PROXY_PORT:-8888}/v1" \
   --key-file "$VLLM_ORIGIN_KEY_FILE" \

@@ -71,13 +71,22 @@ Caricio's integration; the TonyD2Wild repo vendors those same files.
    VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1   # required for the ragged path
    ```
 
-5. **Restart worker-first**, wait for `/v1/models` → 200 (~5 min: load + cudagraph).
-
-6. **Verify** with the included smoke test (or any OpenAI-compatible client):
+5. **Restart worker-first**, then wait for cheap authenticated API readiness
+   (~5 min: load + cudagraph):
    ```bash
-   ./smoke-deepseek-v4-flash-dspark.sh
-   curl -fsS http://<head>:<port>/v1/models
+   ./status-deepseek-v4-flash-dspark.sh
    ```
+
+6. **Gate semantic readiness** with one authenticated generation (120-second
+   wall deadline, no stop/restart side effects):
+   ```bash
+   ./status-deepseek-v4-flash-dspark.sh --semantic
+   ```
+   The configured origin key must be a regular mode-0600 file. `auth-required`,
+   `host-down`, `busy/degraded`, and `unavailable/not-ready` are distinct
+   outcomes. Run `./smoke-deepseek-v4-flash-dspark.sh` only when explicitly
+   exercising the full lifecycle contract; that wrapper deliberately stops
+   both ranks after a comprehensive semantic-smoke failure.
 
 7. **Scale out (optional):** run a second patched TP=2 replica and put a
    least-connections router in front for ~2× aggregate / concurrency.

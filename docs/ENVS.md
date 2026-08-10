@@ -67,6 +67,9 @@ PY
 | `NCCL_*` / `TP_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME` | Fabric |
 | `HF_*` / `TRANSFORMERS_OFFLINE` | Hub cache behavior |
 | `MTP_NUM_TOKENS` | Consumed by compose command line (not a vLLM env registry key) |
+| `MEMORY_CONTROL` / `KV_CACHE_MEMORY_BYTES` / `GPU_MEMORY_UTILIZATION` | KV sizing selector/bytes plus the separate pinned-runtime startup admission guard |
+| `MAX_NUM_BATCHED_TOKENS` / `MAX_CUDAGRAPH_CAPTURE_SIZE` | Explicit pinned-runtime scheduler/capture limits |
+| `ENFORCE_EAGER` | `0` keeps CUDA graphs; `1` renders the pinned runtime's `--enforce-eager` rollback flag |
 
 ### B. Stage-C / overlay-registered only (warn + no-op on Anemll 0.1.1)
 
@@ -119,7 +122,10 @@ docker compose --env-file .env.dspark \
 
 Keep the slim set in `.env.dspark.example` + `docker-compose.dspark.yml`:
 
-- Serve profile: `MTP_NUM_TOKENS=5`, capture `max_num_seqs * (k+1)`, `GPU_MEMORY_UTILIZATION≈0.80`
+- Serve profile: `MTP_NUM_TOKENS=5`, `MAX_NUM_BATCHED_TOKENS=8216`, and `MAX_CUDAGRAPH_CAPTURE_SIZE=32`
+- Default memory: `MEMORY_CONTROL=kv-cache-memory-bytes`, `KV_CACHE_MEMORY_BYTES=12884901888`, and `GPU_MEMORY_UTILIZATION=0.80`; bytes exclusively size KV, while utilization is the pinned runtime's separate startup admission/headroom guard
+- Explicit fractional-KV rollback only: `MEMORY_CONTROL=gpu-memory-utilization`, empty `KV_CACHE_MEMORY_BYTES`, and a validated `(0,1]` `GPU_MEMORY_UTILIZATION`
+- `ENFORCE_EAGER=0`; set `1` only for a deliberate eager rollback
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0` (explicit opt-out; omission auto-enables the slower breakable path on DS4)
 - `VLLM_USE_B12X_MOE=1`
 - `CUTE_DSL_ARCH=sm_121a` (GB10 CuTeDSL target; prevents slower JIT fallbacks)

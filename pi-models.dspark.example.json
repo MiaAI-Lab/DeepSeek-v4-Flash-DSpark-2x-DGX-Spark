@@ -16,6 +16,7 @@
           "name": "DeepSeek V4 Flash 0731 (2x DGX Spark)",
           "reasoning": true,
           "thinkingLevelMap": {
+            "off": "none",
             "minimal": null,
             "low": "low",
             "medium": null,
@@ -36,12 +37,13 @@
             "thinkingFormat": "chat-template",
             "chatTemplateKwargs": {
               "thinking": {
-                "$var": "thinking.enabled"
+                "$var": "thinking.enabled",
+                "omitWhenOff": true
               },
               "reasoning_effort": {
-                "$var": "thinking.effort",
-                "omitWhenOff": true
-              }
+                "$var": "thinking.effort"
+              },
+              "drop_thinking": false
             }
           }
         }

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import unittest
 
 
@@ -28,12 +29,53 @@ class DeployGateTest(unittest.TestCase):
         self.assertNotIn("docker start urbanplan-qwen", text)
         self.assertNotIn("compose start qwen", text)
 
-    def test_reasoning_smoke_uses_deepseek_v4_chat_template_contract(self):
-        text = (ROOT / "scripts/smoke-openai-compat.py").read_text()
-        self.assertIn(
-            '"chat_template_kwargs": {"thinking": True, "reasoning_effort": "low"}',
-            text,
+    def test_all_advertised_reasoning_modes_use_effective_template_controls(self):
+        compose = (ROOT / "docker-compose.dspark.yml").read_text()
+        expected = {
+            "off": '{"reasoning_effort":"none","drop_thinking":false}',
+            "low": '{"thinking":true,"reasoning_effort":"low","drop_thinking":false}',
+            "high": '{"thinking":true,"reasoning_effort":"high","drop_thinking":false}',
+            "max": '{"thinking":true,"reasoning_effort":"max","drop_thinking":false}',
+        }
+        for mode, kwargs in expected.items():
+            with self.subTest(mode=mode):
+                self.assertIn(
+                    f"{mode}) DEFAULT_CHAT_TEMPLATE_KWARGS='{kwargs}'",
+                    compose,
+                )
+        # Characterize the audit finding: thinking=false is accepted but is not
+        # an effective off switch for the pinned encoder.
+        self.assertNotIn('DEFAULT_CHAT_TEMPLATE_KWARGS=\'{"thinking":false}\'', compose)
+
+        pi_model = json.loads((ROOT / "pi-models.dspark.example.json").read_text())
+        model = pi_model["providers"]["local-dspark"]["models"][0]
+        self.assertEqual(
+            {level for level, value in model["thinkingLevelMap"].items() if value is not None},
+            {"off", "low", "high", "max"},
         )
+        self.assertEqual(model["thinkingLevelMap"]["off"], "none")
+        kwargs = model["compat"]["chatTemplateKwargs"]
+        self.assertTrue(kwargs["thinking"]["omitWhenOff"])
+        self.assertNotIn("omitWhenOff", kwargs["reasoning_effort"])
+        self.assertFalse(kwargs["drop_thinking"])
+
+    def test_private_litellm_smoke_skips_origin_only_routes(self):
+        smoke = (ROOT / "scripts/smoke-openai-compat.py").read_text()
+        self.assertIn('profile in {"direct", "direct-origin"}', smoke)
+        self.assertIn("not public LiteLLM routes", smoke)
+
+    def test_semantic_smoke_enumerates_modes_and_history_field_variants(self):
+        text = (ROOT / "scripts/smoke-openai-compat.py").read_text()
+        for required in (
+            'THINKING_MODE_KWARGS', '"off": {"reasoning_effort": "none"',
+            '"low": {"thinking": True, "reasoning_effort": "low"',
+            '"high": {"thinking": True, "reasoning_effort": "high"',
+            '"max": {"thinking": True, "reasoning_effort": "max"',
+            'HISTORY_REASONING_FIELDS = ("reasoning", "reasoning_content")',
+            'LIVE_HISTORY_REASONING_FIELDS = ("reasoning",)',
+            '"drop_thinking": False', 'return_token_strs',
+        ):
+            self.assertIn(required, text)
 
     def test_prepare_transfers_one_exact_nccl_image_to_worker(self):
         text = (DEPLOY / "scripts/deploy-dspark.sh").read_text()
@@ -69,11 +111,21 @@ class DeployGateTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_deploy_uses_bounded_semantic_status_before_full_lifecycle_smoke(self):
+        deploy = (DEPLOY / "scripts/deploy-dspark.sh").read_text()
+        start_at = deploy.index("start-deepseek-v4-flash-dspark.sh")
+        semantic_at = deploy.index("status-deepseek-v4-flash-dspark.sh", start_at)
+        full_smoke_at = deploy.index("smoke-openai-compat.py", semantic_at)
+        self.assertLess(semantic_at, full_smoke_at)
+        self.assertIn("--semantic", deploy[semantic_at:full_smoke_at])
+
     def test_node_evidence_is_allowlisted_and_secret_free(self):
         schema = (DEPLOY / "schemas/node-evidence.schema.json").read_text()
         collector = (DEPLOY / "scripts/collect-node-evidence.sh").read_text()
         self.assertIn('"additionalProperties": false', schema)
         self.assertIn("node-evidence", collector)
+        self.assertIn("memory_psi_full_avg10=%s", collector)
+        self.assertIn("/proc/pressure/memory", collector)
         for forbidden in ("VLLM_API_KEY", "origin.key", "Authorization"):
             self.assertNotIn(forbidden, collector)
 

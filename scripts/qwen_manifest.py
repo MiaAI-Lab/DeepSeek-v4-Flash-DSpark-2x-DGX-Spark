@@ -247,14 +247,10 @@ def manifest_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify_live(manifest_path: Path, max_age_hours: float) -> None:
-    manifest = load_manifest(manifest_path)
-    age = datetime.now(timezone.utc) - parse_time(manifest["created_at"])
-    if age.total_seconds() < 0 or age.total_seconds() > max_age_hours * 3600:
-        raise RuntimeError("manifest is stale")
+def verify_current_identity(manifest: dict) -> dict:
     expected = manifest["container"]
     current = inspect_container(expected["name"])
-    labels = (current.get("Config", {}).get("Labels") or {})
+    labels = current.get("Config", {}).get("Labels") or {}
     checks = {
         "container_id": current.get("Id"),
         "image_id": current.get("Image"),
@@ -267,6 +263,39 @@ def verify_live(manifest_path: Path, max_age_hours: float) -> None:
         if expected.get(field) != value:
             raise RuntimeError(f"live Qwen identity changed: {field}")
     verify_targets(manifest)
+    return current
+
+
+def write_new_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as error:
+        raise RuntimeError(f"refusing to overwrite evidence output: {path}") from error
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+
+
+def refresh_stopped_manifest(manifest_path: Path, output: Path) -> None:
+    manifest = load_manifest(manifest_path)
+    current = verify_current_identity(manifest)
+    if current.get("State", {}).get("Running") is not False:
+        raise RuntimeError("stopped manifest refresh requires the Qwen container to be stopped")
+    refreshed = dict(manifest)
+    refreshed["original_created_at"] = manifest["created_at"]
+    refreshed["original_manifest_sha256"] = manifest_sha256(manifest_path)
+    refreshed["inventory_method"] = "stopped-identity-refresh"
+    refreshed["created_at"] = utc_now()
+    write_new_json(output, refreshed)
+
+
+def verify_live(manifest_path: Path, max_age_hours: float) -> None:
+    manifest = load_manifest(manifest_path)
+    age = datetime.now(timezone.utc) - parse_time(manifest["created_at"])
+    if age.total_seconds() < 0 or age.total_seconds() > max_age_hours * 3600:
+        raise RuntimeError("manifest is stale")
+    verify_current_identity(manifest)
 
 
 def verify_report(manifest_path: Path, report_path: Path, gates: list[str], max_age_hours: float) -> None:
@@ -353,6 +382,9 @@ def main() -> int:
     targets.add_argument("--manifest", type=Path, required=True)
     supervisors = sub.add_parser("verify-no-supervisors")
     supervisors.add_argument("--manifest", type=Path, required=True)
+    refresh = sub.add_parser("refresh-stopped")
+    refresh.add_argument("--manifest", type=Path, required=True)
+    refresh.add_argument("--output", type=Path, required=True)
     live = sub.add_parser("verify-live")
     live.add_argument("--manifest", type=Path, required=True)
     live.add_argument("--max-age-hours", type=float, default=24)
@@ -374,9 +406,10 @@ def main() -> int:
         else:
             if not args.output:
                 parser.error("inventory requires --output unless --check-only is used")
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(rendered)
-            args.output.chmod(0o600)
+            write_new_json(args.output, payload)
+        return 0
+    if args.command == "refresh-stopped":
+        refresh_stopped_manifest(args.manifest, args.output)
         return 0
     if args.command == "verify-targets":
         verify_targets(load_manifest(args.manifest))

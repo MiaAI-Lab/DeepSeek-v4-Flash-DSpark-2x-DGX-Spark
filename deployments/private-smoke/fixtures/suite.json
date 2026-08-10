@@ -25,7 +25,11 @@
     "max_requests_waiting": 0,
     "max_requests_running": 1,
     "max_rank_restarts": 0,
-    "max_preemptions": 0
+    "max_preemptions": 0,
+    "speculative_metrics": {
+      "accepted": "vllm:spec_decode_num_accepted_tokens_total",
+      "draft": "vllm:spec_decode_num_draft_tokens_total"
+    }
   },
   "synthetic_expenses": {
     "dataset": "synthetic-expenses",

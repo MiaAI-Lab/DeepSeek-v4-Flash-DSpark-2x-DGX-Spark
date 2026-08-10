@@ -18,12 +18,14 @@ LIVE_STARTED=0
 usage() {
   echo "Usage: $0 --validate-fixtures" >&2
   echo "       $0 --live [--run-dir PATH] [--hermes-results DIR]" >&2
+  echo "       $0 --resume-capacity [--run-dir PATH] [--hermes-results DIR]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --validate-fixtures) MODE="fixtures"; shift ;;
     --live) MODE="live"; shift ;;
+    --resume-capacity) MODE="resume-capacity"; shift ;;
     --run-dir) RUN_DIR="${2:?missing --run-dir value}"; shift 2 ;;
     --hermes-results) HERMES_RESULTS="${2:?missing --hermes-results value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -49,13 +51,17 @@ assert fixture["performance"] == {
 assert fixture["soak"]["duration_seconds"] == 1800
 assert fixture["soak"]["sample_interval_seconds"] == 5
 assert fixture["soak"]["concurrency"] == 1
+assert fixture["soak"]["speculative_metrics"] == {
+    "accepted": "vllm:spec_decode_num_accepted_tokens_total",
+    "draft": "vllm:spec_decode_num_draft_tokens_total",
+}
 assert fixture["synthetic_expenses"]["expected_grand_total_centavos"] == 374025
 PY
   python3 - <<'PY' | "$SANITIZER" --schema "$SCHEMA" >/dev/null
 import hashlib, json
 h = "a" * 64
 performance = {"median_decode_tokens_per_second": 55.0, "p95_ttft_seconds": 2.0, "request_count": 24, "origin_completion_delta": 24, "accepted": True}
-gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged")}
+gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged", "minefield", "external_gateway", "prompt_reasoning_canary", "full_context", "scheduler")}
 pins = {"model_revision": "b" * 40, "runtime_image_digest": "sha256:" + h, "repo_commit": "c" * 40, "config_sha256": h}
 pin_hash = hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 chain = []; previous = "0" * 64
@@ -64,13 +70,15 @@ for i in range(7):
   chain.append({"name": f"gate-{i}", "artifact_path": f"gate-{i}.json", "artifact_sha256": h, "previous_sha256": previous, "entry_sha256": entry})
   previous = entry
 print(json.dumps({
-  "schema_version": 1, "run_id": "fixture-run", "created_at": "2026-08-02T12:00:00Z",
+  "schema_version": 2, "run_id": "fixture-run", "created_at": "2026-08-02T12:00:00Z",
   "accepted": True, "manifest_sha256": h, "fixture_sha256": h, "pin_set_sha256": pin_hash,
   "chain_head_sha256": previous, "pins": pins,
   "gates": gates,
   "functional_runs": [{"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}, {"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}],
   "performance": {"direct": performance, "litellm": performance, "median_decode_overhead_ratio": 1.0, "p95_ttft_overhead_seconds": 0.1},
-  "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "sample_error_count": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 5.0, "min_worker_mem_available_gib": 5.0, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "speculative_acceptance_mean": None},
+  "semantic_readiness": {"direct_origin": {"state": "semantic-ready", "artifact_sha256": h}, "private_litellm": {"state": "semantic-ready", "artifact_sha256": h}},
+  "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "sample_error_count": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 9.0, "min_worker_mem_available_gib": 9.0, "max_memory_psi_full_avg10": 0.0, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "prefix_cache_queries_delta": 10.0, "prefix_cache_hits_delta": 6.0, "prefix_cache_reuse_ratio": 0.6, "speculative_accepted_tokens_delta": 0.0, "speculative_draft_tokens_delta": 0.0, "speculative_acceptance_ratio": None, "speculative_acceptance_observation": "not-observed"},
+  "rollout_evidence": {"process_readiness": {"head_running": True, "worker_running": True, "restart_count": 0}, "api_readiness": {"authenticated": True, "model_discovery": True}, "semantic_readiness": {"direct_origin": True, "private_litellm": True}, "kv_cache": {"configured_bytes": 12884901888, "reported_token_capacity": 1048576}, "rank_participation": {"world_size": 2, "both_ranks_participated": True}, "memory": {"min_head_mem_available_gib": 9.0, "min_worker_mem_available_gib": 9.0, "max_memory_psi_full_avg10": 0.0}, "prefix_cache": {"queries_delta": 10.0, "hits_delta": 6.0, "reuse_ratio": 0.6}, "speculative_decode": {"accepted_tokens_delta": 0.0, "draft_tokens_delta": 0.0, "acceptance_ratio": None}, "minefield": {"commit": "2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169", "executed": 20, "problem": 0, "inconclusive": 2, "unimplemented": 80}, "external_gateway": {"unauthenticated_status": 401, "authenticated_generation": True}, "prompt_reasoning_canaries_absent": True, "message_logging_disabled": True},
   "evidence_chain": chain, "purge_eligible": True,
 }))
 PY
@@ -113,6 +121,16 @@ GATEWAY_BENCHMARK="$RUN_DIR/benchmark-litellm.json"
 NODE_EVIDENCE="$RUN_DIR/node-evidence.json"
 NODE_EVIDENCE_AFTER="$RUN_DIR/node-evidence-after-soak.json"
 SOAK_EVIDENCE="$RUN_DIR/soak.json"
+DIRECT_SEMANTIC_EVIDENCE="$RUN_DIR/semantic-direct-origin.json"
+LITELLM_SEMANTIC_EVIDENCE="$RUN_DIR/semantic-private-litellm.json"
+MINEFIELD_EVIDENCE="$RUN_DIR/minefield.json"
+EXTERNAL_GATEWAY_EVIDENCE="$RUN_DIR/external-gateway-auth.json"
+CANARY_EVIDENCE="$RUN_DIR/prompt-reasoning-canary-absence.json"
+FULL_CONTEXT_EVIDENCE="$RUN_DIR/full-context.json"
+SCHEDULER_EVIDENCE="$RUN_DIR/scheduler-current.json"
+SCHEDULER_BASELINE="${SCHEDULER_BASELINE:-$ROOT_DIR/artifacts/health-rollout/scheduler-baseline.json}"
+PROMPT_LOG_CANARY="DSPARK_PROMPT_LOG_CANARY_U5_20260809"
+REASONING_LOG_CANARY="DSPARK_REASONING_LOG_CANARY_U5_20260809"
 FINAL_REPORT="$RUN_DIR/accepted.json"
 REJECTED_REPORT="$RUN_DIR/rejected.json"
 
@@ -147,6 +165,7 @@ cleanup_failed_acceptance() {
 trap cleanup_failed_acceptance ERR
 LIVE_STARTED=1
 
+if [ "$MODE" = "live" ]; then
 for required in "$QWEN_MANIFEST" "$DIRECT_INTERIM" "$DIRECT_BENCHMARK" "$NODE_EVIDENCE" "$FIXTURE"; do
   [ -f "$required" ] || { echo "Missing prerequisite evidence." >&2; false; }
 done
@@ -156,6 +175,11 @@ FAILURE_STAGE="preconditions"
 git -C "$ROOT_DIR" diff --quiet
 git -C "$ROOT_DIR" diff --cached --quiet
 ENV_FILE="$ENV_FILE" "$ROOT_DIR/status-deepseek-v4-flash-dspark.sh" --expect running
+python3 "$ROOT_DIR/scripts/smoke-openai-compat.py" \
+  --semantic-canary --profile direct-origin --wall-timeout 120 \
+  --base-url "http://${VLLM_PROXY_HOST:-172.30.0.1}:${VLLM_PROXY_PORT:-8888}/v1" \
+  --key-file "$VLLM_ORIGIN_KEY_FILE" --model "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}" \
+  --output "$DIRECT_SEMANTIC_EVIDENCE"
 [ "$(docker inspect -f '{{.State.Running}}' urbanplan-qwen 2>/dev/null)" = "false" ]
 python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-live --manifest "$QWEN_MANIFEST" --max-age-hours 24
 python3 - "$DIRECT_INTERIM" <<'PY'
@@ -208,14 +232,110 @@ wait_for_benchmark_spend() {
   return 1
 }
 
+check_canary_absence() {
+  local canary_since
+  canary_since="$(date --iso-8601=seconds)"
+  python3 - "$VLLM_ORIGIN_KEY_FILE" "$LITELLM_VIRTUAL_KEY_FILE" \
+    "http://${VLLM_PROXY_HOST:-172.30.0.1}:${VLLM_PROXY_PORT:-8888}/v1" \
+    "http://${HEAD_TAILSCALE_IP}:4001/v1" "$PROMPT_LOG_CANARY" "$REASONING_LOG_CANARY" <<'PY'
+import json
+from pathlib import Path
+import sys
+import urllib.request
+origin_key_path, gateway_key_path, origin, gateway, prompt_marker, reasoning_marker = sys.argv[1:]
+def send(base, key, model):
+    payload = {"model": model, "messages": [
+        {"role": "user", "content": "Return a short acknowledgement."},
+        {"role": "assistant", "content": "Acknowledged.", "reasoning_content": reasoning_marker},
+        {"role": "user", "content": prompt_marker},
+    ], "max_completion_tokens": 16, "temperature": 0,
+       "chat_template_kwargs": {"reasoning_effort": "none", "drop_thinking": False}}
+    request = urllib.request.Request(base.rstrip("/") + "/chat/completions",
+        data=json.dumps(payload, separators=(",", ":")).encode(),
+        headers={"Authorization": "Bearer " + Path(key).read_text().strip(), "Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=120) as response:
+        if response.status != 200 or not json.load(response).get("choices"):
+            raise SystemExit("canary generation failed")
+send(origin, origin_key_path, "deepseek-v4-flash-0731")
+send(gateway, gateway_key_path, "deepseek-v4-flash-0731-smoke")
+PY
+  grep -F 'turn_off_message_logging: true' "$SCRIPT_DIR/litellm/config.yaml" >/dev/null
+  local canary_logs
+  canary_logs="$(mktemp)"; chmod 0600 "$canary_logs"
+  if ! docker logs --since "$canary_since" deepseek-v4-flash-origin-auth-proxy-1 >>"$canary_logs" 2>&1 ||
+     ! docker logs --since "$canary_since" deepseek-v4-flash-vllm-dspark-1 >>"$canary_logs" 2>&1 ||
+     ! docker logs --since "$canary_since" dspark-private-litellm-litellm-1 >>"$canary_logs" 2>&1 ||
+     ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$WORKER_HOST" \
+       "docker logs --since $(printf '%q' "$canary_since") deepseek-v4-flash-vllm-dspark-1 2>&1" >>"$canary_logs"; then
+    rm -f "$canary_logs"
+    echo "Could not read every proxy/vLLM/LiteLLM canary log source" >&2
+    return 1
+  fi
+  if ! python3 - "$canary_logs" "$RUN_DIR" "$PROMPT_LOG_CANARY" "$REASONING_LOG_CANARY" <<'PY'
+from pathlib import Path
+import sys
+log_path, run_dir = map(Path, sys.argv[1:3])
+markers = [item.encode() for item in sys.argv[3:]]
+paths = [log_path, *sorted(path for path in run_dir.rglob("*") if path.is_file())]
+for path in paths:
+    content = path.read_bytes()
+    if any(marker in content for marker in markers):
+        raise SystemExit("prompt/reasoning canary leaked into logs or evidence")
+PY
+  then
+    rm -f "$canary_logs"
+    return 1
+  fi
+  rm -f "$canary_logs"
+  printf '%s\n' '{"schema_version":1,"prompt_reasoning_canaries_absent":true,"message_logging_disabled":true}' \
+    | "$SANITIZER" --scan-only --output "$CANARY_EVIDENCE"
+}
+
 FAILURE_STAGE="gateway"
+python3 "$ROOT_DIR/scripts/smoke-openai-compat.py" \
+  --semantic-canary --profile private-litellm --wall-timeout 120 \
+  --base-url "http://${HEAD_TAILSCALE_IP}:4001/v1" \
+  --key-file "$LITELLM_VIRTUAL_KEY_FILE" --model deepseek-v4-flash-0731-smoke \
+  --output "$LITELLM_SEMANTIC_EVIDENCE"
 "$SCRIPT_DIR/litellm/smoke.sh" --all-interfaces
+EXTERNAL_LITELLM_BASE_URL="${EXTERNAL_LITELLM_BASE_URL:-http://${HEAD_TAILSCALE_IP}:4001/v1}"
+python3 - "$EXTERNAL_LITELLM_BASE_URL" "$LITELLM_VIRTUAL_KEY_FILE" <<'PY' \
+  | "$SANITIZER" --scan-only --output "$EXTERNAL_GATEWAY_EVIDENCE"
+import json
+from pathlib import Path
+import sys
+import urllib.error
+import urllib.request
+base, key_path = sys.argv[1:]
+def call(token, body=None):
+    request = urllib.request.Request(base.rstrip("/") + ("/models" if body is None else "/chat/completions"),
+        data=None if body is None else json.dumps(body).encode(),
+        headers={} if token is None else {"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        status = error.code; error.close(); return status, {}
+unauthenticated_status, _ = call(None)
+if unauthenticated_status not in (401, 403):
+    raise SystemExit("external gateway did not enforce authentication")
+key = Path(key_path).read_text().strip()
+status, payload = call(key, {"model": "deepseek-v4-flash-0731-smoke", "messages": [{"role": "user", "content": "Reply exactly EXTERNAL_GATEWAY_OK."}], "max_completion_tokens": 32, "temperature": 0})
+if status != 200 or not payload.get("choices"):
+    raise SystemExit("external authenticated generation failed")
+print(json.dumps({"schema_version": 1, "unauthenticated_status": unauthenticated_status, "authenticated_generation": True}))
+PY
+python3 "$ROOT_DIR/scripts/run-minefield-pinned.py" \
+  --commit 2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169 \
+  --env-file "$ENV_FILE" --json "$MINEFIELD_EVIDENCE"
+"$SANITIZER" --scan-only --input "$MINEFIELD_EVIDENCE" >/dev/null
 python3 "$SCRIPT_DIR/scripts/benchmark.py" --layer litellm --warmups 3 --samples 20 --concurrency 1 \
   --base-url "http://${HEAD_TAILSCALE_IP}:4001/v1" --key-file "$LITELLM_VIRTUAL_KEY_FILE" \
   --model deepseek-v4-flash-0731-smoke \
   --origin-metrics-base-url "http://${VLLM_PROXY_HOST:-172.30.0.1}:${VLLM_PROXY_PORT:-8888}/v1" \
   --origin-key-file "$VLLM_ORIGIN_KEY_FILE" --output "$GATEWAY_BENCHMARK"
 wait_for_benchmark_spend "$GATEWAY_BENCHMARK" 24 >/dev/null
+check_canary_absence
 
 FAILURE_STAGE="hermes"
 mapfile -t hermes_files < <(find "$HERMES_RESULTS" -maxdepth 1 -type f -name 'hermes-smoke-*.json' -print | sort)
@@ -287,9 +407,9 @@ python3 - "$SCRIPT_DIR/scripts/benchmark.py" "$WORKER_HOST" \
 from __future__ import annotations
 import importlib.util
 import json
+import math
 from pathlib import Path
 import socket
-import statistics
 import subprocess
 import sys
 import threading
@@ -311,17 +431,37 @@ def prometheus():
     with bench.request(origin_url.removesuffix("/v1"), origin_key, "/metrics", timeout=30) as response:
         return response.read().decode()
 
-def metric(text, name, default=0.0):
+def metric(text, name):
     values = []
     for line in text.splitlines():
-        if line.startswith(name) and not line.startswith("#"):
-            try: values.append(float(line.rsplit(" ", 1)[1]))
-            except ValueError: pass
-    return sum(values) if values else default
+        if not line or line.startswith("#"):
+            continue
+        metric_name = line.split(None, 1)[0].split("{", 1)[0]
+        if metric_name == name:
+            try:
+                value = float(line.rsplit(None, 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if math.isfinite(value):
+                values.append(value)
+    if not values:
+        raise RuntimeError(f"required Prometheus metric is missing: {name}")
+    return sum(values)
 
 def spend_count():
     command = ["docker", "exec", "dspark-private-litellm-postgres-1", "psql", "-X", "-A", "-t", "-U", "litellm_smoke", "-d", "litellm_smoke", "-c", 'SELECT count(*) FROM "LiteLLM_SpendLogs";']
     return int(subprocess.check_output(command, text=True).strip())
+
+def settled_spend_count():
+    previous = spend_count()
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        current = spend_count()
+        if current == previous:
+            return current
+        previous = current
+    raise RuntimeError("LiteLLM spend counter did not settle before soak")
 
 def node_value(command, remote=False):
     argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "ConnectionAttempts=1", worker, command] if remote else ["bash", "-lc", command]
@@ -330,12 +470,13 @@ def node_value(command, remote=False):
 def node_sample(remote=False):
     output = node_value(
         "awk '/MemAvailable/ {print $2/1024/1024}' /proc/meminfo; "
-        "docker inspect -f '{{.RestartCount}}' deepseek-v4-flash-vllm-dspark-1",
+        "docker inspect -f '{{.RestartCount}}' deepseek-v4-flash-vllm-dspark-1; "
+        "awk '/^full / {for (i=1;i<=NF;i++) if ($i ~ /^avg10=/) {sub(/^avg10=/, \"\", $i); print $i}}' /proc/pressure/memory",
         remote,
     ).splitlines()
-    if len(output) != 2:
-        raise RuntimeError("node sample did not return memory and restart count")
-    return float(output[0]), int(output[1])
+    if len(output) != 3:
+        raise RuntimeError("node sample did not return memory, restart count, and memory PSI")
+    return float(output[0]), int(output[1]), float(output[2])
 
 def sampler():
     next_at = time.monotonic()
@@ -345,27 +486,33 @@ def sampler():
             try:
                 head_future = node_pool.submit(node_sample)
                 worker_future = node_pool.submit(node_sample, True)
-                head_mem, head_restart = head_future.result()
-                worker_mem, worker_restart = worker_future.result()
+                head_mem, head_restart, head_psi = head_future.result()
+                worker_mem, worker_restart, worker_psi = worker_future.result()
                 metrics = prometheus()
-                node_rows.append((started, head_mem, worker_mem, head_restart, worker_restart))
-                specs = [float(line.rsplit(" ", 1)[1]) for line in metrics.splitlines() if "spec" in line.lower() and "accept" in line.lower() and not line.startswith("#")]
+                node_rows.append((started, head_mem, worker_mem, head_restart, worker_restart, head_psi, worker_psi))
                 metric_rows.append((
                     metric(metrics, "vllm:num_requests_running"),
                     metric(metrics, "vllm:num_requests_waiting"),
                     metric(metrics, "vllm:kv_cache_usage_perc"),
                     metric(metrics, "vllm:num_preemptions_total"),
-                    statistics.mean(specs) if specs else None,
                 ))
             except Exception as error:
                 sample_errors.append(type(error).__name__)
             next_at += interval
             stop.wait(max(0.0, next_at - time.monotonic()))
 
+SOAK_SHARED_PREFIX = (
+    "Synthetic reliability context: validate deterministic service health, bounded "
+    "latency, memory headroom, queue stability, cache reuse, and error isolation. "
+) * 160
+
 def one_request(request_id):
     payload = json.dumps({
         "model": "deepseek-v4-flash-0731-smoke",
-        "messages": [{"role": "user", "content": f"Synthetic soak nonce {request_id}. Return a concise numbered reliability checklist."}],
+        "messages": [{"role": "user", "content": (
+            SOAK_SHARED_PREFIX
+            + f"\nRequest nonce {request_id}. Return a concise numbered reliability checklist."
+        )}],
         "max_tokens": 128, "temperature": 0.6, "top_p": 0.95, "stream": True,
         "stream_options": {"include_usage": True},
     }).encode()
@@ -385,9 +532,13 @@ def one_request(request_id):
         raise RuntimeError("incomplete soak stream")
 
 before_origin = bench.success_counter(origin_url, origin_key)
-before_gateway = spend_count()
+before_gateway = settled_spend_count()
 before_metrics = prometheus()
 preempt_before = metric(before_metrics, "vllm:num_preemptions_total")
+accepted_before = metric(before_metrics, "vllm:spec_decode_num_accepted_tokens_total")
+draft_before = metric(before_metrics, "vllm:spec_decode_num_draft_tokens_total")
+prefix_queries_before = metric(before_metrics, "vllm:prefix_cache_queries_total")
+prefix_hits_before = metric(before_metrics, "vllm:prefix_cache_hits_total")
 thread = threading.Thread(target=sampler, daemon=True); thread.start()
 started = time.monotonic(); deadline = started + duration
 request_count, failed, idle_gaps, prior_end = 0, 0, [], None
@@ -412,9 +563,24 @@ while after_gateway - before_gateway < request_count and time.monotonic() < dead
     time.sleep(1); after_gateway = spend_count()
 origin_delta = int(after_origin - before_origin)
 gateway_delta = after_gateway - before_gateway
-preempt_after = metric(prometheus(), "vllm:num_preemptions_total")
+after_metrics = prometheus()
+preempt_after = metric(after_metrics, "vllm:num_preemptions_total")
+accepted_after = metric(after_metrics, "vllm:spec_decode_num_accepted_tokens_total")
+draft_after = metric(after_metrics, "vllm:spec_decode_num_draft_tokens_total")
+prefix_queries_after = metric(after_metrics, "vllm:prefix_cache_queries_total")
+prefix_hits_after = metric(after_metrics, "vllm:prefix_cache_hits_total")
+prefix_queries_delta = prefix_queries_after - prefix_queries_before
+prefix_hits_delta = prefix_hits_after - prefix_hits_before
+prefix_cache_reuse_ratio = prefix_hits_delta / prefix_queries_delta if prefix_queries_delta > 0 else None
+accepted_delta = accepted_after - accepted_before
+draft_delta = draft_after - draft_before
+speculative_acceptance_ratio = (
+    accepted_delta / draft_delta if draft_delta > 0 else None
+)
+speculative_acceptance_observation = (
+    "observed" if draft_delta > 0 else "not-observed"
+)
 gaps = [node_rows[i][0] - node_rows[i-1][0] for i in range(1, len(node_rows))]
-spec_values = [row[4] for row in metric_rows if row[4] is not None]
 minimum_samples = int(duration / interval * 0.9)
 sample_error_limit = max(3, int(duration / interval * 0.01))
 accepted = all((
@@ -422,10 +588,15 @@ accepted = all((
     origin_delta == request_count, gateway_delta == request_count,
     len(sample_errors) <= sample_error_limit, len(node_rows) >= minimum_samples,
     max(idle_gaps or [0.0]) <= 1.0, max(gaps or [0.0]) <= interval * 2.5,
-    min(row[1] for row in node_rows) >= 4.0, min(row[2] for row in node_rows) >= 4.0,
+    min(row[1] for row in node_rows) >= 8.0, min(row[2] for row in node_rows) >= 8.0,
     max(row[3] for row in node_rows) == 0, max(row[4] for row in node_rows) == 0,
+    max(max(row[5], row[6]) for row in node_rows) == 0.0,
+    prefix_queries_delta > 0, prefix_hits_delta >= 0,
+    prefix_cache_reuse_ratio is not None and prefix_cache_reuse_ratio > 0.5,
     max(row[0] for row in metric_rows) <= 1, max(row[1] for row in metric_rows) == 0,
     preempt_after - preempt_before == 0,
+    accepted_delta >= 0, draft_delta >= 0,
+    accepted_delta <= draft_delta if draft_delta > 0 else accepted_delta == 0,
 ))
 result = {
     "accepted": accepted, "duration_seconds": elapsed, "sample_interval_seconds": interval,
@@ -435,13 +606,23 @@ result = {
     "max_idle_gap_seconds": round(max(idle_gaps or [0.0]), 6), "node_samples": len(node_rows),
     "min_head_mem_available_gib": round(min(row[1] for row in node_rows), 3),
     "min_worker_mem_available_gib": round(min(row[2] for row in node_rows), 3),
+    "max_memory_psi_full_avg10": round(max(max(row[5], row[6]) for row in node_rows), 6),
     "max_requests_running": max(row[0] for row in metric_rows),
     "max_requests_waiting": max(row[1] for row in metric_rows),
     "preemption_delta": preempt_after - preempt_before,
     "max_rank_restarts": max(max(row[3], row[4]) for row in node_rows),
     "max_node_sample_gap_seconds": round(max(gaps or [0.0]), 6),
     "kv_cache_usage_peak": max(row[2] for row in metric_rows),
-    "speculative_acceptance_mean": round(statistics.mean(spec_values), 6) if spec_values else None,
+    "prefix_cache_queries_delta": prefix_queries_delta,
+    "prefix_cache_hits_delta": prefix_hits_delta,
+    "prefix_cache_reuse_ratio": round(prefix_cache_reuse_ratio, 6),
+    "speculative_accepted_tokens_delta": accepted_delta,
+    "speculative_draft_tokens_delta": draft_delta,
+    "speculative_acceptance_ratio": (
+        round(speculative_acceptance_ratio, 6)
+        if speculative_acceptance_ratio is not None else None
+    ),
+    "speculative_acceptance_observation": speculative_acceptance_observation,
 }
 target = Path(output); target.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n"); target.chmod(0o600)
 if not accepted: raise SystemExit("soak acceptance thresholds failed")
@@ -449,22 +630,96 @@ PY
 "$SANITIZER" --scan-only <"$SOAK_EVIDENCE" >/dev/null
 "$SCRIPT_DIR/litellm/smoke.sh" --all-interfaces
 ENV_FILE="$ENV_FILE" "$SCRIPT_DIR/scripts/collect-node-evidence.sh" "$NODE_EVIDENCE_AFTER"
+else
+  FAILURE_STAGE="resume-capacity"
+  for required in     "$QWEN_MANIFEST" "$DIRECT_INTERIM" "$DIRECT_BENCHMARK" "$GATEWAY_BENCHMARK"     "$NODE_EVIDENCE_AFTER" "$SOAK_EVIDENCE" "$DIRECT_SEMANTIC_EVIDENCE"     "$LITELLM_SEMANTIC_EVIDENCE" "$MINEFIELD_EVIDENCE"     "$EXTERNAL_GATEWAY_EVIDENCE" "$CANARY_EVIDENCE" "$FIXTURE"; do
+    [ -f "$required" ] || { echo "Missing pre-capacity acceptance evidence: $required" >&2; false; }
+  done
+  [ ! -e "$FINAL_REPORT" ] || { echo "Refusing to overwrite accepted report." >&2; false; }
+  git -C "$ROOT_DIR" diff --quiet
+  git -C "$ROOT_DIR" diff --cached --quiet
+  ENV_FILE="$ENV_FILE" "$ROOT_DIR/status-deepseek-v4-flash-dspark.sh" --expect running
+  "$SCRIPT_DIR/litellm/smoke.sh" --all-interfaces
+  [ "$(docker inspect -f '{{.State.Running}}' urbanplan-qwen 2>/dev/null)" = "false" ]
+  python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-live     --manifest "$QWEN_MANIFEST" --max-age-hours 24
+  python3 - "$SOAK_EVIDENCE" <<'PY'
+import json, sys
+soak = json.load(open(sys.argv[1]))
+if soak.get("accepted") is not True or soak.get("duration_seconds", 0) < 1800:
+    raise SystemExit("resume requires an accepted full-duration soak")
+PY
+  mapfile -t hermes_files < <(find "$HERMES_RESULTS" -maxdepth 1 -type f -name 'hermes-smoke-*.json' -print | sort)
+  [ "${#hermes_files[@]}" -eq 2 ] || {
+    echo "Capacity resume requires exactly two Hermes result files." >&2
+    false
+  }
+fi
+
+FAILURE_STAGE="full-context"
+reuse_full_context=0
+if [ "$MODE" = "resume-capacity" ] && [ -e "$FULL_CONTEXT_EVIDENCE" ]; then
+  if python3 - "$FULL_CONTEXT_EVIDENCE" <<'PY'
+import json, os, sys, time
+path = sys.argv[1]
+report = json.load(open(path))
+age = time.time() - os.stat(path).st_mtime
+if age < 0 or age > 24 * 3600 or report.get("gate", {}).get("passed") is not True:
+    raise SystemExit(1)
+PY
+  then
+    reuse_full_context=1
+  else
+    attempt=1
+    previous_attempt="$FULL_CONTEXT_EVIDENCE.attempt-$attempt"
+    while [ -e "$previous_attempt" ]; do
+      attempt=$((attempt + 1))
+      previous_attempt="$FULL_CONTEXT_EVIDENCE.attempt-$attempt"
+    done
+    mv "$FULL_CONTEXT_EVIDENCE" "$previous_attempt"
+  fi
+fi
+if [ "$reuse_full_context" -eq 0 ]; then
+  python3 "$ROOT_DIR/scripts/probe-full-context.py" \
+    --env-file "$ENV_FILE" --key-file "$VLLM_ORIGIN_KEY_FILE" \
+    --output "$FULL_CONTEXT_EVIDENCE"
+fi
+"$SANITIZER" --scan-only <"$FULL_CONTEXT_EVIDENCE" >/dev/null
+
+FAILURE_STAGE="scheduler"
+[ -f "$SCHEDULER_BASELINE" ] || { echo "Missing scheduler baseline: $SCHEDULER_BASELINE" >&2; false; }
+python3 "$ROOT_DIR/scripts/benchmark-scheduler.py" \
+  --env-file "$ENV_FILE" --key-file "$VLLM_ORIGIN_KEY_FILE" \
+  --baseline "$SCHEDULER_BASELINE" --output "$SCHEDULER_EVIDENCE"
+"$SANITIZER" --scan-only <"$SCHEDULER_EVIDENCE" >/dev/null
 
 FAILURE_STAGE="report"
 [ -f "$ACTIVE_GATEWAY_SNAPSHOT" ] || { echo "Missing active gateway snapshot." >&2; false; }
 GATEWAY_SNAPSHOT_EVIDENCE="$RUN_DIR/active-gateway-snapshot.json"
 cp "$ACTIVE_GATEWAY_SNAPSHOT" "$GATEWAY_SNAPSHOT_EVIDENCE"
 chmod 0600 "$GATEWAY_SNAPSHOT_EVIDENCE"
-python3 - "$QWEN_MANIFEST" "$DIRECT_BENCHMARK" "$GATEWAY_BENCHMARK" "$NODE_EVIDENCE_AFTER" \
-  "$SOAK_EVIDENCE" "$FIXTURE" "$DIRECT_INTERIM" "${hermes_files[0]}" "${hermes_files[1]}" \
-  "$GATEWAY_SNAPSHOT_EVIDENCE" "$ENV_FILE" "$ROOT_DIR" <<'PY' \
+python3 - "$RUN_DIR" "$FIXTURE" "${hermes_files[0]}" "${hermes_files[1]}" \
+  "$ENV_FILE" "$ROOT_DIR" <<'PY' \
   | "$SANITIZER" --schema "$SCHEMA" --output "$FINAL_REPORT"
 from datetime import datetime, timezone
 import hashlib, json
 from pathlib import Path
 import subprocess, sys
 
-manifest_path, direct_path, gateway_path, node_path, soak_path, fixture_path, interim_path, hermes_a, hermes_b, gateway_snapshot, env_path, root = map(Path, sys.argv[1:])
+run_dir, fixture_path, hermes_a, hermes_b, env_path, root = map(Path, sys.argv[1:])
+manifest_path = run_dir / "qwen-manifest.json"
+direct_path = run_dir / "benchmark-direct.json"
+gateway_path = run_dir / "benchmark-litellm.json"
+node_path = run_dir / "node-evidence-after-soak.json"
+soak_path = run_dir / "soak.json"
+interim_path = run_dir / "acceptance.json"
+gateway_snapshot = run_dir / "active-gateway-snapshot.json"
+direct_semantic_path = run_dir / "semantic-direct-origin.json"
+litellm_semantic_path = run_dir / "semantic-private-litellm.json"
+minefield_path = run_dir / "minefield.json"
+external_gateway_path = run_dir / "external-gateway-auth.json"
+canary_path = run_dir / "prompt-reasoning-canary-absence.json"
+full_context_path = run_dir / "full-context.json"
+scheduler_path = run_dir / "scheduler-current.json"
 def load(path): return json.loads(path.read_text())
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def env_file(path):
@@ -475,15 +730,62 @@ def env_file(path):
     return values
 env = env_file(env_path)
 manifest, direct, gateway, nodes, soak, interim = map(load, (manifest_path, direct_path, gateway_path, node_path, soak_path, interim_path))
+direct_semantic, litellm_semantic = map(load, (direct_semantic_path, litellm_semantic_path))
+minefield, external_gateway, canary = map(load, (minefield_path, external_gateway_path, canary_path))
+full_context, scheduler = map(load, (full_context_path, scheduler_path))
+if full_context.get("gate", {}).get("passed") is not True:
+    raise SystemExit("full-context evidence is not accepted")
+if scheduler.get("gate", {}).get("passed") is not True:
+    raise SystemExit("scheduler evidence is not accepted")
+if direct_semantic != {"profile": "direct-origin", "ready": True, "state": "semantic-ready", "wall_timeout_seconds": 120}:
+    raise SystemExit("direct-origin semantic readiness evidence is invalid")
+if litellm_semantic != {"profile": "private-litellm", "ready": True, "state": "semantic-ready", "wall_timeout_seconds": 120}:
+    raise SystemExit("private LiteLLM semantic readiness evidence is invalid")
 hermes = [load(hermes_a), load(hermes_b)]
 if not direct["summary"]["accepted"] or not gateway["summary"]["accepted"] or not soak["accepted"]:
     raise SystemExit("performance or soak evidence is not accepted")
 if not all(item["rank_running"] and item["rank_restart_count"] == 0 for item in nodes["nodes"]):
     raise SystemExit("rank state failed after soak")
+if {item["role"] for item in nodes["nodes"]} != {"head", "worker"}:
+    raise SystemExit("both rank roles were not observed")
+if max(item["memory_psi_full_avg10"] for item in nodes["nodes"]) != 0.0:
+    raise SystemExit("memory PSI full avg10 is nonzero")
+if minefield.get("commit") != "2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169":
+    raise SystemExit("Minefield evidence is not pinned")
+for field in ("executed", "problem", "inconclusive", "unimplemented"):
+    if not isinstance(minefield.get(field), int) or minefield[field] < 0:
+        raise SystemExit("Minefield coverage counts are invalid")
+if external_gateway.get("unauthenticated_status") not in (401, 403) or external_gateway.get("authenticated_generation") is not True:
+    raise SystemExit("external gateway authentication boundary failed")
+if canary != {"schema_version": 1, "prompt_reasoning_canaries_absent": True, "message_logging_disabled": True}:
+    raise SystemExit("prompt/reasoning canary evidence is invalid")
 if not all(item["accepted"] and item["shared_state"]["unchanged"] for item in hermes):
     raise SystemExit("Hermes evidence is not accepted")
 runtime = env["DSPARK_VLLM_IMAGE"]
 if "@sha256:" not in runtime: raise SystemExit("runtime image is not pinned")
+import re
+capacity_matches = []
+started_at = subprocess.check_output(
+    ["docker", "inspect", "-f", "{{.State.StartedAt}}", "deepseek-v4-flash-vllm-dspark-1"],
+    text=True,
+).strip()
+process = subprocess.Popen(
+    ["docker", "logs", "--since", started_at, "deepseek-v4-flash-vllm-dspark-1"],
+    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+)
+assert process.stdout is not None
+for line in process.stdout:
+    capacity_matches.extend(
+        re.findall(r"GPU KV cache size:\s*([0-9,]+)\s*tokens", line)
+    )
+if process.wait() != 0:
+    raise SystemExit("could not read runtime logs for KV token capacity")
+if not capacity_matches:
+    raise SystemExit("runtime did not report KV token capacity")
+reported_capacities = [int(value.replace(",", "")) for value in capacity_matches]
+if any(value < 1048576 for value in reported_capacities):
+    raise SystemExit("current runtime reported KV token capacity below advertised context")
+reported_token_capacity = min(reported_capacities)
 hermes_pin_inputs = [root / "deployments/private-smoke/hermes/config.yaml", root / "deployments/private-smoke/hermes/fixtures/transform-input.json", root / "deployments/private-smoke/hermes/fixtures/tool-contract.json"]
 expected_hermes_pin = hashlib.sha256(b"".join(path.read_bytes() for path in hermes_pin_inputs)).hexdigest()
 if {item["suite_pin_sha256"] for item in hermes} != {expected_hermes_pin}:
@@ -493,7 +795,7 @@ config_hash = hashlib.sha256(b"".join(path.read_bytes() for path in config_input
 repo_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 pins = {"model_revision": env["DSPARK_MODEL_REVISION"], "runtime_image_digest": "sha256:" + runtime.rsplit("@sha256:", 1)[1], "repo_commit": repo_commit, "config_sha256": config_hash}
 pin_hash = hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-evidence = [("qwen-manifest", manifest_path), ("direct", direct_path), ("gateway", gateway_path), ("nodes", node_path), ("hermes-a", hermes_a), ("hermes-b", hermes_b), ("soak", soak_path), ("public-gateway", gateway_snapshot)]
+evidence = [("qwen-manifest", manifest_path), ("semantic-direct-origin", direct_semantic_path), ("semantic-private-litellm", litellm_semantic_path), ("direct", direct_path), ("gateway", gateway_path), ("nodes", node_path), ("hermes-a", hermes_a), ("hermes-b", hermes_b), ("soak", soak_path), ("full-context", full_context_path), ("scheduler", scheduler_path), ("minefield", minefield_path), ("external-gateway-auth", external_gateway_path), ("prompt-reasoning-canary", canary_path), ("public-gateway", gateway_snapshot)]
 previous = "0" * 64; chain = []
 for name, path in evidence:
     try:
@@ -508,13 +810,27 @@ def summary(item):
     value = item["summary"]
     return {"median_decode_tokens_per_second": value["median_decode_tokens_per_second"], "p95_ttft_seconds": value["p95_ttft_seconds"], "request_count": value["expected_completions"], "origin_completion_delta": value["metric_delta"], "accepted": value["accepted"]}
 d, g = summary(direct), summary(gateway)
-gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged")}
+gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged", "minefield", "external_gateway", "prompt_reasoning_canary", "full_context", "scheduler")}
 report = {
-  "schema_version": 1, "run_id": manifest["run_id"], "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "accepted": True,
+  "schema_version": 2, "run_id": manifest["run_id"], "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "accepted": True,
   "manifest_sha256": digest(manifest_path), "fixture_sha256": digest(fixture_path), "pin_set_sha256": pin_hash, "chain_head_sha256": previous,
   "pins": pins, "gates": gates,
   "functional_runs": [{"artifact_sha256": digest(path), "accepted": item["accepted"], "api_calls": item["usage"]["api_calls"], "gateway_attested": True} for path, item in ((hermes_a, hermes[0]), (hermes_b, hermes[1]))],
   "performance": {"direct": d, "litellm": g, "median_decode_overhead_ratio": g["median_decode_tokens_per_second"] / d["median_decode_tokens_per_second"], "p95_ttft_overhead_seconds": g["p95_ttft_seconds"] - d["p95_ttft_seconds"]},
+  "semantic_readiness": {"direct_origin": {"state": direct_semantic["state"], "artifact_sha256": digest(direct_semantic_path)}, "private_litellm": {"state": litellm_semantic["state"], "artifact_sha256": digest(litellm_semantic_path)}},
+  "rollout_evidence": {
+    "process_readiness": {"head_running": True, "worker_running": True, "restart_count": 0},
+    "api_readiness": {"authenticated": True, "model_discovery": True},
+    "semantic_readiness": {"direct_origin": True, "private_litellm": True},
+    "kv_cache": {"configured_bytes": int(env["KV_CACHE_MEMORY_BYTES"]), "reported_token_capacity": reported_token_capacity},
+    "rank_participation": {"world_size": 2, "both_ranks_participated": True},
+    "memory": {"min_head_mem_available_gib": soak["min_head_mem_available_gib"], "min_worker_mem_available_gib": soak["min_worker_mem_available_gib"], "max_memory_psi_full_avg10": soak["max_memory_psi_full_avg10"]},
+    "prefix_cache": {"queries_delta": soak["prefix_cache_queries_delta"], "hits_delta": soak["prefix_cache_hits_delta"], "reuse_ratio": soak["prefix_cache_reuse_ratio"]},
+    "speculative_decode": {"accepted_tokens_delta": soak["speculative_accepted_tokens_delta"], "draft_tokens_delta": soak["speculative_draft_tokens_delta"], "acceptance_ratio": soak["speculative_acceptance_ratio"]},
+    "minefield": {key: minefield[key] for key in ("commit", "executed", "problem", "inconclusive", "unimplemented")},
+    "external_gateway": {"unauthenticated_status": external_gateway["unauthenticated_status"], "authenticated_generation": external_gateway["authenticated_generation"]},
+    "prompt_reasoning_canaries_absent": True, "message_logging_disabled": True,
+  },
   "soak": soak, "evidence_chain": chain, "purge_eligible": True,
 }
 print(json.dumps(report))
@@ -525,8 +841,9 @@ PY
 "$SANITIZER" --schema "$SCHEMA" --input "$FINAL_REPORT" >/dev/null
 python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-report --manifest "$QWEN_MANIFEST" \
   --report "$FINAL_REPORT" --max-age-hours 24 --required-gate fabric --required-gate artifacts \
-  --required-gate direct --required-gate hermes
+  --required-gate direct --required-gate hermes \
+  --required-gate full_context --required-gate scheduler
 
 trap - ERR
 echo "Acceptance passed and is purge_eligible: $FINAL_REPORT"
-echo "DeepSeek and the private LiteLLM remain manually started for inspection; no supervisor was installed."
+echo "DeepSeek and LiteLLM remain operator-controlled; PostgreSQL alone retains its intentional unless-stopped policy."

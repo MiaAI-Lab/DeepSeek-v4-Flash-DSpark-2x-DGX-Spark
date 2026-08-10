@@ -1,10 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "collected_at", "nodes"],
+  "required": [
+    "schema_version",
+    "collected_at",
+    "nodes"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "collected_at": {"type": "string", "format": "date-time"},
+    "schema_version": {
+      "const": 2
+    },
+    "collected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "nodes": {
       "type": "array",
       "minItems": 2,
@@ -12,22 +21,65 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["role", "kernel", "mem_available_gib", "disk_available_gib", "docker_version", "image_present", "fabric_up", "fabric_mtu", "fabric_address_present", "rank_running", "rank_restart_count"],
+        "required": [
+          "role",
+          "kernel",
+          "mem_available_gib",
+          "memory_psi_full_avg10",
+          "disk_available_gib",
+          "docker_version",
+          "image_present",
+          "fabric_up",
+          "fabric_mtu",
+          "fabric_address_present",
+          "rank_running",
+          "rank_restart_count"
+        ],
         "properties": {
-          "role": {"enum": ["head", "worker"]},
-          "kernel": {"type": "string"},
-          "mem_available_gib": {"type": "number"},
-          "disk_available_gib": {"type": "number"},
-          "docker_version": {"type": "string"},
-          "image_present": {"type": "boolean"},
-          "fabric_up": {"type": "boolean"},
-          "fabric_mtu": {"type": "integer"},
-          "fabric_address_present": {"type": "boolean"},
-          "rank_running": {"type": "boolean"},
-          "rank_restart_count": {"type": "integer"}
+          "role": {
+            "enum": [
+              "head",
+              "worker"
+            ]
+          },
+          "kernel": {
+            "type": "string"
+          },
+          "mem_available_gib": {
+            "type": "number"
+          },
+          "disk_available_gib": {
+            "type": "number"
+          },
+          "docker_version": {
+            "type": "string"
+          },
+          "image_present": {
+            "type": "boolean"
+          },
+          "fabric_up": {
+            "type": "boolean"
+          },
+          "fabric_mtu": {
+            "type": "integer"
+          },
+          "fabric_address_present": {
+            "type": "boolean"
+          },
+          "rank_running": {
+            "type": "boolean"
+          },
+          "rank_restart_count": {
+            "type": "integer"
+          },
+          "memory_psi_full_avg10": {
+            "type": "number",
+            "minimum": 0
+          }
         }
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$id": "https://plexiz.invalid/schemas/dual-dspark-node-evidence-v2.json"
 }

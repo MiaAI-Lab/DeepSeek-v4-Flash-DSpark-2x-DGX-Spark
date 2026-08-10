@@ -49,7 +49,9 @@ class PrivateGatewayTest(unittest.TestCase):
             self.assertIn(required, entrypoint)
         self.assertIn("/key/generate", bootstrap)
         self.assertIn('"models": ["deepseek-v4-flash-0731-smoke"]', bootstrap)
-        self.assertIn('"max_parallel_requests": 3', bootstrap)
+        # Sin tope de paralelismo a proposito: vLLM encola con MAX_NUM_SEQS.
+        # Un cap aqui devuelve 429 en vez de esperar (decidido 2026-08-05).
+        self.assertNotIn("max_parallel_requests", bootstrap)
         self.assertIn("http://127.0.0.1:4001/key/generate", bootstrap)
         self.assertIn("umask 077", bootstrap)
         self.assertIn("chmod 0600", bootstrap)
@@ -74,9 +76,17 @@ class PrivateGatewayTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_failed_redeploy_preserves_a_healthy_existing_gateway(self):
+        deploy = (GATEWAY / "deploy.sh").read_text()
+        self.assertIn("EXISTING_GATEWAY_HEALTHY=1", deploy)
+        self.assertIn('if [ "$EXISTING_GATEWAY_HEALTHY" -eq 0 ]; then', deploy)
+        self.assertIn("verified without redeployment", deploy)
+
     def test_failed_deploy_removes_only_generated_virtual_key(self):
         text = (GATEWAY / "deploy.sh").read_text()
         self.assertIn("VIRTUAL_KEY_CREATED", text)
+        self.assertIn("EXISTING_VIRTUAL_KEY", text)
+        self.assertIn('rollback.sh" verify-existing-key', text)
         self.assertIn('unlink "$LITELLM_VIRTUAL_KEY_FILE"', text)
 
     def test_egress_policy_builds_rules_under_nounset(self):
@@ -100,6 +110,43 @@ class PrivateGatewayTest(unittest.TestCase):
                 capture_output=True,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+    def test_virtual_key_allows_only_hermes_model_detail_discovery(self):
+        bootstrap = (GATEWAY / "bootstrap-virtual-key.sh").read_text()
+        lifecycle = (GATEWAY / "manage-virtual-key.py").read_text()
+        for source in (bootstrap, lifecycle):
+            self.assertIn('"allowed_routes": ["/v1/models", "/v1/models/*", "/v1/chat/completions"]', source)
+        self.assertNotIn('"allowed_routes": ["*"]', bootstrap + lifecycle)
+
+    def test_key_rotation_uses_unique_overlap_alias(self):
+        source = (GATEWAY / "manage-virtual-key.py").read_text()
+        self.assertIn("hermes-deepseek-smoke-rotate-", source)
+        self.assertIn("%Y%m%dT%H%M%S%fZ", source)
+
+    def test_key_lifecycle_uses_admin_api_without_secret_argv(self):
+        text = (GATEWAY / "manage-virtual-key.py").read_text()
+        for required in (
+            '"/key/generate"', '"/key/delete"', "--master-key-file", "--key-file",
+            "read_key_file", "os.replace", "chmod(0o600)", "old_key_rejected",
+            "new_key_authenticated", "revoke",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("--api-key", text)
+        rotate_body = text.split("def rotate(", 1)[1].split("def revoke(", 1)[0]
+        self.assertLess(
+            rotate_body.index("os.replace(temporary, key_file)"),
+            rotate_body.index("delete_key(base, master, old)"),
+            "install the proven replacement before revoking the old key",
+        )
+
+    def test_external_gateway_gate_proves_negative_and_positive_auth(self):
+        text = (ROOT / "deployments/private-smoke/run-acceptance.sh").read_text()
+        for required in (
+            "EXTERNAL_LITELLM_BASE_URL", "external-gateway-auth.json",
+            "unauthenticated_status", "authenticated_generation", "401", "403",
+        ):
+            self.assertIn(required, text)
 
 
 if __name__ == "__main__":

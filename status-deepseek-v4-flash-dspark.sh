@@ -5,14 +5,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
 PROJECT_NAME="${PROJECT_NAME:-deepseek-v4-flash}"
 EXPECT="running"
+SEMANTIC=0
+SEMANTIC_DEADLINE_SECONDS=120
 
 usage() {
-  echo "Usage: $(basename "$0") [--expect running|stopped]"
+  echo "Usage: $(basename "$0") [--expect running|stopped] [--semantic]"
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --expect) shift; EXPECT="${1:-}" ;;
+    --semantic) SEMANTIC=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -31,7 +34,7 @@ WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
 VLLM_PROXY_HOST="${VLLM_PROXY_HOST:-172.30.0.1}"
 VLLM_PROXY_PORT="${VLLM_PROXY_PORT:-8888}"
-API_URL="${API_URL:-http://$VLLM_PROXY_HOST:$VLLM_PROXY_PORT/v1/models}"
+BASE_URL="${BASE_URL:-http://$VLLM_PROXY_HOST:$VLLM_PROXY_PORT/v1}"
 
 head_ids() {
   docker ps -aq --filter "label=com.docker.compose.project=$PROJECT_NAME"
@@ -74,37 +77,37 @@ worker_image="$(ssh "$WORKER_HOST" "docker inspect -f '{{.Config.Image}}' '${PRO
 [ "$head_image" = "$DSPARK_VLLM_IMAGE" ] || { echo "Head image mismatch." >&2; failed=1; }
 [ "$worker_image" = "$DSPARK_VLLM_IMAGE" ] || { echo "Worker image mismatch." >&2; failed=1; }
 
-if ! python3 - "$API_URL" "$VLLM_ORIGIN_KEY_FILE" "$SERVED_MODEL_NAME" <<'PY'
-import json
-from pathlib import Path
-import sys
-import urllib.error
-import urllib.request
-
-url, key_file, expected_model = sys.argv[1:]
-try:
-    urllib.request.urlopen(url, timeout=5)
-except urllib.error.HTTPError as error:
-    if error.code != 401:
-        raise
-    error.close()
-else:
-    raise SystemExit("unauthenticated origin request unexpectedly succeeded")
-
-key = Path(key_file).read_text().strip()
-request = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
-with urllib.request.urlopen(request, timeout=10) as response:
-    payload = json.load(response)
-models = {item.get("id") for item in payload.get("data", []) if isinstance(item, dict)}
-if expected_model not in models:
-    raise SystemExit(f"served model mismatch: expected {expected_model}")
-PY
-then
-  echo "Authenticated origin/model check failed." >&2
+api_ready=0
+if python3 "$SCRIPT_DIR/scripts/smoke-openai-compat.py" \
+    --api-liveness \
+    --profile direct-origin \
+    --base-url "$BASE_URL" \
+    --key-file "$VLLM_ORIGIN_KEY_FILE" \
+    --model "$SERVED_MODEL_NAME"; then
+  api_ready=1
+else
+  echo "Origin API liveness failed; see classified state above." >&2
   failed=1
+fi
+
+if [ "$SEMANTIC" -eq 1 ] && [ "$api_ready" -eq 1 ]; then
+  if ! python3 "$SCRIPT_DIR/scripts/smoke-openai-compat.py" \
+      --semantic-canary \
+      --profile direct-origin \
+      --wall-timeout "$SEMANTIC_DEADLINE_SECONDS" \
+      --base-url "$BASE_URL" \
+      --key-file "$VLLM_ORIGIN_KEY_FILE" \
+      --model "$SERVED_MODEL_NAME"; then
+    echo "Semantic readiness failed; the lane was not stopped or restarted." >&2
+    failed=1
+  fi
 fi
 
 if [ "$failed" -ne 0 ]; then
   exit 1
 fi
-echo "DSpark head, worker, authenticated proxy, pinned image, and model are healthy."
+if [ "$SEMANTIC" -eq 1 ]; then
+  echo "DSpark process/API liveness and bounded tensor-parallel generation are semantic-ready."
+else
+  echo "DSpark head/worker process and authenticated API liveness are healthy (generation not requested)."
+fi

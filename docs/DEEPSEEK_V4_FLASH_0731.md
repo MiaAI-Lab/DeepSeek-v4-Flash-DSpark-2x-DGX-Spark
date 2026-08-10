@@ -29,10 +29,83 @@ wrapper and passed to the Python encoder. The underlying implementations fall
 back to non-thinking when no kwarg exists, but this recipe defaults
 `DEFAULT_THINKING=low` to match DeepSeek V4's intended base reasoning mode.
 The setting accepts `off`, `low`, `high`, or `max`; `low` opens
-`<think>` but adds no effort instruction. For pi, use
-`pi-models.dspark.example.json`; it maps pi's off/low/high/max selector
-to request-level `chat_template_kwargs.thinking` and
-`chat_template_kwargs.reasoning_effort`.
+`<think>` but adds no effort instruction. Off uses
+`chat_template_kwargs.reasoning_effort=none`; `thinking=false` alone is not an
+effective off switch in the pinned tokenizer. For pi, use
+`pi-models.dspark.example.json`; it maps pi's off/low/high/max selector to the
+same request-level controls. Every mapping also sends `drop_thinking=false` so
+a later turn preserves Pi's replayed `reasoning` history. The custom encoder
+accepts both `reasoning` and `reasoning_content` when called directly, but the
+pinned live request model discards `reasoning_content` before `/tokenize` and
+therefore exposes `reasoning` as the supported replay spelling. Without the
+preservation kwarg the Python encoder defaults to stripping prior reasoning.
+
+## Authenticated request boundary and cap hits
+
+Only the literal origin-form target `/v1/chat/completions` selects chat request
+validation. The authenticated proxy rejects query-bearing, trailing-slash,
+duplicate-slash, percent-encoded, and absolute-form equivalents with HTTP 400.
+For the canonical route it rejects malformed/non-object JSON and top-level keys
+outside `scripts/chat-completion-request-fields.json` before forwarding. The
+allowlist is the union of the pinned vLLM
+`ChatCompletionRequest.model_fields` and explicitly documented repository
+extensions (currently none); `scripts/verify-chat-completion-request-fields.py`
+checks the stdlib proxy copy and can compare/regenerate it inside the immutable
+runtime container. This keeps Pydantic out of the proxy process.
+
+The semantic smoke also sends one deliberately unsupported field and one
+single-token cap probe. Empty content ending in `finish_reason=length` is
+reported as budget truncation even when no reasoning field is present;
+reasoning presence is diagnostic only. Empty content ending in
+`finish_reason=stop` fails the smoke. The proxy does not retry capped requests,
+so callers that want another attempt must choose and send a larger output
+budget themselves.
+
+## Deterministic GB10 memory and scheduler profile
+
+The production profile renders `--kv-cache-memory-bytes 12884901888` (12 GiB
+per rank) together with `--gpu-memory-utilization 0.80`. These are not two KV
+sizers: the explicit byte value exclusively controls KV allocation, while the
+pinned vLLM build still evaluates utilization earlier as a startup
+admission/headroom guard. Omitting it falls back to the runtime's 0.92 default
+and can reject startup before `CacheConfig` applies the byte override. Scheduler
+values are `MAX_NUM_BATCHED_TOKENS=8216`, MTP-5, and
+`--max-cudagraph-capture-size 32`. `ENFORCE_EAGER=0` explicitly keeps the CUDA
+graph path. `validate-dspark-config.sh` runs before either rank starts and
+rejects a nonpositive/noninteger byte value, invalid admission fraction,
+selector conflict, invalid scheduler/capture integers, or an eager value other
+than `0`/`1`. Generated head and worker env files carry the same controls.
+
+Fractional KV sizing exists only for a compatibility rollback: set
+`MEMORY_CONTROL=gpu-memory-utilization`, clear `KV_CACHE_MEMORY_BYTES`, and keep
+`GPU_MEMORY_UTILIZATION` explicit at a validated value greater than zero and no
+greater than one.
+
+After a controlled restart and before restoring gateway traffic, run the two
+bounded gates (both read the origin credential from a mode-0600 file and omit
+prompt/response bodies and secrets from their JSON):
+
+```bash
+python3 scripts/probe-full-context.py --profile near-max --max-output-tokens 1
+python3 scripts/benchmark-scheduler.py --concurrency 6 --mtp 5
+```
+
+The full-context gate requires a near-1,048,576-token prefill, at least one
+decoded token, no restart/OOM, post-warmup memory PSI `full avg10=0.00`, and at
+least 8 GiB `MemAvailable` on both hosts. Its prefill may exceed 900 seconds on
+DGX Spark, so the authenticated proxy is configured explicitly with
+`VLLM_PROXY_UPSTREAM_TIMEOUT=3600`; the startup preflight accepts only 1–7200
+seconds. The scheduler gate performs one observed warmup batch, then requires
+six correct 8,192-token requests under the 8,216 scheduler budget, no eager
+fallback/restart/OOM, p95 decode latency no more than 25% above the required
+pre-change baseline, and steady-state p95 TTFT no more than 40% above it. The
+TTFT envelope was recalibrated from 25% after repeated live trials landed at
+32–36% while decode stayed within 3%, with no OOM/restart and with the near-1M
+capacity/headroom gate passing. The deterministic prompts share almost their
+entire prefix, so the six-sample TTFT is sensitive to cache/scheduler phasing;
+40% is the smallest stable observed envelope rather than a generic relaxation.
+The baseline lives at `artifacts/health-rollout/scheduler-baseline.json`. These
+are operator gates; they do not restart the lane themselves.
 
 ## Benchmark Method
 
@@ -90,3 +163,122 @@ A matched 520-token natural-completion probe used temperature `0.2`, top-p `0.95
 | C6 aggregate decode | not measured | 340.5 tok/s | - |
 
 The matched 14K-token prefill probes remained within normal run variance: warm C1 moved from 1,770-1,781 to 1,857 tok/s, while C2 moved from 1,920-1,954 to 1,943-1,987 tok/s. This setting is a decode improvement, not a claim that prefill is 28.6% faster.
+
+
+## U5 rollout, persistence, rollback, and evidence
+
+The private LiteLLM gateway and its PostgreSQL database are long-running
+private production services, so both intentionally use `restart:
+unless-stopped`. The DSpark rank/proxy compose remains an operator-controlled,
+temporary cutover surface and keeps `restart: "no"`. PostgreSQL uses the named
+`dspark-private-litellm-pgdata` volume; `/tmp` and `/run/postgresql` remain
+tmpfs. `turn_off_message_logging: true` remains mandatory.
+
+Before any live cutover, capture the authoritative scheduler baseline on the
+**pre-change** lane and create the exact rollback bundle outside the repository:
+
+```bash
+python3 scripts/benchmark-scheduler.py --capture-baseline --concurrency 6 --mtp 5 \
+  --baseline artifacts/health-rollout/scheduler-baseline.json
+./deployments/private-smoke/litellm/rollback.sh snapshot \
+  --bundle /srv/dspark-rollback/2026-08-09-prechange \
+  --receipt artifacts/health-rollout/rollback-receipt.json
+./deployments/private-smoke/litellm/rollback.sh verify \
+  --bundle /srv/dspark-rollback/2026-08-09-prechange \
+  --receipt artifacts/health-rollout/rollback-receipt.json
+```
+
+The bundle directory is mode 0700 and every contained input, manifest, restore
+map, and PostgreSQL custom-format dump is mode 0600. `SHA256SUMS` covers every
+critical head/worker env and compose/config input, the current virtual-key
+file, and the database dump. Verification rejects missing/symlinked files, insecure modes, hash drift,
+unsafe restore paths, or a dump that `pg_restore --list` cannot read. The exact
+bundle contains secrets and original absolute destinations and therefore stays
+on the trusted Spark host. Only the separately sanitized hash receipt belongs
+in durable acceptance evidence.
+
+For an old tmpfs database, migrate only after the snapshot verifies:
+
+```bash
+./deployments/private-smoke/litellm/rollback.sh migrate \
+  --bundle /srv/dspark-rollback/2026-08-09-prechange \
+  --key-file /run/private-smoke/hermes.key
+```
+
+This stops only the private gateway, creates/attaches the named volume, restores
+the validated logical dump, and proves the already-issued mode-0600 Hermes key
+still authenticates. It does not generate a replacement key. For any rollout
+stop condition, use the reverse path—not the sanitized receipt:
+
+```bash
+./deployments/private-smoke/litellm/rollback.sh restore \
+  --bundle /srv/dspark-rollback/2026-08-09-prechange \
+  --key-file /run/private-smoke/hermes.key
+```
+
+Restore verifies hashes/dump again, stops the DSpark head before its worker,
+restores exact inputs and database state, invokes the existing worker-first
+start lifecycle (whose direct semantic smoke must pass), then starts LiteLLM
+and re-proves the existing key. A failed verification aborts before mutation.
+Database backups follow the same access/retention controls as the long-lived
+service key and must be securely deleted after the acceptance retention window.
+
+### Virtual-key rotation and emergency revocation
+
+The model-scoped Hermes key is a long-lived private service credential owned by
+this deployment. LiteLLM administrative credentials and virtual keys are read
+only from regular mode-0600 files; secret values are never command arguments,
+receipts, or logs.
+
+```bash
+python3 deployments/private-smoke/litellm/manage-virtual-key.py rotate \
+  --master-key-file /run/private-smoke/litellm-master.key \
+  --key-file /run/private-smoke/hermes.key \
+  --receipt artifacts/health-rollout/key-rotation.json
+
+# Emergency revocation (removes the local key only after the API proves denial):
+python3 deployments/private-smoke/litellm/manage-virtual-key.py revoke \
+  --master-key-file /run/private-smoke/litellm-master.key \
+  --key-file /run/private-smoke/hermes.key \
+  --receipt artifacts/health-rollout/key-revocation.json
+```
+
+Rotation generates and authenticates a replacement, revokes the old key through
+`/key/delete`, proves the old key receives an auth denial and the replacement
+succeeds, then atomically installs the new mode-0600 file. Receipts contain only
+booleans, timestamps, and model scope—never key material. Keep a validated DB
+snapshot until the rotation receipt and dependent-client smoke pass.
+
+### Pinned Minefield and complete acceptance dimensions
+
+Run the Minefield wrapper at the immutable commit. It creates an isolated
+checkout and venv, installs that exact tree, reads the origin key file into
+memory, transfers it to the pinned doctor over private stdin, and emits only a
+mode-0600 structured summary. The key is absent from OS argv, shell history,
+stdout, and JSON:
+
+```bash
+python3 scripts/run-minefield-pinned.py \
+  --commit 2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169 \
+  --json artifacts/health-rollout/minefield.json
+```
+
+The summary reports exact executed, problem, inconclusive, and unimplemented
+trap counts; a clean executed subset is not a claim about the full registry.
+`run-acceptance.sh --live` additionally requires:
+
+- structured head/worker process readiness, authenticated API/model discovery,
+  and direct-origin plus private-LiteLLM semantic readiness;
+- configured KV bytes and the runtime-reported token capacity (at least the
+  advertised 1,048,576 tokens), NCCL world size two, and both rank roles;
+- at least 8 GiB `MemAvailable` per host with memory PSI `full avg10=0.00`;
+- warm prefix-cache query/hit deltas with reuse above 50%, plus exact
+  speculative accepted/draft token deltas and their ratio;
+- pinned Minefield coverage counts and an external Tailnet gateway request
+  that fails without auth but completes a bounded generation with the scoped
+  key; and
+- prompt/reasoning canaries absent from proxy, vLLM, worker, LiteLLM, smoke,
+  and evidence logs while LiteLLM message logging remains disabled.
+
+Only sanitized summaries are hash-chained into `accepted.json`; prompt bodies,
+reasoning bodies, keys, private addresses, and host paths are rejected.

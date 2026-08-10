@@ -12,12 +12,84 @@ import json
 from pathlib import Path
 import stat
 import sys
+from urllib.parse import unquote, urlsplit
 
 
 HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "transfer-encoding", "upgrade",
 }
+
+
+# BEGIN GENERATED CHAT COMPLETION REQUEST FIELDS
+CHAT_COMPLETION_REQUEST_FIELDS = frozenset(
+    {
+        "add_generation_prompt",
+        "add_special_tokens",
+        "allowed_token_ids",
+        "bad_words",
+        "cache_salt",
+        "chat_template",
+        "chat_template_kwargs",
+        "continue_final_message",
+        "documents",
+        "echo",
+        "frequency_penalty",
+        "ignore_eos",
+        "include_reasoning",
+        "include_stop_str_in_output",
+        "kv_transfer_params",
+        "length_penalty",
+        "logit_bias",
+        "logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "media_io_kwargs",
+        "messages",
+        "min_p",
+        "min_tokens",
+        "mm_processor_kwargs",
+        "model",
+        "n",
+        "parallel_tool_calls",
+        "presence_penalty",
+        "priority",
+        "prompt_logprobs",
+        "reasoning_effort",
+        "repetition_detection",
+        "repetition_penalty",
+        "request_id",
+        "response_format",
+        "return_assistant_tokens_mask",
+        "return_prompt_text",
+        "return_token_ids",
+        "return_token_offsets",
+        "return_tokens_as_token_ids",
+        "seed",
+        "skip_special_tokens",
+        "spaces_between_special_tokens",
+        "stop",
+        "stop_token_ids",
+        "stream",
+        "stream_options",
+        "structured_outputs",
+        "temperature",
+        "thinking_token_budget",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p",
+        "truncate_prompt_tokens",
+        "truncation_side",
+        "use_beam_search",
+        "user",
+        "vllm_xargs",
+    }
+)
+# END GENERATED CHAT COMPLETION REQUEST FIELDS
+
+CANONICAL_CHAT_TARGET = "/v1/chat/completions"
 
 
 def read_key(path: Path) -> str:
@@ -44,6 +116,90 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.close_connection = True
 
+    def _request_target(self) -> str:
+        # ``BaseHTTPRequestHandler`` normalizes a leading ``//`` in ``self.path``
+        # to prevent open redirects. Validate the request-line target instead so
+        # the proxy can reject that ambiguous form rather than treating it as the
+        # canonical chat route.
+        parts = self.requestline.split()
+        if len(parts) != 3:
+            raise ValueError("malformed request line")
+        return parts[1]
+
+    @staticmethod
+    def _resembles_chat_target(target: str) -> bool:
+        candidate = target.split("#", 1)[0].split("?", 1)[0]
+        candidates = {candidate}
+        split = urlsplit(target)
+        candidates.add(split.path)
+        for _ in range(3):
+            decoded = {unquote(item) for item in candidates}
+            if decoded <= candidates:
+                break
+            candidates.update(decoded)
+        for item in candidates:
+            collapsed = "/" + "/".join(part for part in item.split("/") if part)
+            if collapsed.rstrip("/") == CANONICAL_CHAT_TARGET:
+                return True
+        return False
+
+    def _is_canonical_chat_target(self) -> bool | None:
+        try:
+            target = self._request_target()
+        except ValueError:
+            self._json_error(400, "noncanonical request target")
+            return None
+        if target == CANONICAL_CHAT_TARGET:
+            return True
+        lower = target.lower()
+        try:
+            resembles_chat = self._resembles_chat_target(target)
+        except ValueError:
+            self._json_error(400, "noncanonical request target")
+            return None
+        if lower.startswith(("http://", "https://")) or resembles_chat:
+            self._json_error(400, "noncanonical request target")
+            return None
+        return False
+
+    def _validate_chat_body(self, body: bytes | None) -> bool:
+        try:
+            payload = json.loads(body) if body is not None else None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json_error(400, "chat completion body must be valid JSON")
+            return False
+        if not isinstance(payload, dict):
+            self._json_error(400, "chat completion body must be a JSON object")
+            return False
+        unsupported = sorted(set(payload) - CHAT_COMPLETION_REQUEST_FIELDS)
+        if unsupported:
+            self._json_error(
+                400,
+                "unsupported chat completion field(s): " + ", ".join(unsupported),
+            )
+            return False
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            self._json_error(400, "chat completion messages must be a JSON array")
+            return False
+        for message in messages:
+            if not isinstance(message, dict):
+                self._json_error(400, "chat completion messages must be objects")
+                return False
+            content = message.get("content")
+            if content is None or isinstance(content, str):
+                continue
+            if isinstance(content, list) and all(
+                isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+                for part in content
+            ):
+                continue
+            self._json_error(400, "chat completion messages must contain text only")
+            return False
+        return True
+
     def _proxy(self) -> None:
         client_ip = ipaddress.ip_address(self.client_address[0])
         if client_ip not in self.server.allow_network:  # type: ignore[attr-defined]
@@ -55,11 +211,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._json_error(401, "missing or invalid bearer token")
             return
 
-        length = int(self.headers.get("Content-Length", "0"))
+        is_chat_target = self._is_canonical_chat_target()
+        if is_chat_target is None:
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._json_error(400, "invalid Content-Length")
+            return
+        if length < 0:
+            self._json_error(400, "invalid Content-Length")
+            return
         if length > self.server.max_body_bytes:  # type: ignore[attr-defined]
             self._json_error(413, "request body is too large")
             return
         body = self.rfile.read(length) if length else None
+        if is_chat_target and not self._validate_chat_body(body):
+            return
         headers = {
             key: value
             for key, value in self.headers.items()

@@ -18,6 +18,17 @@ class AcceptanceReportTest(unittest.TestCase):
             input=json.dumps(payload), text=True, capture_output=True, check=False,
         )
 
+    def test_breaking_evidence_contracts_are_versioned_and_v1_is_retained(self):
+        latest = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())
+        historical = json.loads((DEPLOY / "schemas/acceptance-v1.schema.json").read_text())
+        node_latest = json.loads((DEPLOY / "schemas/node-evidence.schema.json").read_text())
+        node_historical = json.loads((DEPLOY / "schemas/node-evidence-v1.schema.json").read_text())
+        self.assertEqual(latest["properties"]["schema_version"]["const"], 2)
+        self.assertEqual(historical["properties"]["schema_version"]["const"], 1)
+        self.assertEqual(node_latest["properties"]["schema_version"]["const"], 2)
+        self.assertEqual(node_historical["properties"]["schema_version"]["const"], 1)
+        self.assertTrue(latest["$id"].endswith("acceptance-v2.json"))
+
     def test_schema_is_strict_and_requires_release_equivalent_evidence(self):
         schema = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())
         self.assertFalse(schema["additionalProperties"])
@@ -25,12 +36,83 @@ class AcceptanceReportTest(unittest.TestCase):
             "schema_version", "run_id", "created_at", "accepted",
             "manifest_sha256", "fixture_sha256", "pin_set_sha256",
             "chain_head_sha256", "pins", "gates", "functional_runs",
-            "performance", "soak", "evidence_chain", "purge_eligible",
+            "performance", "semantic_readiness", "soak", "evidence_chain", "purge_eligible",
         }.issubset(schema["required"]))
         functional = schema["properties"]["functional_runs"]["items"]
         self.assertIn("gateway_attested", functional["required"])
         self.assertIn("sample_error_count", schema["properties"]["soak"]["required"])
         self.assertEqual(schema["properties"]["soak"]["properties"]["sample_error_count"]["maximum"], 3)
+
+    def test_soak_waits_for_litellm_spend_counter_to_settle(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn("def settled_spend_count():", text)
+        self.assertIn("before_gateway = settled_spend_count()", text)
+        self.assertIn("spend counter did not settle before soak", text)
+
+    def test_soak_uses_multiple_shared_cache_blocks_before_the_nonce(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn("SOAK_SHARED_PREFIX", text)
+        self.assertIn(") * 160", text)
+        self.assertIn('SOAK_SHARED_PREFIX\n            + f"\\nRequest nonce', text)
+
+    def test_soak_requires_prometheus_metrics_instead_of_defaulting_to_zero(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn("required Prometheus metric is missing", text)
+        self.assertNotIn("def metric(text, name, default=0.0)", text)
+
+    def test_speculative_acceptance_uses_exact_counter_deltas(self):
+        schema = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())
+        soak = schema["properties"]["soak"]
+        required = set(soak["required"])
+        self.assertTrue({
+            "speculative_accepted_tokens_delta",
+            "speculative_draft_tokens_delta",
+            "speculative_acceptance_ratio",
+            "speculative_acceptance_observation",
+        }.issubset(required))
+        self.assertNotIn("speculative_acceptance_mean", required)
+        self.assertEqual(
+            soak["properties"]["speculative_acceptance_observation"]["enum"],
+            ["observed", "not-observed"],
+        )
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn("vllm:spec_decode_num_accepted_tokens_total", text)
+        self.assertIn("vllm:spec_decode_num_draft_tokens_total", text)
+        self.assertIn("accepted_delta / draft_delta", text)
+        self.assertNotIn("speculative_acceptance_mean", text)
+        self.assertNotIn("statistics.mean(spec", text)
+
+    def test_capacity_resume_requires_an_accepted_full_soak_and_preserves_attempt(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn("--resume-capacity", text)
+        self.assertIn("resume requires an accepted full-duration soak", text)
+        self.assertIn('previous_attempt="$FULL_CONTEXT_EVIDENCE.attempt-$attempt"', text)
+        self.assertIn('mv "$FULL_CONTEXT_EVIDENCE" "$previous_attempt"', text)
+        self.assertIn("reuse_full_context=1", text)
+        self.assertIn("age > 24 * 3600", text)
+        self.assertIn("Missing pre-capacity acceptance evidence", text)
+        self.assertIn("Capacity resume requires exactly two Hermes result files", text)
+
+    def test_live_acceptance_requires_full_context_and_scheduler_gates(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn('probe-full-context.py"', text)
+        self.assertIn('benchmark-scheduler.py"', text)
+        self.assertIn('"full-context", full_context_path', text)
+        self.assertIn('"scheduler", scheduler_path', text)
+        self.assertIn('--required-gate full_context --required-gate scheduler', text)
+
+    def test_direct_and_private_litellm_semantic_evidence_are_distinct(self):
+        schema = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())
+        readiness = schema["properties"]["semantic_readiness"]
+        self.assertEqual(
+            set(readiness["required"]), {"direct_origin", "private_litellm"}
+        )
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        for required in (
+            "semantic-direct-origin.json", "semantic-private-litellm.json",
+            "direct_origin", "private_litellm", "--semantic-canary",
+        ):
+            self.assertIn(required, text)
 
     def test_sanitizer_rejects_credentials_private_addresses_and_host_paths(self):
         planted = (
@@ -54,6 +136,10 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertEqual(fixture["soak"]["concurrency"], 1)
         self.assertEqual(fixture["performance"]["samples"], 20)
         self.assertEqual(fixture["performance"]["max_tokens"], 512)
+        self.assertEqual(fixture["soak"]["speculative_metrics"], {
+            "accepted": "vllm:spec_decode_num_accepted_tokens_total",
+            "draft": "vllm:spec_decode_num_draft_tokens_total",
+        })
         self.assertEqual(fixture["synthetic_expenses"]["expected_grand_total_centavos"], 374025)
 
     def test_orchestrator_hash_chains_all_gates_and_fails_closed(self):
@@ -130,6 +216,52 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertIn("DSPARK_EGRESS_NONINTERACTIVE_REMOVE=1", cleanup)
         install = policy.split("--install)", 1)[1].split("--check)", 1)[0]
         self.assertNotIn("DSPARK_EGRESS_NONINTERACTIVE_REMOVE", install)
+
+
+    def test_capacity_evidence_is_scoped_to_current_container_start(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        self.assertIn("{{.State.StartedAt}}", text)
+        self.assertIn('["docker", "logs", "--since", started_at', text)
+        self.assertIn("reported_token_capacity = min(reported_capacities)", text)
+
+    def test_rollout_evidence_covers_runtime_and_minefield_dimensions(self):
+        schema = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())
+        self.assertIn("rollout_evidence", schema["required"])
+        rollout = schema["properties"]["rollout_evidence"]
+        self.assertEqual(set(rollout["required"]), {
+            "process_readiness", "api_readiness", "semantic_readiness", "kv_cache",
+            "rank_participation", "memory", "prefix_cache", "speculative_decode",
+            "minefield", "external_gateway", "prompt_reasoning_canaries_absent",
+            "message_logging_disabled",
+        })
+        minefield = rollout["properties"]["minefield"]
+        self.assertEqual(set(minefield["required"]), {
+            "commit", "executed", "problem", "inconclusive", "unimplemented",
+        })
+        node = json.loads((DEPLOY / "schemas/node-evidence.schema.json").read_text())
+        item = node["properties"]["nodes"]["items"]
+        self.assertIn("memory_psi_full_avg10", item["required"])
+        self.assertIn("memory_psi_full_avg10", item["properties"])
+
+    def test_minefield_runner_is_pinned_isolated_and_summarizes_exact_counts(self):
+        text = (ROOT / "scripts/run-minefield-pinned.py").read_text()
+        for required in (
+            "2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169", "venv", "pip", "--api-key",
+            "sys.stdin.read", "not_implemented_count", '"executed"', '"problem"',
+            '"inconclusive"', '"unimplemented"', "os.O_EXCL", "os.fdopen",
+            "--setup-timeout", "--doctor-timeout", "subprocess.TimeoutExpired",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("key = args.", text)
+
+    def test_acceptance_checks_prompt_reasoning_canary_absence_and_logging_off(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        for required in (
+            "PROMPT_LOG_CANARY", "REASONING_LOG_CANARY", "check_canary_absence",
+            "turn_off_message_logging: true", "minefield.json", "prefix_cache_queries_delta",
+            "reported_token_capacity", "memory_psi_full_avg10",
+        ):
+            self.assertIn(required, text)
 
 
 if __name__ == "__main__":

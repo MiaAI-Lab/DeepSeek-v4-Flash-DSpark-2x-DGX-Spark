@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -17,6 +18,9 @@ CREDENTIAL_KEYS = re.compile(
     r"(^|_)(api_?key|authorization|bearer|cookie|password|private_?key|secret|token)($|_)",
     re.IGNORECASE,
 )
+NON_CREDENTIAL_METRIC_KEYS = {
+    "reported_token_capacity",
+}
 CREDENTIAL_VALUES = (
     re.compile(r"\bBearer\s+\S+", re.IGNORECASE),
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
@@ -36,7 +40,11 @@ def scan(value: Any, location: str = "$") -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise EvidenceError(f"non-string object key at {location}")
-            if CREDENTIAL_KEYS.search(key) and child not in (None, False, True, 0, ""):
+            if (
+                key not in NON_CREDENTIAL_METRIC_KEYS
+                and CREDENTIAL_KEYS.search(key)
+                and child not in (None, False, True, 0, "")
+            ):
                 raise EvidenceError(f"credential-shaped field is populated at {location}.{key}")
             scan(child, f"{location}.{key}")
     elif isinstance(value, list):
@@ -180,11 +188,15 @@ def main() -> int:
             validate_acceptance_semantics(payload, schema)
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if args.output:
-        if args.output.exists() or args.output.is_symlink():
-            raise EvidenceError("refusing to overwrite evidence output")
         args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        args.output.write_text(rendered, encoding="utf-8")
-        args.output.chmod(0o600)
+        try:
+            descriptor = os.open(
+                args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+            )
+        except FileExistsError as error:
+            raise EvidenceError("refusing to overwrite evidence output") from error
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(rendered)
     elif not args.scan_only:
         sys.stdout.write(rendered)
     return 0

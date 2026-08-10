@@ -86,6 +86,7 @@ services:
       MASTER_PORT: "${MASTER_PORT:-25000}"
       # Checkpoint dspark_block_size is 5; k<5 truncates draft blocks (silent on 0.25.2 image).
       MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-5}"
+      ENFORCE_EAGER: "${ENFORCE_EAGER:-0}"
       DEFAULT_THINKING: "${DEFAULT_THINKING:-low}"
 
     command:
@@ -108,11 +109,22 @@ services:
           VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
         fi;
         SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}";
+        EAGER_ARGS="";
+        case "$${ENFORCE_EAGER:-0}" in
+          0) ;;
+          1) EAGER_ARGS="--enforce-eager" ;;
+          *) echo "ENFORCE_EAGER must be 0 or 1 (got: $${ENFORCE_EAGER})" >&2; exit 2 ;;
+        esac;
+        case "${MEMORY_CONTROL:-kv-cache-memory-bytes}" in
+          kv-cache-memory-bytes) MEMORY_ARGS="--gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80} --kv-cache-memory-bytes ${KV_CACHE_MEMORY_BYTES:-12884901888}" ;;
+          gpu-memory-utilization) MEMORY_ARGS="--gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}" ;;
+          *) echo "invalid rendered MEMORY_CONTROL" >&2; exit 2 ;;
+        esac;
         case "$${DEFAULT_THINKING:-low}" in
-          off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":false}' ;;
-          low) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"low"}' ;;
-          high) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"high"}' ;;
-          max) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"max"}' ;;
+          off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"reasoning_effort":"none","drop_thinking":false}' ;;
+          low) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"low","drop_thinking":false}' ;;
+          high) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"high","drop_thinking":false}' ;;
+          max) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"max","drop_thinking":false}' ;;
           *) echo "DEFAULT_THINKING must be one of: off, low, high, max (got: $${DEFAULT_THINKING})" >&2; exit 2 ;;
         esac;
         exec /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}
@@ -128,9 +140,10 @@ services:
         --block-size 256
         --max-model-len ${MAX_MODEL_LEN:-1048576}
         --max-num-seqs ${MAX_NUM_SEQS:-6}
-        --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
-        --max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))
-        --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
+        --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8216}
+        --max-cudagraph-capture-size ${MAX_CUDAGRAPH_CAPTURE_SIZE:-32}
+        $${MEMORY_ARGS}
+        $${EAGER_ARGS}
         --enable-prefix-caching
         --enable-prompt-tokens-details
         --async-scheduling
@@ -177,6 +190,8 @@ services:
       - 127.0.0.1
       - --upstream-port
       - ${VLLM_PORT:-8889}
+      - --upstream-timeout
+      - ${VLLM_PROXY_UPSTREAM_TIMEOUT:-3600}
       - --key-file
       - /run/secrets/origin.key
       - --allow-cidr

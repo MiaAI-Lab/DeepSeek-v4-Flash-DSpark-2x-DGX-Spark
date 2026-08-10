@@ -14,6 +14,14 @@ SCHEMA = ROOT / "deployments/private-smoke/schemas/qwen-manifest.schema.json"
 
 
 class QwenLifecycleTest(unittest.TestCase):
+    def test_stopped_manifest_refresh_is_identity_bound_and_no_overwrite(self):
+        text = (ROOT / "scripts/qwen_manifest.py").read_text()
+        self.assertIn('sub.add_parser("refresh-stopped")', text)
+        self.assertIn("verify_current_identity(manifest)", text)
+        self.assertIn('get("Running") is not False', text)
+        self.assertIn('"inventory_method"] = "stopped-identity-refresh"', text)
+        self.assertIn("os.O_CREAT | os.O_EXCL | os.O_WRONLY", text)
+
     def test_inventory_is_sanitized_and_records_stable_metadata(self):
         text = (SCRIPTS / "inventory-qwen.sh").read_text()
         for required in ("--check-only", "qwen_manifest.py", "urbanplan-qwen"):

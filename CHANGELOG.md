@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add U5 fail-closed rollout tooling: exact mode-0600 SHA-256 rollback bundles, validated PostgreSQL logical dump/restore, tmpfs-to-volume key-preserving migration, and worker-first reverse recovery.
+- Preserve intentional `unless-stopped` policies for the long-running private LiteLLM/PostgreSQL services while temporary DSpark services remain `restart: "no"`.
+- Add authoritative pre-change scheduler baseline capture, pinned isolated Minefield execution, LiteLLM virtual-key rotation/revocation proof, external gateway auth-negative/positive checks, and prompt/reasoning log-leak canaries.
+- Expand acceptance evidence with process/API/semantic readiness, configured KV bytes and reported capacity, both ranks, memory PSI/headroom, prefix/speculative deltas, and exact Minefield coverage counts.
+
 - Make `deepseek-ai/DeepSeek-V4-Flash-0731` the default checkpoint for the two-Spark 1M profile.
 - Document the 0731 encoding, parser, and vision boundaries.
 - Add a streaming benchmark sweep that reports observed TTFT, output throughput, and aggregate throughput without imposing a server-side output cap.

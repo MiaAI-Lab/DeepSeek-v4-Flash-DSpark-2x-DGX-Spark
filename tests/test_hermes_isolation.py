@@ -99,6 +99,11 @@ class HermesIsolationTest(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_empty_read_only_attachments_mount_is_explicitly_allowlisted(self):
+        suite = (HERMES / "run-suite.sh").read_text()
+        self.assertIn('"/root/.hermes/attachments", "/root/.hermes/images"', suite)
+        self.assertIn("source.samefile(expected)", suite)
+
     def test_suite_pins_invocation_and_dedicated_colima_socket(self):
         text = (HERMES / "run-suite.sh").read_text()
         for required in (

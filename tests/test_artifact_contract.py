@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -29,17 +30,6 @@ def run(*args, env=None):
 
 
 class ArtifactContractTest(unittest.TestCase):
-    def test_all_temporary_services_disable_automatic_restart(self):
-        compose_files = (
-            ROOT / "docker-compose.dspark.yml",
-            ROOT / "deployments/private-smoke/litellm/docker-compose.yml",
-        )
-        policies = []
-        for compose in compose_files:
-            policies.extend(re.findall(r"^\s*restart:\s*(.+)$", compose.read_text(), re.MULTILINE))
-        self.assertGreaterEqual(len(policies), 3)
-        self.assertEqual({value.strip().strip("'\"") for value in policies}, {"no"})
-
     def write_env(self, directory, *, revision=REVISION, image=IMAGE, key_file=True):
         secret = directory / "origin.key"
         if key_file:
@@ -223,6 +213,114 @@ class ArtifactContractTest(unittest.TestCase):
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("escapes model cache", rejected.stderr)
 
+    def test_resolved_profile_reports_memory_sizing_and_guard_separately(self):
+        start = (ROOT / "start-deepseek-v4-flash-dspark.sh").read_text()
+        self.assertIn("memory control: kv-cache-memory-bytes", start)
+        self.assertIn("startup guard gpu-memory-utilization", start)
+        self.assertIn("memory control: gpu-memory-utilization", start)
+
+    def test_default_memory_scheduler_profile_is_explicit_and_deterministic(self):
+        example = (ROOT / ".env.dspark.example").read_text()
+        compose = (ROOT / "docker-compose.dspark.yml").read_text()
+        self.assertIn("MEMORY_CONTROL=kv-cache-memory-bytes", example)
+        self.assertIn("KV_CACHE_MEMORY_BYTES=12884901888", example)
+        self.assertRegex(example, r"(?m)^GPU_MEMORY_UTILIZATION=0\.80$")
+        self.assertIn("MAX_NUM_BATCHED_TOKENS=8216", example)
+        self.assertIn("MAX_CUDAGRAPH_CAPTURE_SIZE=32", example)
+        self.assertIn("ENFORCE_EAGER=0", example)
+        self.assertIn("--gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}", compose)
+        self.assertIn("--kv-cache-memory-bytes ${KV_CACHE_MEMORY_BYTES:-12884901888}", compose)
+        self.assertIn("MEMORY_ARGS", compose)
+        self.assertIn("--max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8216}", compose)
+        self.assertIn("--max-cudagraph-capture-size ${MAX_CUDAGRAPH_CAPTURE_SIZE:-32}", compose)
+
+    def test_compose_renders_one_kv_sizing_control_plus_admission_guard(self):
+        compose_bin = shutil.which("docker-compose")
+        if not compose_bin:
+            self.skipTest("docker-compose is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env.dspark"
+            default = (ROOT / ".env.dspark.example").read_text()
+            env_file.write_text(default)
+            rendered = run(
+                compose_bin, "--env-file", env_file, "-f", ROOT / "docker-compose.dspark.yml", "config"
+            )
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            self.assertIn("--kv-cache-memory-bytes 12884901888", rendered.stdout)
+            self.assertIn("--gpu-memory-utilization 0.80", rendered.stdout)
+
+            compatibility = default.replace(
+                "MEMORY_CONTROL=kv-cache-memory-bytes", "MEMORY_CONTROL=gpu-memory-utilization", 1
+            ).replace("KV_CACHE_MEMORY_BYTES=12884901888", "KV_CACHE_MEMORY_BYTES=", 1)
+            env_file.write_text(compatibility)
+            rendered = run(
+                compose_bin, "--env-file", env_file, "-f", ROOT / "docker-compose.dspark.yml", "config"
+            )
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            self.assertIn(r'case \"gpu-memory-utilization\"', rendered.stdout)
+            self.assertIn(r'gpu-memory-utilization) MEMORY_ARGS=\"--gpu-memory-utilization 0.80\"', rendered.stdout)
+
+    def test_validator_rejects_invalid_or_conflicting_memory_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            cases = (
+                ({"KV_CACHE_MEMORY_BYTES": "nope"}, "positive integer"),
+                ({"KV_CACHE_MEMORY_BYTES": "0"}, "positive integer"),
+                ({"KV_CACHE_MEMORY_BYTES": "-1"}, "positive integer"),
+                ({"GPU_MEMORY_UTILIZATION": "0"}, "greater than 0"),
+                ({"GPU_MEMORY_UTILIZATION": "1.2"}, "no greater than 1"),
+                ({"MEMORY_CONTROL": "gpu-memory-utilization"}, "cannot use KV_CACHE_MEMORY_BYTES"),
+            )
+            for overrides, expected in cases:
+                with self.subTest(overrides=overrides):
+                    env_file, _ = self.write_env(directory)
+                    with env_file.open("a") as handle:
+                        handle.write("MEMORY_CONTROL=kv-cache-memory-bytes\n")
+                        handle.write("KV_CACHE_MEMORY_BYTES=12884901888\n")
+                        handle.write("GPU_MEMORY_UTILIZATION=0.80\n")
+                        for key, value in overrides.items():
+                            handle.write(f"{key}={value}\n")
+                    result = run(
+                        "bash", ROOT / "validate-dspark-config.sh",
+                        env={**os.environ, "ENV_FILE": str(env_file), "VALIDATE_RENDER": "0"},
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected, result.stderr)
+
+    def test_fractional_compatibility_profile_is_explicit_and_projected_to_both_ranks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            env_file, _ = self.write_env(directory)
+            with env_file.open("a") as handle:
+                handle.write("MEMORY_CONTROL=gpu-memory-utilization\n")
+                handle.write("KV_CACHE_MEMORY_BYTES=\n")
+                handle.write("GPU_MEMORY_UTILIZATION=0.80\n")
+                handle.write("MAX_NUM_BATCHED_TOKENS=8216\n")
+                handle.write("MAX_CUDAGRAPH_CAPTURE_SIZE=32\n")
+                handle.write("ENFORCE_EAGER=0\n")
+            validated = run(
+                "bash", ROOT / "validate-dspark-config.sh",
+                env={**os.environ, "ENV_FILE": str(env_file), "VALIDATE_RENDER": "0"},
+            )
+            self.assertEqual(validated.returncode, 0, validated.stderr)
+            head = directory / "head.env"
+            worker = directory / "worker.env"
+            generated = run(
+                "python3", ROOT / "scripts/generate-node-env.py",
+                "--source", env_file, "--head-output", head, "--worker-output", worker,
+            )
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            expected = {
+                "MEMORY_CONTROL=gpu-memory-utilization",
+                "KV_CACHE_MEMORY_BYTES=",
+                "GPU_MEMORY_UTILIZATION=0.80",
+                "MAX_NUM_BATCHED_TOKENS=8216",
+                "MAX_CUDAGRAPH_CAPTURE_SIZE=32",
+                "ENFORCE_EAGER=0",
+            }
+            for output in (head, worker):
+                self.assertTrue(expected.issubset(set(output.read_text().splitlines())))
+
     def test_worker_env_is_allowlisted_and_diagnostics_redact_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -272,6 +370,44 @@ class ArtifactContractTest(unittest.TestCase):
             combined = validated.stdout + validated.stderr
             self.assertNotIn("test-secret-value", combined)
             self.assertNotIn("must-never-copy", combined)
+
+
+    def test_restart_policies_distinguish_long_running_and_temporary_services(self):
+        dspark = (ROOT / "docker-compose.dspark.yml").read_text()
+        gateway = (ROOT / "deployments/private-smoke/litellm/docker-compose.yml").read_text()
+        self.assertEqual(
+            {value.strip().strip("'\"") for value in re.findall(r"^\s*restart:\s*(.+)$", dspark, re.MULTILINE)},
+            {"no"},
+        )
+        self.assertEqual(
+            {value.strip().strip("'\"") for value in re.findall(r"^\s*restart:\s*(.+)$", gateway, re.MULTILINE)},
+            {"unless-stopped", "no"},
+        )
+        self.assertRegex(gateway, r"(?s)litellm:.*?restart: \"no\"")
+        self.assertRegex(gateway, r"(?s)postgres:.*?restart: unless-stopped")
+        self.assertIn("dspark-private-litellm-pgdata", gateway)
+        self.assertNotIn("/var/lib/postgresql/data:size=", gateway)
+
+    def test_scheduler_supports_authoritative_prechange_baseline_capture(self):
+        script = (ROOT / "scripts/benchmark-scheduler.py").read_text()
+        self.assertIn("--capture-baseline", script)
+        self.assertIn("dspark-scheduler-baseline/v1", script)
+        self.assertIn("baseline_capture", script)
+        self.assertIn('pop("target_scheduler_tokens"', script)
+        self.assertIn("p95_decode_latency_s", script)
+        self.assertIn("p95_ttft_s", script)
+
+    def test_rollback_tooling_is_manifest_driven_and_fail_closed(self):
+        tool = (ROOT / "deployments/private-smoke/litellm/rollback.sh").read_text()
+        for required in (
+            "umask 077", "SHA256SUMS", "sha256sum -c", "pg_dump", "--entrypoint pg_restore", "--list",
+            "chmod 0600", "docker compose", "migrate", "restore", "verify-existing-key",
+            "stop-deepseek-v4-flash-dspark.sh", "start-deepseek-v4-flash-dspark.sh",
+        ):
+            self.assertIn(required, tool)
+        self.assertLess(tool.index("stop-deepseek-v4-flash-dspark.sh"), tool.index("start-deepseek-v4-flash-dspark.sh"))
+        self.assertIn("worker-first", tool)
+        self.assertIn("LITELLM_VIRTUAL_KEY_FILE", tool)
 
 
 if __name__ == "__main__":

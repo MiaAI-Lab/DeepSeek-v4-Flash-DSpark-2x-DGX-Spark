@@ -118,6 +118,13 @@ export VLLM_HOST VLLM_PORT PORT DEFAULT_THINKING
 # Clients reach only the authenticated proxy on the dedicated Docker bridge.
 VLLM_PROXY_HOST="${VLLM_PROXY_HOST:-172.30.0.1}"
 VLLM_PROXY_PORT="${VLLM_PROXY_PORT:-8888}"
+VLLM_PROXY_UPSTREAM_TIMEOUT="${VLLM_PROXY_UPSTREAM_TIMEOUT:-3600}"
+if ! [[ "$VLLM_PROXY_UPSTREAM_TIMEOUT" =~ ^[0-9]+$ ]] || (( 10#$VLLM_PROXY_UPSTREAM_TIMEOUT < 1 || 10#$VLLM_PROXY_UPSTREAM_TIMEOUT > 7200 )); then
+  echo "VLLM_PROXY_UPSTREAM_TIMEOUT must be an integer between 1 and 7200: $VLLM_PROXY_UPSTREAM_TIMEOUT" >&2
+  exit 2
+fi
+VLLM_PROXY_UPSTREAM_TIMEOUT="$((10#$VLLM_PROXY_UPSTREAM_TIMEOUT))"
+export VLLM_PROXY_HOST VLLM_PROXY_PORT VLLM_PROXY_UPSTREAM_TIMEOUT
 API_HOST="${API_HOST:-$VLLM_PROXY_HOST}"
 URL_HOST="$API_HOST"
 if [[ "$URL_HOST" == *:* && "$URL_HOST" != \[*\] ]]; then
@@ -257,6 +264,15 @@ pick_gid_match_ip() {
 
 resolve_nccl_gid_indexes() {
   local head_match worker_match resolved_head resolved_worker
+
+  # Multi-HCA (dual-rail): un solo GID index global no aplica; NCCL lo resuelve
+  # por HCA con NCCL_IB_ROCE_VERSION_NUM=2 + NCCL_IB_ADDR_FAMILY=AF_INET.
+  if [[ "$NCCL_IB_HCA" == *,* ]] || [[ "$WORKER_NCCL_IB_HCA" == *,* ]]; then
+    NCCL_IB_GID_INDEX=""
+    WORKER_NCCL_IB_GID_INDEX=""
+    echo "Multi-HCA detectado (head=$NCCL_IB_HCA worker=$WORKER_NCCL_IB_HCA); GID index en auto (NCCL per-HCA)."
+    return 0
+  fi
 
   if [ "$NCCL_IB_GID_AUTO" = "0" ]; then
     NCCL_IB_GID_INDEX="${ENV_NCCL_IB_GID_INDEX:-}"
@@ -430,13 +446,21 @@ print_resolved_profile() {
   echo "  image: $DSPARK_VLLM_IMAGE"
   echo "  model: ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}"
   echo "  served model: ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
-  echo "  max model len: ${MAX_MODEL_LEN:-1000000}"
-  echo "  max num seqs: ${MAX_NUM_SEQS:-12}"
-  echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
-  echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.80}"
+  echo "  max model len: ${MAX_MODEL_LEN:-1048576}"
+  echo "  max num seqs: ${MAX_NUM_SEQS:-6}"
+  echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8216}"
+  case "${MEMORY_CONTROL:-kv-cache-memory-bytes}" in
+    kv-cache-memory-bytes)
+      echo "  memory control: kv-cache-memory-bytes (${KV_CACHE_MEMORY_BYTES:-12884901888}); startup guard gpu-memory-utilization=${GPU_MEMORY_UTILIZATION:-0.80}"
+      ;;
+    gpu-memory-utilization)
+      echo "  memory control: gpu-memory-utilization (${GPU_MEMORY_UTILIZATION:-0.80})"
+      ;;
+  esac
+  echo "  cudagraph capture ceiling: ${MAX_CUDAGRAPH_CAPTURE_SIZE:-32}"
+  echo "  enforce eager: ${ENFORCE_EAGER:-0}"
   echo "  mtp speculative tokens: ${MTP_NUM_TOKENS:-5} (dspark_block_size min is 5)"
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"
-  echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))"
   echo "  API bind: $VLLM_HOST:$VLLM_PORT"
   echo "  authenticated proxy: $VLLM_PROXY_HOST:$VLLM_PROXY_PORT"
   echo "  head fabric IP: $VLLM_HOST_IP"

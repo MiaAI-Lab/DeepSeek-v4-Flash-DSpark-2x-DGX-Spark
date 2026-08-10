@@ -14,10 +14,12 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - ${POSTGRES_PASSWORD_FILE:?set POSTGRES_PASSWORD_FILE}:/run/secrets/database-password:ro
+      # Persistente a proposito: las virtual keys de Hermes viven en esta DB y
+      # con tmpfs se borraban en cada reboot (incidente 2026-08-05).
+      - pgdata:/var/lib/postgresql/data
     tmpfs:
       - /tmp:size=32m,mode=1777
       - /run/postgresql:size=16m,uid=999,gid=999,mode=0770
-      - /var/lib/postgresql/data:size=512m,uid=999,gid=999,mode=0700
     networks:
       database:
         ipv4_address: 172.31.0.11
@@ -26,7 +28,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 30
-    restart: "no"
+    restart: unless-stopped
 
   litellm:
     image: ghcr.io/berriai/litellm-database@sha256:5fa5f99cd5576e359a0e50395ad14edbe922ef41c152f67c534e4f8b6238c5ec
@@ -78,6 +80,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 60
+    # Fail closed after host/Docker restart: deploy.sh installs the egress policy first.
     restart: "no"
 
 networks:
@@ -102,3 +105,5 @@ volumes:
   prisma-cache:
     name: dspark-private-litellm-prisma-cache
     external: true
+  pgdata:
+    name: dspark-private-litellm-pgdata

@@ -35,6 +35,7 @@ def collect(role, address):
     command = "\n".join((
         "printf 'kernel=%s\\n' \"$(uname -r)\"",
         "printf 'mem_available_gib=%s\\n' \"$(awk '/MemAvailable/ {print $2/1024/1024}' /proc/meminfo)\"",
+        "printf 'memory_psi_full_avg10=%s\\n' \"$(awk '/^full / {for (i=1;i<=NF;i++) if ($i ~ /^avg10=/) {split($i,a,\"=\"); print a[2]}}' /proc/pressure/memory)\"",
         "printf 'disk_available_gib=%s\\n' \"$(df -BG --output=avail /home/plexiz | tail -1 | tr -dc '0-9')\"",
         "printf 'docker_version=%s\\n' \"$(docker version --format '{{.Server.Version}}' 2>/dev/null || printf unknown)\"",
         f"if docker image inspect {quoted_image} >/dev/null 2>&1; then echo image_present=true; else echo image_present=false; fi",
@@ -54,6 +55,7 @@ def collect(role, address):
         "role": role,
         "kernel": fields.get("kernel", "unknown"),
         "mem_available_gib": round(float(fields.get("mem_available_gib", "0")), 2),
+        "memory_psi_full_avg10": round(float(fields["memory_psi_full_avg10"]), 4),
         "disk_available_gib": round(float(fields.get("disk_available_gib", "0")), 2),
         "docker_version": fields.get("docker_version", "unknown"),
         "image_present": fields.get("image_present") == "true",
@@ -70,7 +72,7 @@ with ThreadPoolExecutor(max_workers=2) as pool:
     nodes = [head_future.result(), worker_future.result()]
 
 payload = {
-    "schema_version": 1,
+    "schema_version": 2,
     "collected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "nodes": nodes,
 }

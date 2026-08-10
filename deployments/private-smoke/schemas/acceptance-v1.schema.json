@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plexiz.invalid/schemas/dual-dspark-acceptance.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "created_at", "accepted",
+    "manifest_sha256", "fixture_sha256", "pin_set_sha256",
+    "chain_head_sha256", "pins", "gates", "functional_runs",
+    "performance", "soak", "evidence_chain", "purge_eligible"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]{4,100}$"},
+    "created_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "accepted": {"type": "boolean"},
+    "manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "fixture_sha256": {"$ref": "#/$defs/sha256"},
+    "pin_set_sha256": {"$ref": "#/$defs/sha256"},
+    "chain_head_sha256": {"$ref": "#/$defs/sha256"},
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_revision", "runtime_image_digest", "repo_commit", "config_sha256"],
+      "properties": {
+        "model_revision": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "runtime_image_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "repo_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "config_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fabric", "artifacts", "qwen_stopped", "direct", "gateway",
+        "hermes", "performance", "soak", "isolation", "sanitization",
+        "public_gateway_unchanged"
+      ],
+      "properties": {
+        "fabric": {"type": "boolean"},
+        "artifacts": {"type": "boolean"},
+        "qwen_stopped": {"type": "boolean"},
+        "direct": {"type": "boolean"},
+        "gateway": {"type": "boolean"},
+        "hermes": {"type": "boolean"},
+        "performance": {"type": "boolean"},
+        "soak": {"type": "boolean"},
+        "isolation": {"type": "boolean"},
+        "sanitization": {"type": "boolean"},
+        "public_gateway_unchanged": {"type": "boolean"}
+      }
+    },
+    "functional_runs": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["artifact_sha256", "accepted", "api_calls", "gateway_attested"],
+        "properties": {
+          "artifact_sha256": {"$ref": "#/$defs/sha256"},
+          "accepted": {"type": "boolean"},
+          "api_calls": {"type": "integer", "minimum": 1},
+          "gateway_attested": {"const": true}
+        }
+      }
+    },
+    "performance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["direct", "litellm", "median_decode_overhead_ratio", "p95_ttft_overhead_seconds"],
+      "properties": {
+        "direct": {"$ref": "#/$defs/performance_summary"},
+        "litellm": {"$ref": "#/$defs/performance_summary"},
+        "median_decode_overhead_ratio": {"type": "number", "minimum": 0},
+        "p95_ttft_overhead_seconds": {"type": "number"}
+      }
+    },
+    "soak": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "accepted", "duration_seconds", "sample_interval_seconds", "request_count",
+        "origin_completion_delta", "gateway_attempt_delta", "failed_requests", "sample_error_count",
+        "max_idle_gap_seconds", "node_samples", "min_head_mem_available_gib",
+        "min_worker_mem_available_gib", "max_requests_running",
+        "max_requests_waiting", "preemption_delta", "max_rank_restarts",
+        "max_node_sample_gap_seconds", "kv_cache_usage_peak", "speculative_acceptance_mean"
+      ],
+      "properties": {
+        "accepted": {"type": "boolean"},
+        "duration_seconds": {"type": "integer", "minimum": 1800},
+        "sample_interval_seconds": {"const": 5},
+        "request_count": {"type": "integer", "minimum": 1},
+        "origin_completion_delta": {"type": "integer", "minimum": 1},
+        "gateway_attempt_delta": {"type": "integer", "minimum": 1},
+        "failed_requests": {"type": "integer", "minimum": 0},
+        "sample_error_count": {"type": "integer", "minimum": 0, "maximum": 3},
+        "max_idle_gap_seconds": {"type": "number", "minimum": 0},
+        "node_samples": {"type": "integer", "minimum": 300},
+        "min_head_mem_available_gib": {"type": "number", "minimum": 0},
+        "min_worker_mem_available_gib": {"type": "number", "minimum": 0},
+        "max_requests_running": {"type": "number", "minimum": 0},
+        "max_requests_waiting": {"type": "number", "minimum": 0},
+        "preemption_delta": {"type": "number", "minimum": 0},
+        "max_rank_restarts": {"type": "integer", "minimum": 0},
+        "max_node_sample_gap_seconds": {"type": "number", "minimum": 0},
+        "kv_cache_usage_peak": {"type": "number", "minimum": 0},
+        "speculative_acceptance_mean": {"type": ["number", "null"]}
+      }
+    },
+    "evidence_chain": {
+      "type": "array", "minItems": 7,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "artifact_path", "artifact_sha256", "previous_sha256", "entry_sha256"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9_-]{2,80}$"},
+          "artifact_path": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$"},
+          "artifact_sha256": {"$ref": "#/$defs/sha256"},
+          "previous_sha256": {"$ref": "#/$defs/sha256"},
+          "entry_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "purge_eligible": {"type": "boolean"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "performance_summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["median_decode_tokens_per_second", "p95_ttft_seconds", "request_count", "origin_completion_delta", "accepted"],
+      "properties": {
+        "median_decode_tokens_per_second": {"type": "number", "minimum": 0},
+        "p95_ttft_seconds": {"type": "number", "minimum": 0},
+        "request_count": {"type": "integer", "minimum": 1},
+        "origin_completion_delta": {"type": "number", "minimum": 1},
+        "accepted": {"type": "boolean"}
+      }
+    }
+  }
+}

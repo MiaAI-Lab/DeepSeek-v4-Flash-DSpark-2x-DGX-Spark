@@ -16,7 +16,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-# Exact scope sent to /key/generate: {"models": ["deepseek-v4-flash-0731-smoke"]}
+# Exact model scope plus the read-only model-detail route used by Hermes.
+# LiteLLM classifies /v1/models/{id} as admin-only unless the virtual key
+# explicitly permits it; inference remains restricted by the models list.
 docker exec -i "$CONTAINER" python3 - >"$OUTPUT" <<'PY'
 import json
 from pathlib import Path
@@ -25,8 +27,8 @@ import urllib.request
 master = Path("/run/secrets/master-key").read_text().strip()
 payload = json.dumps({
     "models": ["deepseek-v4-flash-0731-smoke"],
+    "allowed_routes": ["/v1/models", "/v1/models/*", "/v1/chat/completions"],
     "key_alias": "hermes-deepseek-smoke",
-    "max_parallel_requests": 3,
     "metadata": {"scope": "synthetic-hermes-smoke"},
 }).encode()
 request = urllib.request.Request(

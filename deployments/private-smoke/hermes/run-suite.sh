@@ -487,6 +487,9 @@ def mount_is_safe(mount):
     destination = str(mount.get("Destination", ""))
     if mount.get("RW") is not False or not source.is_dir() or any(source.rglob("*")):
         return False
+    if destination in {"/root/.hermes/attachments", "/root/.hermes/images"}:
+        expected = profile / Path(destination).name
+        return expected.is_dir() and source.samefile(expected)
     try:
         relative = source.relative_to(profile)
     except ValueError:
@@ -755,6 +758,9 @@ def mount_is_safe(mount):
     destination = str(mount.get("Destination", ""))
     if mount.get("RW") is not False or not source.is_dir() or any(source.rglob("*")):
         return False
+    if destination in {"/root/.hermes/attachments", "/root/.hermes/images"}:
+        expected = profile / Path(destination).name
+        return expected.is_dir() and source.samefile(expected)
     try:
         relative = source.relative_to(profile)
     except ValueError:
