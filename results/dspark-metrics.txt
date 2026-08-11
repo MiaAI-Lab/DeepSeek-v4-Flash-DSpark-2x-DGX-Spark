@@ -1,0 +1,34 @@
+# HELP vllm:spec_decode_num_drafts_total Number of spec decoding drafts.
+# TYPE vllm:spec_decode_num_drafts_total counter
+vllm:spec_decode_num_drafts_total{engine="0",model_name="deepseek-v4-flash-0731-vision"} 105.0
+# HELP vllm:spec_decode_num_drafts_created Number of spec decoding drafts.
+# TYPE vllm:spec_decode_num_drafts_created gauge
+vllm:spec_decode_num_drafts_created{engine="0",model_name="deepseek-v4-flash-0731-vision"} 1.7863175205107226e+09
+# HELP vllm:spec_decode_num_draft_tokens_total Number of draft tokens.
+# TYPE vllm:spec_decode_num_draft_tokens_total counter
+vllm:spec_decode_num_draft_tokens_total{engine="0",model_name="deepseek-v4-flash-0731-vision"} 630.0
+# HELP vllm:spec_decode_num_draft_tokens_created Number of draft tokens.
+# TYPE vllm:spec_decode_num_draft_tokens_created gauge
+vllm:spec_decode_num_draft_tokens_created{engine="0",model_name="deepseek-v4-flash-0731-vision"} 1.786317520512326e+09
+# HELP vllm:spec_decode_num_accepted_tokens_total Number of accepted tokens.
+# TYPE vllm:spec_decode_num_accepted_tokens_total counter
+vllm:spec_decode_num_accepted_tokens_total{engine="0",model_name="deepseek-v4-flash-0731-vision"} 149.0
+# HELP vllm:spec_decode_num_accepted_tokens_created Number of accepted tokens.
+# TYPE vllm:spec_decode_num_accepted_tokens_created gauge
+vllm:spec_decode_num_accepted_tokens_created{engine="0",model_name="deepseek-v4-flash-0731-vision"} 1.7863175205125227e+09
+# HELP vllm:spec_decode_num_accepted_tokens_per_pos_total Accepted tokens per draft position.
+# TYPE vllm:spec_decode_num_accepted_tokens_per_pos_total counter
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-0731-vision",position="0"} 84.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-0731-vision",position="1"} 63.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-0731-vision",position="2"} 1.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-0731-vision",position="3"} 1.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-0731-vision",position="4"} 0.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-0731-vision",position="5"} 0.0
+# HELP vllm:spec_decode_num_accepted_tokens_per_pos_created Accepted tokens per draft position.
+# TYPE vllm:spec_decode_num_accepted_tokens_per_pos_created gauge
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-0731-vision",position="0"} 1.7863175205151196e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-0731-vision",position="1"} 1.7863175205729218e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-0731-vision",position="2"} 1.786317520572926e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-0731-vision",position="3"} 1.786317520574119e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-0731-vision",position="4"} 1.786317520574122e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-0731-vision",position="5"} 1.7863175205741246e+09

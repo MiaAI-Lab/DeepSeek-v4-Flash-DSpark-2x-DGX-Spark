@@ -17,6 +17,10 @@ Keys' public repos and patches provided:
 This repo's concurrency results, overlay proposer, and NVFP4 launch path all
 depend directly on that contribution.
 
+**[@u1tra_instinct](https://x.com/u1tra_instinct)** — special thanks for the
+optional abliterated weights path (`ABLITERATED=1`):
+https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32
+
 ## DSpark Concurrency Patch
 
 The in-server DSpark concurrency breakthrough comes from Keys / drowzeys:

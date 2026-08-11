@@ -1,0 +1,406 @@
+# Dockerfile to build mia-vllm-gb10-linear-b12x + DeepSeek V4 DSpark NVFP4 patches
+# FROM: ghcr.io/miaai-lab/mia-vllm-gb10-linear-b12x:latest (vLLM 0.26, GB10 native)
+# Adds: nvfp4_ds_mla KV cache, DSpark proposer, custom DSV4 patches, b12x MoE
+
+ARG BASE_IMAGE=ghcr.io/miaai-lab/mia-vllm-gb10-linear-b12x:latest
+FROM ${BASE_IMAGE}
+
+LABEL description="mia-vllm-gb10 + DeepSeek V4 Flash DSpark NVFP4 patches"
+LABEL base="mia-vllm-gb10-linear-b12x"
+LABEL vllm="0.26"
+
+SHELL ["/bin/bash", "-c"]
+
+# ============================================================
+# Stage A: nvfp4_ds_mla dtype plumbing (config/cache.py, torch_utils.py, kv_cache_interface.py)
+# ============================================================
+RUN python3 <<'PY'
+from pathlib import Path
+
+root = Path("/usr/local/lib/python3.12/dist-packages/vllm")
+
+def replace(path: str, old: str, new: str) -> None:
+    p = root / path
+    text = p.read_text()
+    if new in text:
+        print(f"  [skip] already applied: {path}")
+        return
+    if old not in text:
+        print(f"  [ERR]  anchor not found in {path}")
+        print(f"         looking for: {old[:80]!r}...")
+        raise SystemExit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"  [OK]   patched: {path}")
+
+# 1. config/cache.py: add nvfp4_ds_mla to CacheDType (after fp8_ds_mla)
+replace(
+    "config/cache.py",
+    '    "fp8_ds_mla",\n    "turboquant_k8v4",',
+    '    "fp8_ds_mla",\n    "nvfp4_ds_mla",\n    "turboquant_k8v4",',
+)
+
+# 2. utils/torch_utils.py: add nvfp4_ds_mla dtype mapping
+replace(
+    "utils/torch_utils.py",
+    '    "fp8_ds_mla": torch.uint8,\n    "turboquant_k8v4": torch.uint8,',
+    '    "fp8_ds_mla": torch.uint8,\n    "nvfp4_ds_mla": torch.uint8,\n    "turboquant_k8v4": torch.uint8,',
+)
+
+# 3. utils/torch_utils.py: extend nvfp4 check to include nvfp4_ds_mla
+replace(
+    "utils/torch_utils.py",
+    '        or kv_cache_dtype == "nvfp4"\n',
+    '        or kv_cache_dtype == "nvfp4"\n        or kv_cache_dtype == "nvfp4_ds_mla"\n',
+)
+
+# 4. v1/kv_cache_interface.py: map nvfp4_ds_mla -> KVQuantMode.NVFP4
+replace(
+    "v1/kv_cache_interface.py",
+    '    if kv_cache_dtype == "nvfp4":\n        return KVQuantMode.NVFP4\n',
+    '    if kv_cache_dtype == "nvfp4":\n        return KVQuantMode.NVFP4\n    if kv_cache_dtype == "nvfp4_ds_mla":\n        return KVQuantMode.NVFP4\n',
+)
+
+print("Stage A: nvfp4_ds_mla dtype plumbing applied")
+PY
+
+# ============================================================
+# Stage B: DeepSeek V4 NVFP4 attention patches (attention.py, sparse_mla.py)
+# Fixes Issue #22: nvfp4_ds_mla long-context decode regression
+# ============================================================
+RUN python3 <<'PY'
+from pathlib import Path
+
+root = Path("/usr/local/lib/python3.12/dist-packages/vllm")
+
+def replace(path: str, old: str, new: str) -> None:
+    p = root / path
+    text = p.read_text()
+    if new in text:
+        print(f"  [skip] already applied: {path}")
+        return
+    if old not in text:
+        print(f"  [ERR]  anchor not found in {path}")
+        print(f"         looking for: {old[:80]!r}...")
+        raise SystemExit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"  [OK]   patched: {path}")
+
+# 1. models/deepseek_v4/attention.py: add nvfp4_ds_mla handling in _resolve_dsv4_kv_cache_dtype
+# Must go BEFORE the fp8 path to avoid the fp8 assertion
+replace(
+    "models/deepseek_v4/attention.py",
+    """    if use_fp8_ds_mla_layout:
+        # fp8_ds_mla block format: UE8M0 block-scaled fp8 packed as uint8.
+        assert kv_cache_dtype.startswith("fp8"), (
+            f"DeepseekV4 fp8_ds_mla layout only supports fp8 kv-cache, "
+            f"got {kv_cache_dtype}"
+        )""",
+    """    if kv_cache_dtype in ("nvfp4", "nvfp4_ds_mla"):
+        # NVFP4 DS-MLA: nvfp4 block format packed as uint8.
+        if cache_config is not None:
+            cache_config.cache_dtype = "nvfp4_ds_mla"
+        logger.info_once("Using NVFP4 DS-MLA KV cache format (probe).")
+        return "nvfp4_ds_mla", torch.uint8
+
+    if use_fp8_ds_mla_layout:
+        # fp8_ds_mla block format: UE8M0 block-scaled fp8 packed as uint8.
+        assert kv_cache_dtype.startswith("fp8"), (
+            f"DeepseekV4 fp8_ds_mla layout only supports fp8 kv-cache, "
+            f"got {kv_cache_dtype}"
+        )""",
+)
+
+# 2. models/deepseek_v4/sparse_mla.py: add nvfp4_ds_mla to supported_kv_cache_dtypes
+replace(
+    "models/deepseek_v4/sparse_mla.py",
+    '''    supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [
+        "auto",
+        "fp8_ds_mla",
+        "fp8",  # alias for fp8_ds_mla
+    ]''',
+    '''    supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [
+        "auto",
+        "fp8_ds_mla",
+        "nvfp4_ds_mla",
+        "fp8",  # alias for fp8_ds_mla
+    ]''',
+)
+
+# 3. models/deepseek_v4/sparse_mla.py: add nvfp4_ds_mla cache shape for DeepseekV4FlashMLABackend
+# IMPORTANT: nvfp4_ds_mla uses 352 B/token (NOT 584).  The352-byte layout
+# (256B E2M1 NoPE + 32B E4M3 scales + 64B FP8 RoPE) matches the write kernel
+# (concat_and_cache_nvfp4_ds_mla.cu, kStride=352) and the FlashInfer SM120
+# backend's get_kv_cache_shape.
+replace(
+    "models/deepseek_v4/sparse_mla.py",
+    """    @staticmethod
+    def get_kv_cache_shape(
+        num_blocks: int,
+        block_size: int,
+        num_kv_heads: int,
+        head_size: int,
+        cache_dtype_str: str = "auto",
+    ) -> tuple[int, ...]:
+        if cache_dtype_str == "fp8_ds_mla":
+            # DeepseekV4 main MLA: 584B per token (448 NoPE + 128 RoPE + 8 fp8 scale).
+            # head_size passed in is the semantic head_dim (512).
+            return (num_blocks, block_size, 584)
+        else:
+            return (num_blocks, block_size, head_size)""",
+    """    @staticmethod
+    def get_kv_cache_shape(
+        num_blocks: int,
+        block_size: int,
+        num_kv_heads: int,
+        head_size: int,
+        cache_dtype_str: str = "auto",
+    ) -> tuple[int, ...]:
+        if cache_dtype_str == "nvfp4_ds_mla":
+            # nvfp4_ds_mla packed layout: 256B E2M1 NoPE + 32B E4M3 block-16
+            # scales + 64B FP8 RoPE = 352 B/token.  Matches the write kernel
+            # (concat_and_cache_nvfp4_ds_mla.cu, kStride=352) and FlashInfer
+            # SM120 backend's get_kv_cache_shape.
+            return (num_blocks, block_size, 352)
+        if cache_dtype_str == "fp8_ds_mla":
+            # DeepseekV4 main MLA: 584B per token (448 NoPE + 128 RoPE + 8 fp8 scale).
+            # head_size passed in is the semantic head_dim (512).
+            return (num_blocks, block_size, 584)
+        else:
+            return (num_blocks, block_size, head_size)""",
+)
+
+# 4. v1/kv_cache_interface.py: add nvfp4_ds_mla handling in MLAAttentionSpec.real_page_size_bytes
+# nvfp4_ds_mla uses the same 352 B/token layout as nvfp4 (model-independent).
+replace(
+    "v1/kv_cache_interface.py",
+    """    @property
+    def real_page_size_bytes(self) -> int:
+        if self.cache_dtype_str == "nvfp4":
+            # nvfp4_ds_mla: 256B E2M1 + 32B E4M3 block-16 scales + 64B FP8
+            # RoPE = 352 B/token (kv_lora_rank=512 + qk_rope_head_dim=64).
+            return self.block_size * 352
+        if self.cache_dtype_str == "fp8_ds_mla":""",
+    """    @property
+    def real_page_size_bytes(self) -> int:
+        if self.cache_dtype_str in ("nvfp4", "nvfp4_ds_mla"):
+            # nvfp4_ds_mla: 256B E2M1 + 32B E4M3 block-16 scales + 64B FP8
+            # RoPE = 352 B/token (kv_lora_rank=512 + qk_rope_head_dim=64).
+            return self.block_size * 352
+        if self.cache_dtype_str == "fp8_ds_mla":""",
+)
+
+# 5. models/deepseek_v4/attention.py: fix get_kv_cache_spec dtype for nvfp4_ds_mla
+# Without this, the cache is allocated as bfloat16 (2 B/elem) instead of
+# uint8 (1 B/elem), doubling the per-token stride and corrupting reads.
+replace(
+    "models/deepseek_v4/attention.py",
+    """        uses_fp8_ds_mla_layout = self.kv_cache_dtype == "fp8_ds_mla"
+        return MLAAttentionSpec(
+            block_size=vllm_config.cache_config.block_size,
+            num_kv_heads=1,
+            head_size=self.head_dim,
+            dtype=torch.uint8 if uses_fp8_ds_mla_layout else self.kv_cache_torch_dtype,
+            compress_ratio=self.compress_ratio,
+            cache_dtype_str=self.kv_cache_dtype,
+            alignment=576 if uses_fp8_ds_mla_layout else None,
+            model_version="deepseek_v4",
+        )""",
+    """        uses_fp8_ds_mla_layout = self.kv_cache_dtype == "fp8_ds_mla"
+        uses_nvfp4_ds_mla = self.kv_cache_dtype == "nvfp4_ds_mla"
+        uses_quantized_ds_mla = uses_fp8_ds_mla_layout or uses_nvfp4_ds_mla
+        return MLAAttentionSpec(
+            block_size=vllm_config.cache_config.block_size,
+            num_kv_heads=1,
+            head_size=self.head_dim,
+            dtype=torch.uint8 if uses_quantized_ds_mla else self.kv_cache_torch_dtype,
+            compress_ratio=self.compress_ratio,
+            cache_dtype_str=self.kv_cache_dtype,
+            alignment=576 if uses_fp8_ds_mla_layout else None,
+            model_version="deepseek_v4",
+        )""",
+)
+
+print("Stage B: DeepSeek V4 NVFP4 attention patches applied (Issue #22 fix)")
+PY
+
+# ============================================================
+# Copy overlay files: NEW files that don't exist in upstream 0.26
+# ============================================================
+COPY recipe/overlay/vllm/v1/spec_decode/dspark_proposer.py \
+     /usr/local/lib/python3.12/dist-packages/vllm/v1/spec_decode/dspark_proposer.py
+
+COPY recipe/overlay/vllm/v1/spec_decode/dspark.py \
+     /usr/local/lib/python3.12/dist-packages/vllm/v1/spec_decode/dspark.py
+
+COPY recipe/overlay/vllm/models/deepseek_v4/nvidia/dspark_kernels.py \
+     /usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia/dspark_kernels.py
+
+COPY recipe/overlay/vllm/models/deepseek_v4/nvidia/sm120.py \
+     /usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia/sm120.py
+
+COPY recipe/overlay/vllm/v1/attention/backends/mla/b12x_mla_sparse.py \
+     /usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/b12x_mla_sparse.py
+
+COPY recipe/overlay/vllm/model_executor/layers/fused_moe/b12x_moe.py \
+     /usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/b12x_moe.py
+
+# ---- Stage C: Patch envs.py with Anemll-specific env vars ----
+# Do NOT replace envs.py wholesale (overlay is missing 0.26 vars like VLLM_ROCM_*)
+# Instead, add only the DSpark/DSV4 env vars needed
+RUN python3 <<'PY'
+from pathlib import Path
+
+p = Path("/usr/local/lib/python3.12/dist-packages/vllm/envs.py")
+text = p.read_text()
+
+# Check if vars are already present
+if "VLLM_DSPARK_CONFIDENCE_THRESHOLD" in text:
+    print("[skip] DSpark env vars already present")
+else:
+    # Find the VLLM env block to add after
+    marker = 'VLLM_USE_FASTOKENS: bool = False'
+    if marker not in text:
+        raise SystemExit(f"Cannot find anchor {marker!r}")
+    
+    dspark_envs = '''
+    # DSpark speculative decoding tuning
+    VLLM_DSPARK_CONFIDENCE_THRESHOLD: str = "0.0"
+    VLLM_DSPARK_FORCE_DRAFT_LENGTH: str = ""
+    VLLM_DSPARK_ITER_TIMING: bool = False
+    VLLM_DSPARK_ITER_TIMING_LOG_EVERY: int = 20
+    VLLM_DSPARK_REPLICATE_MARKOV_W1: bool = False
+    VLLM_DSPARK_STAGE_TIMING: bool = False
+    VLLM_DSPARK_STAGE_TIMING_LOG_EVERY: int = 20
+    VLLM_DSPARK_TARGET_TIMING: bool = False
+    VLLM_DSPARK_TARGET_TIMING_LOG_EVERY: int = 20
+    VLLM_DSV4_B12X_COMPRESSED_MLA: bool = False
+    VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE: bool = False
+    VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT: bool = False
+    VLLM_ENABLE_DEEPSEEK_V4_SPARSE_MLA_WARMUP: bool = True
+    VLLM_ENABLE_PCIE_ALLREDUCE: bool = False
+    VLLM_ENFORCE_STRICT_TOOL_CALLING: bool = False
+    VLLM_FLASHINFER_MOE_BACKEND: Literal["throughput", "latency", "masked_gemm"] = (
+        "throughput"
+    )
+    VLLM_MXFP4_USE_MARLIN: bool | None = None
+    VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM: int = 0
+    VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M: int = 16
+    VLLM_B12X_W4A16_FORCE_TILE_CONFIG: str = ""
+'''
+    
+    p.write_text(text.replace(marker, marker + dspark_envs))
+    print(f"[OK] Added DSpark/DSV4 env vars to envs.py")
+
+# Verify no AttributeError imports
+import ast
+try:
+    ast.parse(p.read_text())
+    print("[OK] envs.py syntax valid")
+except SyntaxError as e:
+    print(f"[ERR] envs.py syntax error: {e}")
+    raise
+PY
+
+# ---- Patch b12x_mla_sparse.py for 0.26 API changes ----
+RUN python3 <<'PY'
+from pathlib import Path
+
+p = Path("/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/b12x_mla_sparse.py")
+if not p.exists():
+    print("[skip] b12x_mla_sparse.py not found")
+else:
+    text = p.read_text()
+    # 0.26 renamed SparseMLAAttentionImpl -> MLAAttentionImpl
+    if "SparseMLAAttentionImpl" in text:
+        text = text.replace("SparseMLAAttentionImpl", "MLAAttentionImpl")
+        p.write_text(text)
+        print("[OK] Patched SparseMLAAttentionImpl -> MLAAttentionImpl in b12x_mla_sparse.py")
+    else:
+        print("[skip] Already patched or not needed")
+PY
+
+# ---- NOTE: overlay replacement files skipped for 0.26 compatibility ----
+# Files like model.py, cache_utils.py, dspark.py, registry.py, etc.
+# are NOT replaced because the upstream 0.26 versions are significantly different
+# and the overlay versions miss key functions/features.
+#
+# If a runtime error surfaces for a specific file, apply a targeted patch
+# instead of a wholesale replacement.
+
+# ============================================================
+# Verify the build
+# ============================================================
+RUN python3 <<'PY'
+import sys, torch
+from typing import get_args
+
+print("=== Verification ===")
+
+# 1. Check nvfp4_ds_mla is in CacheDType
+from vllm.config.cache import CacheDType
+dtypes = get_args(CacheDType)
+assert "nvfp4_ds_mla" in dtypes, f"MISSING: nvfp4_ds_mla in CacheDType"
+print(f"[OK] nvfp4_ds_mla in CacheDType")
+
+# 2. Check kv_quant_mode mapping
+from vllm.v1.kv_cache_interface import get_kv_quant_mode
+mode = get_kv_quant_mode("nvfp4_ds_mla")
+assert mode.is_nvfp4, "nvfp4_ds_mla should map to KVQuantMode.NVFP4"
+print(f"[OK] nvfp4_ds_mla -> KVQuantMode.NVFP4")
+
+# 3. Check torch_utils dtype mapping
+from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+assert "nvfp4_ds_mla" in STR_DTYPE_TO_TORCH_DTYPE
+assert STR_DTYPE_TO_TORCH_DTYPE["nvfp4_ds_mla"] == torch.uint8
+print(f"[OK] nvfp4_ds_mla -> torch.uint8 in STR_DTYPE_TO_TORCH_DTYPE")
+
+# 4. Check MLAAttentionSpec page size for nvfp4_ds_mla
+from vllm.v1.kv_cache_interface import MLAAttentionSpec, KVQuantMode
+spec = MLAAttentionSpec(
+    block_size=256,
+    num_kv_heads=1,
+    head_size=512,
+    dtype=torch.uint8,
+    compress_ratio=2,
+    cache_dtype_str="nvfp4_ds_mla",
+    model_version="deepseek_v4",
+)
+assert spec.real_page_size_bytes == 256 * 352, f"Expected {256 * 352}, got {spec.real_page_size_bytes}"
+print(f"[OK] MLAAttentionSpec real_page_size_bytes={spec.real_page_size_bytes} (352 B/token)")
+
+# 5. Check sparse_mla KV cache shape
+from vllm.models.deepseek_v4.sparse_mla import DeepseekV4FlashMLABackend
+shape = DeepseekV4FlashMLABackend.get_kv_cache_shape(3, 256, 1, 512, "nvfp4_ds_mla")
+assert shape == (3, 256, 352), f"Unexpected shape: {shape}"
+print(f"[OK] DeepseekV4FlashMLABackend shape for nvfp4_ds_mla: {shape}")
+
+# 5b. Check supported_kv_cache_dtypes includes nvfp4_ds_mla (Issue #22 fix)
+assert "nvfp4_ds_mla" in DeepseekV4FlashMLABackend.supported_kv_cache_dtypes, \
+    "nvfp4_ds_mla missing from supported_kv_cache_dtypes"
+print(f"[OK] nvfp4_ds_mla in DeepseekV4FlashMLABackend.supported_kv_cache_dtypes")
+
+# 6. Check _resolve_dsv4_kv_cache_dtype handles nvfp4
+from vllm.models.deepseek_v4.attention import _resolve_dsv4_kv_cache_dtype
+from types import SimpleNamespace
+cfg = SimpleNamespace(cache_dtype="nvfp4")
+dtype_str, torch_dtype = _resolve_dsv4_kv_cache_dtype(True, "nvfp4", cfg)
+assert dtype_str == "nvfp4_ds_mla", f"Expected nvfp4_ds_mla, got {dtype_str}"
+assert cfg.cache_dtype == "nvfp4_ds_mla", f"Expected cache_config.dtype = nvfp4_ds_mla, got {cfg.cache_dtype}"
+print(f"[OK] _resolve_dsv4_kv_cache_dtype('nvfp4') -> '{dtype_str}'")
+
+# 7. Check DSpark proposer exists
+from vllm.v1.spec_decode.dspark_proposer import DSparkProposer
+print(f"[OK] DSparkProposer imported")
+
+# 8. Check b12x modules
+from vllm.v1.attention.backends.mla.b12x_mla_sparse import B12xMLASparseBackend
+print(f"[OK] B12xMLASparseBackend imported")
+
+print("\n=== All checks passed! ===")
+PY
+
+RUN echo "============================================" && \
+    echo "  mia-vllm-gb10 + DSV4 DSpark NVFP4 image" && \
+    echo "  Base: $BASE_IMAGE" && \
+    echo "  vLLM: 0.26 + nvfp4_ds_mla + DSpark + b12x" && \
+    echo "============================================"

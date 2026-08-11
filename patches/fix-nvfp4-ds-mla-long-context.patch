@@ -1,0 +1,22 @@
+# Fix nvfp4_ds_mla long-context decode regression (Issue #22)
+#
+# ACTUAL ROOT CAUSE: flashmla_sparse.py dispatches nvfp4_ds_mla to the slow
+# _forward_bf16_kv path instead of the fast _forward_fp8_kv path.  The584-byte
+# KV layout is identical for both dtypes on DSV4; only the kernel dispatch differs.
+#
+# Line 880 in flashmla_sparse.py:
+#   use_fp8_cache = self.kv_cache_dtype == "fp8_ds_mla"
+# For nvfp4_ds_mla → False → slow _forward_bf16_kv
+# For fp8_ds_mla   → True  → fast _forward_fp8_kv
+#
+# FIX: Change to:
+#   use_fp8_cache = self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")
+#
+# This routes nvfp4_ds_mla to the same optimized FP8 kernel path, which is
+# ~16x faster at long context (600K+ tokens).
+
+--- a/v1/attention/backends/mla/flashmla_sparse.py
++++ b/v1/attention/backends/mla/flashmla_sparse.py
+@@ forward_mqa @@
+-        use_fp8_cache = self.kv_cache_dtype == "fp8_ds_mla"
++        use_fp8_cache = self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")
