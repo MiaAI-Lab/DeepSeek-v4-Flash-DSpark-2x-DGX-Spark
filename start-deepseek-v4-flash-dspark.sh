@@ -79,6 +79,32 @@ set -a
 source "$ENV_FILE"
 set +a
 
+# Vision mode flag selects 0731 GPU util (and whether the VL sidecar starts).
+#   ENABLE_VL_SIDECAR=1 → vision coexist → GPU_MEMORY_UTILIZATION_VISION (default 0.80)
+#   ENABLE_VL_SIDECAR=0 → text-only     → GPU_MEMORY_UTILIZATION_TEXT   (default 0.835)
+# Explicit GPU_MEMORY_UTILIZATION in the env file is overridden by this profile
+# so one flag is enough to switch modes safely.
+if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then
+  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_VISION:-0.80}"
+  DSPARK_SERVE_MODE="vision"
+else
+  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_TEXT:-0.835}"
+  DSPARK_SERVE_MODE="text"
+fi
+export GPU_MEMORY_UTILIZATION ENABLE_VL_SIDECAR DSPARK_SERVE_MODE
+
+# Checkpoint flag: official 0731 vs Keys abliterated weights.
+#   ABLITERATED=0 → DSPARK_MODEL_OFFICIAL
+#   ABLITERATED=1 → DSPARK_MODEL_ABLITERATED
+DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
+DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
+if [ "${ABLITERATED:-0}" = "1" ]; then
+  DSPARK_MODEL="$DSPARK_MODEL_ABLITERATED"
+else
+  DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+fi
+export ABLITERATED DSPARK_MODEL DSPARK_MODEL_OFFICIAL DSPARK_MODEL_ABLITERATED
+
 # CLI values have highest precedence; the env file remains the persistent
 # configuration source when no command-line override is provided.
 VLLM_HOST="${CLI_VLLM_HOST:-${VLLM_HOST:-127.0.0.1}}"
@@ -321,6 +347,8 @@ compose_base() {
     VLLM_HOST="$VLLM_HOST" \
     VLLM_PORT="$VLLM_PORT" \
     VLLM_HOST_IP="$VLLM_HOST_IP" \
+    GPU_MEMORY_UTILIZATION="$GPU_MEMORY_UTILIZATION" \
+    DSPARK_MODEL="$DSPARK_MODEL" \
     ENABLE_VLLM_GB10_PATCH="$ENABLE_VLLM_GB10_PATCH" \
     VLLM_GB10_PATCH_DIR="$VLLM_GB10_PATCH_DIR" \
     GB10_HYBRID_NVFP4_M_THRESHOLD="${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}" \
@@ -376,13 +404,15 @@ on_error() {
 print_resolved_profile() {
   echo "Resolved DSpark profile:"
   echo "  project: $PROJECT_NAME"
+  echo "  serve mode: $DSPARK_SERVE_MODE (ENABLE_VL_SIDECAR=${ENABLE_VL_SIDECAR:-0})"
+  echo "  checkpoint: $DSPARK_MODEL (ABLITERATED=${ABLITERATED:-0})"
   echo "  image: $DSPARK_VLLM_IMAGE"
   echo "  model: ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}"
   echo "  served model: ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
   echo "  max model len: ${MAX_MODEL_LEN:-1000000}"
   echo "  max num seqs: ${MAX_NUM_SEQS:-12}"
   echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
-  echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.80}"
+  echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.80} (text default ${GPU_MEMORY_UTILIZATION_TEXT:-0.835} / vision default ${GPU_MEMORY_UTILIZATION_VISION:-0.80})"
   echo "  mtp speculative tokens: ${MTP_NUM_TOKENS:-5} (dspark_block_size min is 5)"
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"
   echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))"
@@ -399,8 +429,10 @@ print_resolved_profile() {
   echo "  worker cache: ${WORKER_HF_CACHE:-${HF_CACHE:-}}"
   echo "  GB10 vLLM patch: $ENABLE_VLLM_GB10_PATCH"
   if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then
-    echo "  VL sidecar: ${VL_SIDECAR_MODEL:-cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit} TP=${VL_SIDECAR_TP_SIZE:-2} nnodes=${VL_SIDECAR_NNODES:-2} on 127.0.0.1:${VL_SIDECAR_PORT:-8889} (util ${VL_SIDECAR_GPU_UTIL:-0.03}/GPU, kv ${VL_SIDECAR_KV_CACHE_DTYPE:-fp8}, master-port ${VL_SIDECAR_MASTER_PORT:-25100})"
+    echo "  VL sidecar: ${VL_SIDECAR_MODEL:-cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit} TP=${VL_SIDECAR_TP_SIZE:-2} nnodes=${VL_SIDECAR_NNODES:-2} on 127.0.0.1:${VL_SIDECAR_PORT:-8889} (util ${VL_SIDECAR_GPU_UTIL:-0.04}/GPU, kv ${VL_SIDECAR_KV_CACHE_DTYPE:-int4_per_token_head}, master-port ${VL_SIDECAR_MASTER_PORT:-25100})"
     echo "  vision MCP install: ${INSTALL_VISION_MCP:-${ENABLE_VL_SIDECAR:-0}} (harnesses: ${VISION_MCP_HARNESSES:-auto})"
+  else
+    echo "  VL sidecar: disabled (text-only 0731)"
   fi
   if [ "${DSPARK_SKIP_HOTFIX:-0}" = "1" ]; then
     echo "  Issue #22 hotfix: SKIPPED (DSPARK_SKIP_HOTFIX=1)"
@@ -419,7 +451,7 @@ validate_compose() {
   echo "Validating head compose config..."
   compose_base 0 "" config --quiet
   echo "Validating worker compose config..."
-  remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml config --quiet"
+  remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml config --quiet"
 }
 
 need_cmd docker
@@ -504,7 +536,7 @@ fi
 validate_compose
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."
-remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
+remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
 
 echo "Starting DSpark head..."
 compose_base 0 "" up -d
@@ -531,7 +563,7 @@ if [ "${DSPARK_SKIP_HOTFIX:-0}" != "1" ] && [ -f "$DSPARK_HOTFIX_FILE" ]; then
   ssh "$WORKER_HOST" "if [ -f '$REMOTE_HOTFIX' ]; then docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1' && docker cp '$REMOTE_HOTFIX' '${PROJECT_NAME}-vllm-dspark-1:/tmp/hotfix-nvfp4-ds-mla-issue22.sh' && docker exec '${PROJECT_NAME}-vllm-dspark-1' bash /tmp/hotfix-nvfp4-ds-mla-issue22.sh; fi" || true
   # Restart both containers so vLLM picks up the patched files
   echo "Restarting DSpark containers to apply hotfix..."
-  ssh "$WORKER_HOST" "$REMOTE_COMPOSE $(remote_nccl_env) NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml restart vllm-dspark" || true
+  ssh "$WORKER_HOST" "$REMOTE_COMPOSE $(remote_nccl_env) NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml restart vllm-dspark" || true
   compose_base 0 "" restart vllm-dspark || true
   echo "Hotfix applied and containers restarted."
 else

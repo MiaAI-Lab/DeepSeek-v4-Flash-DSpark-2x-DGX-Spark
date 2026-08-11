@@ -561,8 +561,9 @@ def install_zcode(ctx: dict[str, Any]) -> str:
         if not bak.is_file():
             shutil.copy2(path, bak)
     write_json(path, data)
-    # Also keep shared .agents skill for ZCode Skill panel / other harnesses.
-    copy_skill(ctx["skill"], Path.home() / ".agents" / "skills" / "dspark-vision")
+    # ZCode-only skill path. Do NOT also write ~/.agents/skills/dspark-vision:
+    # pi (and other agents) scan that tree and report a name collision with
+    # ~/.pi/agent/skills/dspark-vision from install_pi().
     copy_skill(ctx["skill"], Path.home() / ".zcode" / "cli" / "skills" / "dspark-vision")
     return "installed (~/.zcode/cli/config.json mcp.servers + skill)"
 

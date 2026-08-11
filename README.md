@@ -63,19 +63,20 @@ logic ships inside the image rather than as a host bind-mount.
 **Default agent-serving profile** (`.env.dspark.example` and README defaults):
 
 - image: `ghcr.io/anemll/dspark-vllm-gx10:0.1.1`
-- model: `deepseek-ai/DeepSeek-V4-Flash-0731` (HF hub id; resolved offline from cache when `HF_HUB_OFFLINE=1`)
+- `ABLITERATED=0` → official [`deepseek-ai/DeepSeek-V4-Flash-0731`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) (`ABLITERATED=1` → [Keys abliterated](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32))
+- `ENABLE_VL_SIDECAR=0` (**vision off** by default; text-only 0731)
 - `max_model_len=1048576` (**1M** — keep this as the documented default)
 - `max_num_seqs=6`
 - `max_num_batched_tokens=8192`
 - `kv_cache_dtype=nvfp4_ds_mla`
-- `gpu_memory_utilization=0.80`
+- main GPU util from the vision flag: **0.835** text / **0.80** vision (`GPU_MEMORY_UTILIZATION_TEXT` / `_VISION`)
 - `MTP_NUM_TOKENS=5` (checkpoint `dspark_block_size` is 5; k must be ≥ 5)
 - `DEFAULT_THINKING=low` (`off`, `low`, `high`, or `max`; request-level overrides still win)
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0` (keep regular CUDA graphs; Anemll auto-enables the slower breakable path when unset)
 - API bind address `0.0.0.0:8888`
 
 Local `.env.dspark` may lower `MAX_MODEL_LEN` (for example `512000`) or raise
-`MTP_NUM_TOKENS` / `GPU_MEMORY_UTILIZATION` for a specific cluster without
+`MTP_NUM_TOKENS` / the util profiles for a specific cluster without
 changing the recipe default.
 
 > [!IMPORTANT]
@@ -731,14 +732,15 @@ Keep these **default** agent-serving knobs unless you are deliberately
 experimenting (do not treat a temporary local `MAX_MODEL_LEN` override as the
 recipe default):
 
-- `DSPARK_MODEL=deepseek-ai/DeepSeek-V4-Flash-0731`
+- `ABLITERATED=0` (official) or `1` (Keys abliterated) — see [Checkpoint](#checkpoint-official-vs-abliterated)
 - `SERVED_MODEL_NAME=deepseek-v4-flash-0731`
 - `VLLM_HOST=0.0.0.0` if Hermes/OpenClaw or another machine must reach the API
 - `VLLM_PORT=8888`
 - `MAX_MODEL_LEN=1048576` (**1M**)
 - `MAX_NUM_SEQS=6`
 - `MAX_NUM_BATCHED_TOKENS=8192`
-- `GPU_MEMORY_UTILIZATION=0.80`
+- `ENABLE_VL_SIDECAR=0` (**default**, text-only) or `1` (vision; see [Vision on/off](#vision-onoff-one-flag))
+- `GPU_MEMORY_UTILIZATION_TEXT=0.835` / `GPU_MEMORY_UTILIZATION_VISION=0.80`
 - `MTP_NUM_TOKENS=5`
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0`
 - `HF_HUB_OFFLINE=1` after both nodes have a full model cache
@@ -763,15 +765,33 @@ Optional: build the historical Stage-C image instead:
 Prepare the model cache on both nodes (or rsync a verified hub snapshot):
 
 ```bash
-./prepare-dspark-model-cache.sh
+./prepare-dspark-model-cache.sh              # asks: official (0) or abliterated (1)
+./prepare-dspark-model-cache.sh --official   # non-interactive
+./prepare-dspark-model-cache.sh --abliterated
+./prepare-dspark-model-cache.sh --yes        # use ABLITERATED from .env.dspark
 ```
 
-`prepare-dspark-model-cache.sh` forces HF online for the download step even when
-`.env.dspark` has `HF_HUB_OFFLINE=1` (correct for serve after the cache is warm).
-On the head it also caches `VL_SIDECAR_MODEL` (default
-`cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit`); the worker recurse skips that
-(head-only sidecar). Use `IMAGE_PYTHON=/usr/bin/python3` on the Anemll image
-(default); Stage-C needs `IMAGE_PYTHON=/opt/env/bin/python`.
+The script writes your choice back to `ABLITERATED=` in `.env.dspark`, then
+downloads that checkpoint (and the VL sidecar) on head **and** worker.
+It forces HF online for the download even when `.env.dspark` has
+`HF_HUB_OFFLINE=1` (correct for serve after the cache is warm).
+Use `IMAGE_PYTHON=/usr/bin/python3` on the Anemll image (default);
+Stage-C needs `IMAGE_PYTHON=/opt/env/bin/python`.
+
+### Checkpoint (official vs abliterated)
+
+| `ABLITERATED` | Weights used by start / prepare |
+|---------------|----------------------------------|
+| `0` | Official: [`deepseek-ai/DeepSeek-V4-Flash-0731`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) |
+| `1` | Abliterated: [`drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32`](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32) |
+
+The abliterated lane is the Keys GA-0731 DSpark build on Hugging Face:
+https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32
+
+`start-deepseek-v4-flash-dspark.sh` sets `DSPARK_MODEL` from this flag (do not
+set `DSPARK_MODEL` by hand). Override HF ids with `DSPARK_MODEL_OFFICIAL` /
+`DSPARK_MODEL_ABLITERATED` if needed. After flipping the flag, stop + start
+(and run prepare if that checkpoint is not cached yet).
 
 Start the service:
 
@@ -987,10 +1007,11 @@ blaming the DSpark weights.
 - The measured probes were p256/p512 with g64/g256. Rebenchmark if you change
   sampling, batching, context length, WO projection, compressed MLA, or the
   confidence scheduler.
-- The **default** agent-serving profile is `DSPARK_MODEL=deepseek-ai/DeepSeek-V4-Flash-0731`,
+- The **default** agent-serving profile uses `ABLITERATED=0` →
+  `deepseek-ai/DeepSeek-V4-Flash-0731`,
   `SERVED_MODEL_NAME=deepseek-v4-flash-0731`,
   `MAX_MODEL_LEN=1048576` (1M), `MAX_NUM_SEQS=6`, `MAX_NUM_BATCHED_TOKENS=8192`,
-  `GPU_MEMORY_UTILIZATION=0.80`, `MTP_NUM_TOKENS=5`,
+  main util from the vision flag (`0.835` text / `0.80` vision), `MTP_NUM_TOKENS=5`,
   `VLLM_USE_BREAKABLE_CUDAGRAPH=0`,
   `DSPARK_VLLM_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1`,
   `VLLM_USE_FLASHINFER_SAMPLER=1`, `VLLM_USE_B12X_MOE=1`, no generation override.
@@ -1014,22 +1035,66 @@ blaming the DSpark weights.
 
 ## Vision
 
-**Current (2026-08-11): local VL sidecar + MCP / skill tools.** Full write-up:
-[`plugins/dspark_vision_mcp/README.md`](plugins/dspark_vision_mcp/README.md)
-§Vision support.
+### Vision on/off (one flag)
 
-0731 on `:8888` stays **text-only**. Vision is a **Qwen3-VL-4B TP=2**
-sidecar on `:8889` (served name `qwen3-vl-4b`), sharded across head+worker so
-0731 keeps more per-GPU memory for its `nvfp4` KV pool:
+In `.env.dspark`, **one switch** picks text-only vs vision coexist and sets
+0731’s GPU util automatically (`start-deepseek-v4-flash-dspark.sh` exports
+`GPU_MEMORY_UTILIZATION` from the profile — do not set that name by hand):
+
+| `ENABLE_VL_SIDECAR` | Mode | Main util | What starts |
+|---------------------|------|-----------|-------------|
+| `0` (**default**) | **Text only** | `GPU_MEMORY_UTILIZATION_TEXT` (**0.835**) | 0731 on `:8888` only |
+| `1` | **Vision** | `GPU_MEMORY_UTILIZATION_VISION` (**0.80**) | 0731 + Qwen3-VL on `:8889` + MCP install |
+
+```bash
+# Text-only (larger main KV):
+#   ENABLE_VL_SIDECAR=0
+# Vision (room for VL on the same GPUs):
+#   ENABLE_VL_SIDECAR=1
+./stop-deepseek-v4-flash-dspark.sh
+./start-deepseek-v4-flash-dspark.sh
+```
+
+**Available KV cache (measured on this 2× Spark cluster, Anemll `0.1.1`):**
+
+| Mode | Service | Available KV | GPU KV tokens | Notes |
+|------|---------|--------------|---------------|-------|
+| Text (`=0`) | main `:8888` | **~18.08 GiB** | **~2,493,464** | util **0.835**, `nvfp4_ds_mla` (no VL) |
+| Vision (`=1`) | main `:8888` | **13.37 GiB** | **1,374,417** | util **0.80**, `MAX_NUM_SEQS=4` |
+| Vision (`=1`) | VL `:8889` | **1.54 GiB** | **84,224** | util **0.04**, int4 KV, 32k ctx (~2.6×) |
+
+Vision mode trades ~0.9M–1.1M main KV tokens so both services fit. Raising main
+util toward 0.835 while VL is up usually starves the worker and OOMs VL.
+
+**VL weights vs VRAM budget (do not confuse these):**
+
+| What | Size |
+|------|------|
+| AWQ-4bit checkpoint on disk | **~4.2 GB total** (one HF cache; synced to both nodes) |
+| Weights in VRAM | **~2–3 GB total**, **TP=2 shards** them → ~**1–1.5 GB per Spark** (not two full copies, not ~10 GB) |
+| `VL_SIDECAR_GPU_UTIL=0.04` (~**5 GB/GPU**) | Whole sidecar budget: weights **+** KV **+** runtime. Measured VL Available KV inside that is **1.54 GiB** |
+| Cost to 0731 KV | Main util **0.835 → 0.80** → Available KV **~18.1 → 13.4 GiB** (−~4.7 GiB) |
+
+Lower VL util (~**0.02–0.022**, ≈2.5 GB/GPU) can boot but is tight; **0.04** is the stable coexist default.
+
+Full write-up: [`plugins/dspark_vision_mcp/README.md`](plugins/dspark_vision_mcp/README.md)
+§Vision support. Evidence: [`results/vl-nvfp4-coexist-2026-08-11.md`](results/vl-nvfp4-coexist-2026-08-11.md).
+
+### Sidecar knobs (when flag is `1`)
+
+0731 on `:8888` stays **text-only**. Vision is **Qwen3-VL-4B TP=2** on `:8889`
+(served name `qwen3-vl-4b`), sharded across head+worker:
 
 | Setting | Production value |
 |---------|------------------|
 | Checkpoint | `cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit` |
 | Parallelism | `TP=2`, `nnodes=2` (worker-first start) |
 | NCCL master port | `VL_SIDECAR_MASTER_PORT=25100` (DeepSeek keeps `MASTER_PORT=25000`) |
-| KV cache | `fp8` (`VL_SIDECAR_KV_CACHE_DTYPE`) |
-| Attention | `TRITON_ATTN` (FlashInfer fp8 `plan()` is broken on this Anemll image / GB10) |
-| GPU util | `VL_SIDECAR_GPU_UTIL≈0.03` per GPU; 0731 can stay near `GPU_MEMORY_UTILIZATION≈0.835` |
+| Max context | `VL_SIDECAR_MAX_MODEL_LEN=32768` |
+| Concurrent | `VL_SIDECAR_MAX_NUM_SEQS=4` |
+| KV cache | `int4_per_token_head` — 4-bit via Triton; true `nvfp4` needs FlashInfer SM100 (GB10 is SM12.1) |
+| Attention | `TRITON_ATTN` |
+| GPU util | `VL_SIDECAR_GPU_UTIL=0.04` (0.03 can undersize KV; 0.05 also works) |
 | Compose | `docker-compose.vl-sidecar.yml` |
 
 **Cache (online once):** `./prepare-dspark-model-cache.sh` downloads the VL

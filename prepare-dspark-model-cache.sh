@@ -4,6 +4,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
 
+usage() {
+  cat <<'EOF'
+Usage: ./prepare-dspark-model-cache.sh [--official | --abliterated] [--yes]
+
+Downloads DeepSeek-V4-Flash-0731 weights (official or abliterated) into HF_CACHE
+on this node, then optionally on the worker.
+
+  --official      Download deepseek-ai/DeepSeek-V4-Flash-0731 (sets ABLITERATED=0)
+  --abliterated   Download Keys abliterated weights (sets ABLITERATED=1)
+  --yes           Non-interactive: use ABLITERATED from .env.dspark (or 0)
+
+With no flags and a TTY, you are asked which checkpoint to download.
+Worker recurse (PREPARE_WORKER=0) never re-asks — it uses the already-chosen model.
+EOF
+}
+
+CLI_CHOICE=""
+ASSUME_YES=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --official) CLI_CHOICE=0 ;;
+    --abliterated) CLI_CHOICE=1 ;;
+    --yes|-y) ASSUME_YES=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
 if [ -f "$ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -15,7 +48,8 @@ if [ -n "${THIS_NODE_HF_CACHE:-}" ]; then
   HF_CACHE="$THIS_NODE_HF_CACHE"
 fi
 
-: "${DSPARK_MODEL:=deepseek-ai/DeepSeek-V4-Flash-DSpark}"
+DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
+DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
@@ -29,6 +63,69 @@ need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
     exit 1
+  fi
+}
+
+upsert_env_kv() {
+  local file="$1" key="$2" val="$3"
+  if [ ! -f "$file" ]; then
+    return 0
+  fi
+  if grep -qE "^${key}=" "$file"; then
+    sed -i -E "s|^${key}=.*|${key}=${val}|" "$file"
+  else
+    printf '\n%s=%s\n' "$key" "$val" >> "$file"
+  fi
+}
+
+resolve_checkpoint() {
+  # Worker recurse: trust env already set by head (no prompt).
+  if [ "${PREPARE_WORKER:-1}" = "0" ]; then
+    if [ "${ABLITERATED:-0}" = "1" ]; then
+      DSPARK_MODEL="$DSPARK_MODEL_ABLITERATED"
+    else
+      DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+    fi
+    return 0
+  fi
+
+  local choice=""
+  if [ -n "$CLI_CHOICE" ]; then
+    choice="$CLI_CHOICE"
+  elif [ "$ASSUME_YES" = "1" ]; then
+    choice="${ABLITERATED:-0}"
+  elif [ -t 0 ] && [ -t 1 ]; then
+    local default="${ABLITERATED:-0}"
+    echo "" >&2
+    echo "Which DeepSeek-V4-Flash-0731 checkpoint should be downloaded?" >&2
+    echo "  [0] Official  — $DSPARK_MODEL_OFFICIAL" >&2
+    echo "  [1] Abliterated — $DSPARK_MODEL_ABLITERATED" >&2
+    echo "Current .env.dspark ABLITERATED=${ABLITERATED:-unset} (default answer: $default)" >&2
+    while true; do
+      printf "Enter 0 or 1 [%s]: " "$default" >&2
+      read -r answer || true
+      answer="${answer:-$default}"
+      case "$answer" in
+        0|1) choice="$answer"; break ;;
+        *) echo "Please enter 0 (official) or 1 (abliterated)." >&2 ;;
+      esac
+    done
+  else
+    choice="${ABLITERATED:-0}"
+    echo "prepare: non-interactive; using ABLITERATED=$choice from env" >&2
+  fi
+
+  ABLITERATED="$choice"
+  if [ "$ABLITERATED" = "1" ]; then
+    DSPARK_MODEL="$DSPARK_MODEL_ABLITERATED"
+  else
+    DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+  fi
+  export ABLITERATED DSPARK_MODEL
+
+  if [ -f "$ENV_FILE" ]; then
+    upsert_env_kv "$ENV_FILE" "ABLITERATED" "$ABLITERATED"
+    echo "prepare: wrote ABLITERATED=$ABLITERATED into $ENV_FILE" >&2
   fi
 }
 
@@ -49,9 +146,11 @@ verify_worker_image() {
 need_cmd docker
 mkdir -p "$HF_CACHE"
 verify_local_image
+resolve_checkpoint
 
 # Serve profiles keep HF_HUB_OFFLINE=1; download must ignore that for this run only.
 echo "prepare: forcing HF online for download (serve can keep HF_HUB_OFFLINE=1)" >&2
+echo "prepare: ABLITERATED=${ABLITERATED:-0} → $DSPARK_MODEL" >&2
 
 run_download() {
   local model="${1:?model id required}"
@@ -127,5 +226,5 @@ if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   verify_worker_image
   scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
   scp "$ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
-  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ./prepare-dspark-model-cache.sh"
+  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ABLITERATED='$ABLITERATED' ./prepare-dspark-model-cache.sh --yes"
 fi

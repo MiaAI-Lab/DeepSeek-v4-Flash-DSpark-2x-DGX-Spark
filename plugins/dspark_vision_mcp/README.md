@@ -47,9 +47,12 @@ vision as a **tool** keeps one conversation on 0731.
 
 1. `./prepare-dspark-model-cache.sh` caches 0731 **and** `VL_SIDECAR_MODEL` on
    head **and** worker (TP=2). Serve keeps `HF_HUB_OFFLINE=1`.
-2. With `ENABLE_VL_SIDECAR=1` (default in `.env.dspark`),
-   `./start-deepseek-v4-flash-dspark.sh` brings up 0731 (TP=2), **then** the
+2. With `ENABLE_VL_SIDECAR=1` (off by default in `.env.dspark`),
+   `./start-deepseek-v4-flash-dspark.sh` sets main util from
+   `GPU_MEMORY_UTILIZATION_VISION` (**0.80**), brings up 0731 (TP=2), **then** the
    VL sidecar worker-first on a separate NCCL master port (`25100`).
+   With `ENABLE_VL_SIDECAR=0` (default), util comes from `GPU_MEMORY_UTILIZATION_TEXT`
+   (**0.835**) and the sidecar is skipped (larger main KV).
 3. When the sidecar lists `qwen3-vl-4b`, start runs
    `scripts/install-dspark-vision-mcp.sh` if `INSTALL_VISION_MCP` is on
    (defaults to follow `ENABLE_VL_SIDECAR`).
@@ -57,10 +60,10 @@ vision as a **tool** keeps one conversation on 0731.
    included via `~/.zcode/cli/config.json`).
 
 Compose: [`docker-compose.vl-sidecar.yml`](../../docker-compose.vl-sidecar.yml).
-Coexist (measured): 0731 `GPU_MEMORY_UTILIZATION=0.82` + `MAX_NUM_SEQS=4` with
-sidecar `VL_SIDECAR_GPU_UTIL=0.03` and **`int4_per_token_head`** KV → ~1.60M main
-KV tokens while VL keeps ≥1× of 32k. True `nvfp4` KV needs FlashInfer SM100
-(GB10 is SM12.1). Re-check worker free memory if you raise main util.
+Measured Available KV (2026-08-11): vision main **13.37 GiB / 1.37M** tokens
+(util **0.80**) + VL **1.54 GiB / 84k** (util **0.04**, int4); text-only
+(~util **0.835**) ~**18.08 GiB / ~2.49M**. True `nvfp4` KV for Qwen needs
+FlashInfer SM100 (GB10 is SM12.1). See root `README.md` §Vision on/off.
 
 ### Tools
 
@@ -91,7 +94,9 @@ extraction-only from the agent’s point of view.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `ENABLE_VL_SIDECAR` | `1` in `.env.dspark` | Start Qwen3-VL TP=2 on `:8889` |
+| `ENABLE_VL_SIDECAR` | `0` (default) | `1` = vision (main util **0.80** + VL); `0` = text-only (main util **0.835**) |
+| `GPU_MEMORY_UTILIZATION_TEXT` | `0.835` | Main util when flag is `0` |
+| `GPU_MEMORY_UTILIZATION_VISION` | `0.80` | Main util when flag is `1` |
 | `VL_SIDECAR_MODEL` | `cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit` | HF id; cached by `./prepare-dspark-model-cache.sh` on both nodes |
 | `VL_SIDECAR_TP_SIZE` / `VL_SIDECAR_NNODES` | `2` / `2` | Shards vision across both Sparks |
 | `VL_SIDECAR_MASTER_PORT` | `25100` | NCCL master port (DeepSeek uses `25000`) |
@@ -146,7 +151,7 @@ Supported harnesses:
 | **goose** | `goose` or `~/.config/goose/config.yaml` | `extensions.dspark-vision` in `~/.config/goose/config.yaml` + skill ([goose-docs.ai](https://goose-docs.ai/)) |
 | **grok** | `grok` / `~/.grok/bin/grok` or `~/.grok/config.toml` | `[mcp_servers.dspark-vision]` in `~/.grok/config.toml` + skill ([Grok Build](https://docs.x.ai/build/features/mcp-servers)) |
 | **openclaw** | `openclaw`/`oclaw` or `~/.openclaw` | `mcp.servers.dspark-vision` in `~/.openclaw/openclaw.json` + skill ([OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp)) |
-| **zcode** | `zcode` or `~/.zcode` | User-scope `mcp.servers.dspark-vision` in `~/.zcode/cli/config.json` (+ skill). **ZCode Desktop** reads this same file (Settings → MCP Servers); restart/refresh if the app was already open ([ZCode MCP](https://zcode.z.ai/en/docs/mcp-services)) |
+| **zcode** | `zcode` or `~/.zcode` | User-scope `mcp.servers.dspark-vision` in `~/.zcode/cli/config.json` (+ skill under `~/.zcode/cli/skills/`). **ZCode Desktop** reads this same MCP file (Settings → MCP Servers); restart/refresh if the app was already open ([ZCode MCP](https://zcode.z.ai/en/docs/mcp-services)). Does **not** write `~/.agents/skills/dspark-vision` (that collided with pi’s `~/.pi/agent/skills/dspark-vision`). |
 | **prime** | `prime-agent` or `~/.prime/agent` | Python skill `~/.prime/agent/skills/dspark-vision` calling `:8889` directly (Prime MCP is HTTP-only; [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)) |
 
 Idempotent; never wipes other MCP entries. Failures are non-fatal unless
