@@ -1,10 +1,13 @@
 ## Unreleased
 
+### Changed
+
 - **Raise `DEFAULT_THINKING` from `low` to `max`** in `.env.dspark.example`, enabling full reasoning effort by default. Request-level overrides still take precedence.
 - Add U5 fail-closed rollout tooling: exact mode-0600 SHA-256 rollback bundles, validated PostgreSQL logical dump/restore, tmpfs-to-volume key-preserving migration, and worker-first reverse recovery.
 - Preserve intentional restart policies: PostgreSQL remains `unless-stopped`, while LiteLLM and temporary DSpark services remain operator-controlled with `restart: "no"` so egress policy installation stays fail-closed across reboot.
 - Add authoritative pre-change scheduler baseline capture, pinned isolated Minefield execution, LiteLLM virtual-key rotation/revocation proof, external gateway auth-negative/positive checks, and prompt/reasoning log-leak canaries.
 - Expand acceptance evidence with process/API/semantic readiness, configured KV bytes and reported capacity, both ranks, memory PSI/headroom, prefix/speculative deltas, and exact Minefield coverage counts.
+- **Text-only ship (vision deferred)**: product default is `ENABLE_VL_SIDECAR=0` with `GPU_MEMORY_UTILIZATION_TEXT=0.835` (0731 on `:8888` only). README documents the text-only agent profile. Optional **Experimental: Vision** section covers `ENABLE_VL_SIDECAR=1` / VL sidecar / MCP for experimenters (not the supported default). `PREPARE_VL_SIDECAR_MODEL` defaults to **0** in prepare + example (set `1` only for vision experiments). `stop-deepseek-v4-flash-dspark.sh` still sweeps leftover VL containers but reports text-only when the flag is off. VL compose / `plugins/dspark_vision_mcp` remain in-tree.
 
 - Make `deepseek-ai/DeepSeek-V4-Flash-0731` the default checkpoint for the two-Spark 1M profile.
 - Document the 0731 encoding, parser, and vision boundaries.
