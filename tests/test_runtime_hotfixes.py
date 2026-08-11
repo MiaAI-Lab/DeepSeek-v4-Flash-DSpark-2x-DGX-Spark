@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ISSUE21 = ROOT / "patches" / "hotfix-encoding-dsv4-issue21.py"
 ISSUE22 = ROOT / "patches" / "hotfix-nvfp4-ds-mla-issue22.py"
 VERIFIER = ROOT / "scripts" / "verify-runtime-hotfixes.py"
+LONG_CONTEXT_PROBE = ROOT / "scripts" / "probe-long-context-decode.py"
 
 
 def load_module(name: str, path: Path):
@@ -52,6 +53,16 @@ def encode_arguments_to_dsml(tool_call):
 
 
 class RuntimeHotfixTest(unittest.TestCase):
+    def test_long_context_prompt_forces_enough_deterministic_decode(self):
+        probe = load_module("long_context_probe", LONG_CONTEXT_PROBE)
+        with mock.patch.object(probe, "tokenize", return_value=600_000):
+            prompt, observed = probe.build_prompt(
+                "http://127.0.0.1:8888/v1", "secret", "model", 600_000, 1
+            )
+        self.assertEqual(observed, 600_000)
+        self.assertTrue(prompt.endswith(probe.PROMPT_SUFFIX))
+        self.assertIn("integers 1 through 80", probe.PROMPT_SUFFIX)
+
     def test_issue21_dict_and_string_arguments_render_equivalently(self):
         hotfix = load_module("issue21", ISSUE21)
         updated, status = hotfix.patch_text(minimal_encoder())

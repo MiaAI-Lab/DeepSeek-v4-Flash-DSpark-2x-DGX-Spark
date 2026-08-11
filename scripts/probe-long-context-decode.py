@@ -14,6 +14,10 @@ import urllib.request
 
 MIN_POST_FIRST_TOKENS = 64
 MIN_DECODE_TPS = 10.0
+PROMPT_SUFFIX = (
+    "\n\nOutput exactly the integers 1 through 80 in ascending order, "
+    "separated by one space. Do not add any other text and do not stop early."
+)
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -68,14 +72,14 @@ def tokenize(base_url: str, key: str, model: str, content: str, timeout: float) 
 def build_prompt(base_url: str, key: str, model: str, target: int, timeout: float) -> tuple[str, int]:
     unit = " dspark-decode-datum"
     repeats = max(1, target // 4)
-    content = unit * repeats
+    content = unit * repeats + PROMPT_SUFFIX
     observed = 0
     for _ in range(8):
         observed = tokenize(base_url, key, model, content, timeout)
         if target - 64 <= observed <= target + 64:
             return content, observed
         repeats = max(1, int(repeats * target / observed))
-        content = unit * repeats
+        content = unit * repeats + PROMPT_SUFFIX
     raise RuntimeError(f"could not calibrate long-context prompt: observed={observed}")
 
 
