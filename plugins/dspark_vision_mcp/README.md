@@ -16,13 +16,14 @@ This is the **production vision path** for the DSpark stack. Native MoonViT on
 ### Architecture
 
 ```text
-  Agent harness (pi / OMP / Hermes / …)
+  Agent harness (pi / OMP / Hermes / goose / grok / openclaw / ZCode Desktop / …)
         │  tool call: describe_image / ocr_image / compare_images
+        │  (Prime Agent: await dspark_vision.* from IPython skill)
         ▼
-  dspark-vision-mcp  (stdio, launched via uvx)
+  dspark-vision-mcp  (stdio, launched via uvx)  — or Prime Python skill
         │  OpenAI chat.completions + image_url (base64 data URI)
         ▼
-  Qwen3-VL-4B sidecar  http://127.0.0.1:8889   (head node only)
+  Qwen3-VL-4B AWQ-4bit sidecar  http://127.0.0.1:8889   (TP=2 head+worker)
         │  factual description / OCR / comparison text
         ▼
   Agent continues on 0731  http://127.0.0.1:8888
@@ -34,7 +35,7 @@ This is the **production vision path** for the DSpark stack. Native MoonViT on
 | Piece | Role |
 |-------|------|
 | **0731** (`:8888`, `deepseek-v4-flash-0731`) | Reasoning / tools / chat — **text only** |
-| **VL sidecar** (`:8889`, `qwen3-vl-4b`) | Sees pixels; `enable_thinking=false`, `temperature=0` |
+| **VL sidecar** (`:8889`, `qwen3-vl-4b`, TP=2) | Sees pixels; sharded across both Sparks; `enable_thinking=false`, `temperature=0` |
 | **This MCP** | Pass-1 extraction only; returns text for 0731 to reason over |
 | **`scripts/vision-reason.py`** | Same two-pass idea without a harness (CLI) |
 
@@ -44,18 +45,22 @@ vision as a **tool** keeps one conversation on 0731.
 
 ### What the stack starts for you
 
-With `ENABLE_VL_SIDECAR=1` (default in `.env.dspark`):
-
-1. `./start-deepseek-v4-flash-dspark.sh` brings up 0731 (TP=2), **then** the
-   sidecar (ordering matters — concurrent GPU memory profiling fails).
-2. When the sidecar lists `qwen3-vl-4b`, start runs
+1. `./prepare-dspark-model-cache.sh` caches 0731 **and** `VL_SIDECAR_MODEL` on
+   head **and** worker (TP=2). Serve keeps `HF_HUB_OFFLINE=1`.
+2. With `ENABLE_VL_SIDECAR=1` (default in `.env.dspark`),
+   `./start-deepseek-v4-flash-dspark.sh` brings up 0731 (TP=2), **then** the
+   VL sidecar worker-first on a separate NCCL master port (`25100`).
+3. When the sidecar lists `qwen3-vl-4b`, start runs
    `scripts/install-dspark-vision-mcp.sh` if `INSTALL_VISION_MCP` is on
    (defaults to follow `ENABLE_VL_SIDECAR`).
-3. Detected harnesses get `dspark-vision` registered automatically.
+4. Detected harnesses get `dspark-vision` registered automatically (ZCode Desktop
+   included via `~/.zcode/cli/config.json`).
 
 Compose: [`docker-compose.vl-sidecar.yml`](../../docker-compose.vl-sidecar.yml).
-Do not raise 0731 `GPU_MEMORY_UTILIZATION` without re-checking room for the
-sidecar.
+Coexist (measured): 0731 `GPU_MEMORY_UTILIZATION=0.82` + `MAX_NUM_SEQS=4` with
+sidecar `VL_SIDECAR_GPU_UTIL=0.03` and **`int4_per_token_head`** KV → ~1.60M main
+KV tokens while VL keeps ≥1× of 32k. True `nvfp4` KV needs FlashInfer SM100
+(GB10 is SM12.1). Re-check worker free memory if you raise main util.
 
 ### Tools
 
@@ -86,10 +91,17 @@ extraction-only from the agent’s point of view.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `ENABLE_VL_SIDECAR` | `1` in `.env.dspark` | Start Qwen3-VL on `:8889` |
-| `VL_SIDECAR_PORT` | `8889` | Sidecar listen port |
+| `ENABLE_VL_SIDECAR` | `1` in `.env.dspark` | Start Qwen3-VL TP=2 on `:8889` |
+| `VL_SIDECAR_MODEL` | `cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit` | HF id; cached by `./prepare-dspark-model-cache.sh` on both nodes |
+| `VL_SIDECAR_TP_SIZE` / `VL_SIDECAR_NNODES` | `2` / `2` | Shards vision across both Sparks |
+| `VL_SIDECAR_MASTER_PORT` | `25100` | NCCL master port (DeepSeek uses `25000`) |
+| `VL_SIDECAR_GPU_UTIL` | `0.03` | Per-GPU util after TP shard (0.022 also OK when worker free ≥~4.5 GiB) |
+| `VL_SIDECAR_KV_CACHE_DTYPE` | `int4_per_token_head` | 4-bit KV via Triton; `nvfp4` blocked on SM12.1 (needs FlashInfer SM100) |
+| `VL_SIDECAR_ATTENTION_BACKEND` | `TRITON_ATTN` | Required for int4 KV; also avoids FlashInfer fp8 `plan()` issues |
+| `PREPARE_VL_SIDECAR_MODEL` | `1` | Prepare-cache downloads VL weights on head **and** worker |
+| `VL_SIDECAR_PORT` | `8889` | Sidecar listen port (head API rank) |
 | `INSTALL_VISION_MCP` | follows sidecar | Auto-register into harnesses on start |
-| `VISION_MCP_HARNESSES` | `auto` | `auto` or `pi,omp,hermes,…` |
+| `VISION_MCP_HARNESSES` | `auto` | `auto` or `pi,omp,hermes,…,zcode,prime` |
 | `DSPARK_VL_BASE_URL` | `http://127.0.0.1:8889` | Where this MCP posts completions |
 | `DSPARK_VL_MODEL` | `qwen3-vl-4b` | Served model id |
 | `DSPARK_VL_MAX_TOKENS` | `1024` | Extraction max tokens |
@@ -134,6 +146,8 @@ Supported harnesses:
 | **goose** | `goose` or `~/.config/goose/config.yaml` | `extensions.dspark-vision` in `~/.config/goose/config.yaml` + skill ([goose-docs.ai](https://goose-docs.ai/)) |
 | **grok** | `grok` / `~/.grok/bin/grok` or `~/.grok/config.toml` | `[mcp_servers.dspark-vision]` in `~/.grok/config.toml` + skill ([Grok Build](https://docs.x.ai/build/features/mcp-servers)) |
 | **openclaw** | `openclaw`/`oclaw` or `~/.openclaw` | `mcp.servers.dspark-vision` in `~/.openclaw/openclaw.json` + skill ([OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp)) |
+| **zcode** | `zcode` or `~/.zcode` | User-scope `mcp.servers.dspark-vision` in `~/.zcode/cli/config.json` (+ skill). **ZCode Desktop** reads this same file (Settings → MCP Servers); restart/refresh if the app was already open ([ZCode MCP](https://zcode.z.ai/en/docs/mcp-services)) |
+| **prime** | `prime-agent` or `~/.prime/agent` | Python skill `~/.prime/agent/skills/dspark-vision` calling `:8889` directly (Prime MCP is HTTP-only; [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)) |
 
 Idempotent; never wipes other MCP entries. Failures are non-fatal unless
 `--strict`. Run alone anytime (sidecar should be up for Hermes sessions that

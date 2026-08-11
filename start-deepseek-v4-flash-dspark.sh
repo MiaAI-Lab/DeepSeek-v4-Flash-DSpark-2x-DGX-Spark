@@ -399,7 +399,7 @@ print_resolved_profile() {
   echo "  worker cache: ${WORKER_HF_CACHE:-${HF_CACHE:-}}"
   echo "  GB10 vLLM patch: $ENABLE_VLLM_GB10_PATCH"
   if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then
-    echo "  VL sidecar: ${VL_SIDECAR_MODEL:-Qwen/Qwen3-VL-4B-Instruct-FP8} on 127.0.0.1:${VL_SIDECAR_PORT:-8889} (head only, util ${VL_SIDECAR_GPU_UTIL:-0.12})"
+    echo "  VL sidecar: ${VL_SIDECAR_MODEL:-cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit} TP=${VL_SIDECAR_TP_SIZE:-2} nnodes=${VL_SIDECAR_NNODES:-2} on 127.0.0.1:${VL_SIDECAR_PORT:-8889} (util ${VL_SIDECAR_GPU_UTIL:-0.03}/GPU, kv ${VL_SIDECAR_KV_CACHE_DTYPE:-fp8}, master-port ${VL_SIDECAR_MASTER_PORT:-25100})"
     echo "  vision MCP install: ${INSTALL_VISION_MCP:-${ENABLE_VL_SIDECAR:-0}} (harnesses: ${VISION_MCP_HARNESSES:-auto})"
   fi
   if [ "${DSPARK_SKIP_HOTFIX:-0}" = "1" ]; then
@@ -482,6 +482,10 @@ echo "Syncing DSpark deployment files to ${WORKER_HOST}:${WORKER_DIR}"
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR"
 scp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_COMPOSE_FILE}"
 scp "$ENV_FILE" "${WORKER_HOST}:${REMOTE_ENV_FILE}"
+SIDECAR_COMPOSE_FILE="${SIDECAR_COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.vl-sidecar.yml}"
+if [ -f "$SIDECAR_COMPOSE_FILE" ]; then
+  scp "$SIDECAR_COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/docker-compose.vl-sidecar.yml"
+fi
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
 scp "$DSPARK_PROPOSER_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
 DSPARK_HOTFIX_FILE="$SCRIPT_DIR/patches/hotfix-nvfp4-ds-mla-issue22.sh"
@@ -505,9 +509,9 @@ remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP=
 echo "Starting DSpark head..."
 compose_base 0 "" up -d
 
-# Sidecar is launched AFTER the main API is healthy (see wait loop below):
-# both vLLM processes size their memory against the same GPU, so they must
-# not profile concurrently.
+# VL TP=2 sidecar is launched AFTER the main API is healthy (see wait loop):
+# DeepSeek and VL must not GPU-profile concurrently. VL uses a separate
+# NCCL master port (VL_SIDECAR_MASTER_PORT, default 25100).
 SIDECAR_COMPOSE_FILE="${SIDECAR_COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.vl-sidecar.yml}"
 
 # ---- Apply Issue #22 hotfix (nvfp4_ds_mla long-context decode) ----
@@ -543,18 +547,21 @@ for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
     echo "DeepSeek V4 Flash DSpark is running: $API_URL"
     compose_base 0 "" ps
     remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml ps"
-    # Head-only VL sidecar (Qwen3-VL): vision endpoint for agents; the 0731
-    # serve stays text-only. Same compose project, so the stop script tears
-    # it down. Launched after the main API is up to avoid concurrent GPU
-    # memory profiling between the two vLLM processes.
+    # VL sidecar TP=2 (Qwen3-VL): worker-first, then head API rank. 0731 stays
+    # text-only; agents use dspark-vision MCP. Same compose project as DeepSeek
+    # so stop tears it down. Separate NCCL master port from DeepSeek.
     if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ] && [ -f "$SIDECAR_COMPOSE_FILE" ]; then
-      echo "Starting VL sidecar on head (${VL_SIDECAR_MODEL:-Qwen/Qwen3-VL-4B-Instruct-FP8}, port ${VL_SIDECAR_PORT:-8889})..."
-      COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$SIDECAR_COMPOSE_FILE" up -d
-      # Wait for sidecar before wiring harness MCP configs (Hermes/pi/OMP/opencode).
-      # Keep this after main API is up — do not start sidecar earlier (GPU mem profiling).
+      VL_MASTER_PORT="${VL_SIDECAR_MASTER_PORT:-25100}"
+      echo "Starting VL sidecar TP=${VL_SIDECAR_TP_SIZE:-2} (${VL_SIDECAR_MODEL:-cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit}, port ${VL_SIDECAR_PORT:-8889}, master-port ${VL_MASTER_PORT})..."
+      echo "  VL worker first on ${WORKER_HOST}..."
+      remote_compose "MASTER_ADDR='$MASTER_ADDR' NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.vl-sidecar.yml up -d"
+      echo "  VL head (API rank)..."
+      env -u NODE_RANK -u HEADLESS COMPOSE_DISABLE_ENV_FILE=1 \
+        NODE_RANK=0 \
+        docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$SIDECAR_COMPOSE_FILE" up -d
       SIDECAR_MODELS_URL="http://127.0.0.1:${VL_SIDECAR_PORT:-8889}/v1/models"
       SIDECAR_READY=0
-      for _sidecar_i in $(seq 1 "${VL_SIDECAR_WAIT_ATTEMPTS:-60}"); do
+      for _sidecar_i in $(seq 1 "${VL_SIDECAR_WAIT_ATTEMPTS:-90}"); do
         if curl -fsS --max-time 5 "$SIDECAR_MODELS_URL" 2>/dev/null | grep -q "qwen3-vl"; then
           SIDECAR_READY=1
           break
@@ -563,15 +570,18 @@ for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
       done
       if [ "$SIDECAR_READY" = "1" ]; then
         echo "VL sidecar is ready: $SIDECAR_MODELS_URL"
-        # Default: install vision MCP when sidecar is enabled. Opt out with INSTALL_VISION_MCP=0.
         if [ "${INSTALL_VISION_MCP:-${ENABLE_VL_SIDECAR:-0}}" = "1" ]; then
-          echo "Registering dspark-vision MCP into detected harnesses (pi/omp/hermes/opencode/goose/grok/openclaw)..."
+          echo "Registering dspark-vision MCP into detected harnesses (pi/omp/hermes/opencode/goose/grok/openclaw/zcode/prime)..."
           if ! "$SCRIPT_DIR/scripts/install-dspark-vision-mcp.sh"; then
             echo "WARN: vision MCP harness install failed (non-fatal)." >&2
           fi
         fi
       else
         echo "WARN: VL sidecar not ready at $SIDECAR_MODELS_URL — skipping vision MCP install." >&2
+        echo "  Recent VL head logs:" >&2
+        COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$SIDECAR_COMPOSE_FILE" logs --tail=80 >&2 || true
+        echo "  Recent VL worker logs:" >&2
+        remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.vl-sidecar.yml logs --tail=80" >&2 || true
       fi
     fi
     echo "Running minimal OpenAI-compatible chat request..."

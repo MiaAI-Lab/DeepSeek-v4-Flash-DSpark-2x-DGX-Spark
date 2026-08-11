@@ -9,7 +9,8 @@ description: >-
 # DSpark local vision
 
 The default model (`deepseek-v4-flash-0731`) is **text-only**. Vision comes from
-MCP tools that call the on-prem **Qwen3-VL-4B** sidecar (`http://127.0.0.1:8889`).
+MCP tools that call the on-prem **Qwen3-VL-4B** sidecar (`http://127.0.0.1:8889`,
+TP=2 across both Sparks).
 
 ## When to use
 

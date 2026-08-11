@@ -21,6 +21,9 @@ fi
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
 # Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
 : "${IMAGE_PYTHON:=/usr/bin/python3}"
+# VL sidecar is TP=2 across head+worker; cache on both nodes for offline serve.
+: "${VL_SIDECAR_MODEL:=cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit}"
+: "${PREPARE_VL_SIDECAR_MODEL:=1}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -51,13 +54,15 @@ verify_local_image
 echo "prepare: forcing HF online for download (serve can keep HF_HUB_OFFLINE=1)" >&2
 
 run_download() {
+  local model="${1:?model id required}"
+  echo "prepare: downloading $model → $HF_CACHE" >&2
   docker run --rm -i \
     -v "${HF_CACHE}:/cache/huggingface" \
     -e HF_HOME=/cache/huggingface \
     -e HF_HUB_OFFLINE=0 \
     -e TRANSFORMERS_OFFLINE=0 \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
-    -e DSPARK_MODEL="$DSPARK_MODEL" \
+    -e DSPARK_MODEL="$model" \
     -e HF_DOWNLOAD_WORKERS="$HF_DOWNLOAD_WORKERS" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
@@ -65,6 +70,7 @@ run_download() {
 }
 
 verify_cache() {
+  local model="${1:?model id required}"
   # local_files_only=True; force offline so verify never re-hits the hub.
   docker run --rm -i \
     -v "${HF_CACHE}:/cache/huggingface" \
@@ -72,7 +78,7 @@ verify_cache() {
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
-    -e DSPARK_MODEL="$DSPARK_MODEL" \
+    -e DSPARK_MODEL="$model" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
     - <<'PY'
@@ -83,8 +89,13 @@ from huggingface_hub import snapshot_download
 
 path = Path(snapshot_download(os.environ["DSPARK_MODEL"], local_files_only=True))
 index_path = path / "model.safetensors.index.json"
-index = json.loads(index_path.read_text())
-needed = sorted(set(index["weight_map"].values()))
+if index_path.is_file():
+    index = json.loads(index_path.read_text())
+    needed = sorted(set(index["weight_map"].values()))
+else:
+    needed = sorted(p.name for p in path.glob("*.safetensors"))
+    if not needed:
+        raise SystemExit(f"no safetensors found under {path}")
 missing = [name for name in needed if not (path / name).exists()]
 print(f"snapshot={path}")
 print(f"safetensor_shards={len(needed)}")
@@ -96,8 +107,15 @@ if missing:
 PY
 }
 
-run_download
-verify_cache
+run_download "$DSPARK_MODEL"
+verify_cache "$DSPARK_MODEL"
+
+# VL sidecar TP=2 needs weights on every rank (head prepare + worker recurse).
+if [ "${PREPARE_VL_SIDECAR_MODEL:-1}" = "1" ]; then
+  echo "prepare: VL sidecar model ($VL_SIDECAR_MODEL)" >&2
+  run_download "$VL_SIDECAR_MODEL"
+  verify_cache "$VL_SIDECAR_MODEL"
+fi
 
 if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE or environment}"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Register dspark-vision MCP into detected agent harnesses
-# (pi, OMP, Hermes, opencode, goose, grok, openclaw).
+# (pi, OMP, Hermes, opencode, goose, grok, openclaw, zcode, prime).
 # Idempotent. Non-fatal by default (use --strict to fail on adapter errors).
 set -euo pipefail
 
@@ -14,12 +14,13 @@ usage() {
 Usage: $(basename "$0") [--strict] [--dry-run] [--harnesses LIST] [--base-url URL]
 
 Registers the local dspark-vision MCP server into harnesses present on this
-machine. Supported: pi, omp, hermes, opencode, goose, grok, openclaw.
+machine. Supported: pi, omp, hermes, opencode, goose, grok, openclaw, zcode, prime.
 
 Options:
   --strict         Exit non-zero if a detected harness fails to install
   --dry-run        Detect only; do not write configs
-  --harnesses LIST auto (default) or comma list: pi,omp,hermes,opencode,goose,grok,openclaw
+  --harnesses LIST auto (default) or comma list:
+                   pi,omp,hermes,opencode,goose,grok,openclaw,zcode,prime
   --base-url URL   VL sidecar base (default DSPARK_VL_BASE_URL / :8889)
   -h, --help       Show this help
 

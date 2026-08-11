@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Idempotent vision-MCP registration for pi / OMP / Hermes / opencode / goose / grok / openclaw.
+"""Idempotent vision-MCP registration for pi / OMP / Hermes / opencode / goose /
+grok / openclaw / zcode / prime-agent.
 
 Used by scripts/install-dspark-vision-mcp.sh. Does not wipe existing MCP
 entries — only upserts the ``dspark-vision`` server key (and copies the skill).
@@ -17,7 +18,17 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-SUPPORTED = ("pi", "omp", "hermes", "opencode", "goose", "grok", "openclaw")
+SUPPORTED = (
+    "pi",
+    "omp",
+    "hermes",
+    "opencode",
+    "goose",
+    "grok",
+    "openclaw",
+    "zcode",
+    "prime",
+)
 SERVER_KEY = "dspark-vision"
 
 
@@ -165,6 +176,13 @@ def stdio_entry(uvx: Path, plugin: Path, base_url: str, *, style: str) -> dict[s
             "args": args,
             "env": env,
             "enabled": True,
+        }
+    if style == "zcode":
+        # https://zcode.z.ai/en/docs/mcp-services — mcp.servers in ~/.zcode/cli/config.json
+        return {
+            "command": str(uvx),
+            "args": args,
+            "env": env,
         }
     raise ValueError(f"unknown style: {style}")
 
@@ -515,6 +533,92 @@ def install_openclaw(ctx: dict[str, Any]) -> str:
     return "installed (~/.openclaw/openclaw.json mcp.servers + skill)"
 
 
+def detect_zcode() -> bool:
+    """ZCode (https://zcode.z.ai/en) — CLI or ~/.zcode tree."""
+    if which("zcode") is not None:
+        return True
+    home = Path.home() / ".zcode"
+    return home.is_dir()
+
+
+def install_zcode(ctx: dict[str, Any]) -> str:
+    # Native user scope: ~/.zcode/cli/config.json → mcp.servers
+    # https://zcode.z.ai/en/docs/mcp-services
+    path = Path.home() / ".zcode" / "cli" / "config.json"
+    entry = stdio_entry(ctx["uvx"], ctx["plugin"], ctx["base_url"], style="zcode")
+    data = load_json(path)
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+    servers = mcp.get("servers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers[SERVER_KEY] = entry
+    mcp["servers"] = servers
+    data["mcp"] = mcp
+    if path.is_file():
+        bak = path.with_suffix(".json.bak-dspark-vision")
+        if not bak.is_file():
+            shutil.copy2(path, bak)
+    write_json(path, data)
+    # Also keep shared .agents skill for ZCode Skill panel / other harnesses.
+    copy_skill(ctx["skill"], Path.home() / ".agents" / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], Path.home() / ".zcode" / "cli" / "skills" / "dspark-vision")
+    return "installed (~/.zcode/cli/config.json mcp.servers + skill)"
+
+
+def detect_prime() -> bool:
+    """Prime Agent (https://github.com/PrimeIntellect-ai/prime-agent)."""
+    if which("prime-agent") is not None:
+        return True
+    home = Path.home() / ".prime" / "agent"
+    return home.is_dir() or (home / "settings.json").is_file()
+
+
+def install_prime(ctx: dict[str, Any]) -> str:
+    """Prime Agent: HTTP-only MCP — install a Python skill that hits the sidecar.
+
+    https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/mcp-integrations.md
+    """
+    src = ctx["plugin"] / "prime_skill"
+    if not (src / "SKILL.md").is_file() or not (src / "pyproject.toml").is_file():
+        raise FileNotFoundError(f"missing prime skill template under {src}")
+
+    dest = Path.home() / ".prime" / "agent" / "skills" / "dspark-vision"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+
+    # Record sidecar base for the skill (settings.env is not standard; drop a
+    # small sidecar.env next to the skill that __init__ can optionally read).
+    env_path = dest / "sidecar.env"
+    env_path.write_text(
+        f"DSPARK_VL_BASE_URL={ctx['base_url']}\n",
+        encoding="utf-8",
+    )
+
+    # Ensure agent dir exists even if prime-agent was never launched.
+    agent = Path.home() / ".prime" / "agent"
+    agent.mkdir(parents=True, exist_ok=True)
+    # Optional note in settings.json skills list (additive path).
+    settings_path = agent / "settings.json"
+    settings = load_json(settings_path)
+    skills = settings.get("skills")
+    if not isinstance(skills, list):
+        skills = []
+    skill_ref = str(dest)
+    if skill_ref not in skills and "dspark-vision" not in skills:
+        skills.append(skill_ref)
+        settings["skills"] = skills
+        write_json(settings_path, settings)
+
+    return (
+        "installed (~/.prime/agent/skills/dspark-vision Python skill; "
+        "Prime MCP is HTTP-only so this calls :8889 directly)"
+    )
+
+
 ADAPTERS: dict[str, tuple[Callable[[], bool], Callable[[dict[str, Any]], str]]] = {
     "pi": (detect_pi, install_pi),
     "omp": (detect_omp, install_omp),
@@ -523,6 +627,8 @@ ADAPTERS: dict[str, tuple[Callable[[], bool], Callable[[dict[str, Any]], str]]] 
     "goose": (detect_goose, install_goose),
     "grok": (detect_grok, install_grok),
     "openclaw": (detect_openclaw, install_openclaw),
+    "zcode": (detect_zcode, install_zcode),
+    "prime": (detect_prime, install_prime),
 }
 
 
@@ -548,7 +654,7 @@ def main() -> int:
     ap.add_argument(
         "--harnesses",
         default=os.environ.get("VISION_MCP_HARNESSES", "auto"),
-        help="auto | comma list: pi,omp,hermes,opencode,goose,grok,openclaw",
+        help="auto | comma list: pi,omp,hermes,opencode,goose,grok,openclaw,zcode,prime",
     )
     ap.add_argument(
         "--base-url",

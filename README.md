@@ -676,7 +676,11 @@ usage terms.
 | `logs-deepseek-v4-flash-dspark.sh` | tails head/worker DSpark logs |
 | `smoke-deepseek-v4-flash-dspark.sh` | direct concurrent OpenAI-compatible smoke test |
 | `validate-dspark-config.sh` | renders and checks the local DSpark compose/env config |
-| `prepare-dspark-model-cache.sh` | downloads/verifies the model cache |
+| `prepare-dspark-model-cache.sh` | downloads/verifies 0731 + VL sidecar (`VL_SIDECAR_MODEL`) on head **and** worker |
+| `docker-compose.vl-sidecar.yml` | Qwen3-VL vision sidecar TP=2 (`:8889`, both Sparks) |
+| `scripts/install-dspark-vision-mcp.sh` | registers `dspark-vision` into detected agent harnesses |
+| `plugins/dspark_vision_mcp/` | local vision MCP + skill (stdio) / Prime Python skill |
+| `scripts/vision-reason.py` | CLI two-pass: sidecar extract → 0731 reason |
 | `scripts/benchmark-0731.py` | streaming concurrency/prefill sweep for the 0731 endpoint |
 | `results/deepseek-v4-flash-0731-2x-dgx-spark.json` | published two-Spark 0731 sweep measurements |
 | `build-dspark-vllm-runtime.sh` | optional Stage-C local image build (not required for Anemll) |
@@ -764,8 +768,10 @@ Prepare the model cache on both nodes (or rsync a verified hub snapshot):
 
 `prepare-dspark-model-cache.sh` forces HF online for the download step even when
 `.env.dspark` has `HF_HUB_OFFLINE=1` (correct for serve after the cache is warm).
-Use `IMAGE_PYTHON=/usr/bin/python3` on the Anemll image (default); Stage-C needs
-`IMAGE_PYTHON=/opt/env/bin/python`.
+On the head it also caches `VL_SIDECAR_MODEL` (default
+`cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit`); the worker recurse skips that
+(head-only sidecar). Use `IMAGE_PYTHON=/usr/bin/python3` on the Anemll image
+(default); Stage-C needs `IMAGE_PYTHON=/opt/env/bin/python`.
 
 Start the service:
 
@@ -1008,28 +1014,44 @@ blaming the DSpark weights.
 
 ## Vision
 
-**Current (2026-08-11): local VL sidecar + MCP tools.** Full write-up:
+**Current (2026-08-11): local VL sidecar + MCP / skill tools.** Full write-up:
 [`plugins/dspark_vision_mcp/README.md`](plugins/dspark_vision_mcp/README.md)
-**§Vision support** (architecture, tools, start/install, harnesses, env, errors).
+§Vision support.
 
-The 0731 serve is text-only; vision is provided by a **Qwen3-VL-4B-Instruct-FP8**
-sidecar on the head node (`http://127.0.0.1:8889`, served name `qwen3-vl-4b`),
-started by `start-deepseek-v4-flash-dspark.sh` when `ENABLE_VL_SIDECAR=1`
-(default in `.env.dspark`). Compose: `docker-compose.vl-sidecar.yml`. 0731's
-`GPU_MEMORY_UTILIZATION` is tuned (see `.env.dspark`) to leave room for the
-sidecar — do not raise it without re-checking concurrent GPU memory.
+0731 on `:8888` stays **text-only**. Vision is a **Qwen3-VL-4B TP=2**
+sidecar on `:8889` (served name `qwen3-vl-4b`), sharded across head+worker so
+0731 keeps more per-GPU memory for its `nvfp4` KV pool:
 
-### Agent path: MCP vision tools (pi / OMP / Hermes / opencode / goose / grok / openclaw)
+| Setting | Production value |
+|---------|------------------|
+| Checkpoint | `cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit` |
+| Parallelism | `TP=2`, `nnodes=2` (worker-first start) |
+| NCCL master port | `VL_SIDECAR_MASTER_PORT=25100` (DeepSeek keeps `MASTER_PORT=25000`) |
+| KV cache | `fp8` (`VL_SIDECAR_KV_CACHE_DTYPE`) |
+| Attention | `TRITON_ATTN` (FlashInfer fp8 `plan()` is broken on this Anemll image / GB10) |
+| GPU util | `VL_SIDECAR_GPU_UTIL≈0.03` per GPU; 0731 can stay near `GPU_MEMORY_UTILIZATION≈0.835` |
+| Compose | `docker-compose.vl-sidecar.yml` |
 
-[`plugins/dspark_vision_mcp`](plugins/dspark_vision_mcp) exposes `describe_image`,
-`ocr_image`, and `compare_images` so 0731 can *see* via tools without switching
-models. After the sidecar is healthy, **start auto-registers** the server into
-detected harnesses (`INSTALL_VISION_MCP` defaults on when the sidecar is
-enabled; set `INSTALL_VISION_MCP=0` to skip):
+**Cache (online once):** `./prepare-dspark-model-cache.sh` downloads the VL
+weights into `HF_CACHE` on **both** nodes. **Start stays offline** (`HF_HUB_OFFLINE=1`)
+and only launches the sidecar when `ENABLE_VL_SIDECAR=1`.
 
 ```bash
-./scripts/install-dspark-vision-mcp.sh          # also runnable alone
+./prepare-dspark-model-cache.sh          # 0731 + VL (head + worker)
+./start-deepseek-v4-flash-dspark.sh      # 0731, then VL TP=2, then MCP install
+```
+
+### Agent path: tools (not model switching)
+
+[`plugins/dspark_vision_mcp`](plugins/dspark_vision_mcp) exposes `describe_image`,
+`ocr_image`, and `compare_images`. After the sidecar is healthy, start runs
+`scripts/install-dspark-vision-mcp.sh` when `INSTALL_VISION_MCP` follows the
+sidecar (set `INSTALL_VISION_MCP=0` to skip):
+
+```bash
+./scripts/install-dspark-vision-mcp.sh
 ./scripts/install-dspark-vision-mcp.sh --dry-run
+./scripts/install-dspark-vision-mcp.sh --harnesses zcode,prime
 ```
 
 | Harness | Config written |
@@ -1038,9 +1060,13 @@ enabled; set `INSTALL_VISION_MCP=0` to skip):
 | OMP | `~/.omp/agent/mcp.json` (+ skill) |
 | Hermes | `mcp_servers.dspark-vision` in `~/.hermes/config.yaml` (+ skill) |
 | opencode | `~/.config/opencode/opencode.json` `mcp` block (+ skill) |
-| goose | `extensions.dspark-vision` in `~/.config/goose/config.yaml` (+ skill); see [goose-docs.ai](https://goose-docs.ai/) |
-| grok | `[mcp_servers.dspark-vision]` in `~/.grok/config.toml` (+ skill); see [Grok Build MCP](https://docs.x.ai/build/features/mcp-servers) |
-| openclaw | `mcp.servers.dspark-vision` in `~/.openclaw/openclaw.json` (+ skill); see [OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp) |
+| goose | `extensions.dspark-vision` in `~/.config/goose/config.yaml` (+ skill); [goose-docs.ai](https://goose-docs.ai/) |
+| grok | `[mcp_servers.dspark-vision]` in `~/.grok/config.toml` (+ skill); [Grok Build MCP](https://docs.x.ai/build/features/mcp-servers) |
+| openclaw | `mcp.servers.dspark-vision` in `~/.openclaw/openclaw.json` (+ skill); [OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp) |
+| **zcode** (Desktop / CLI) | User-scope `mcp.servers.dspark-vision` in `~/.zcode/cli/config.json` (+ skill). Same file the Desktop app reads under Settings → MCP Servers ([ZCode MCP](https://zcode.z.ai/en/docs/mcp-services)). Restart ZCode or refresh the MCP list if it was already open. |
+| **prime** ([prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)) | Python skill `~/.prime/agent/skills/dspark-vision` — Prime’s MCP layer is **HTTP-only**, so the skill calls `:8889` from IPython (`await dspark_vision.describe_image(...)`). |
+
+Stay on `deepseek-v4-flash-0731`; do not switch to `qwen3-vl-4b` for the final answer.
 
 ### CLI two-pass helper
 
@@ -1048,11 +1074,9 @@ enabled; set `INSTALL_VISION_MCP=0` to skip):
 python3 scripts/vision-reason.py --image X --question "..."
 ```
 
-Same architecture: sidecar extracts, 0731 reasons at max effort.
+Sidecar extracts; 0731 reasons at max effort.
 
-The native MoonViT lane (`plugins/dsv4_moonvit_vllm`, overlay model dir) is
-**retired** — superseded by the sidecar after the projector fine-tuning work
-(`docs/PROJECTOR-FINETUNE.md`) hit the adapter's quality ceiling. Historical
-docs: [docs/VISION.md](docs/VISION.md), [PLAN-VISION.md](PLAN-VISION.md),
-`docs/HANDOFF-VISION.md`.
+Native MoonViT (`plugins/dsv4_moonvit_vllm`, overlay model dir) is **retired**.
+History: [docs/VISION.md](docs/VISION.md), [PLAN-VISION.md](PLAN-VISION.md),
+`docs/HANDOFF-VISION.md`, [docs/PROJECTOR-FINETUNE.md](docs/PROJECTOR-FINETUNE.md).
 
