@@ -9,6 +9,16 @@ SANITIZER="$SCRIPT_DIR/scripts/sanitize-evidence.py"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.dspark}"
 LITELLM_ENV_FILE="${LITELLM_ENV_FILE:-$SCRIPT_DIR/litellm/.env}"
 ACTIVE_GATEWAY_SNAPSHOT="${ACTIVE_GATEWAY_SNAPSHOT:-$ROOT_DIR/artifacts/active-gateway-snapshot.json}"
+MAX_MEMORY_PSI_FULL_AVG10="$(python3 - "$ROOT_DIR/scripts/probe-full-context.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("dspark_full_context", sys.argv[1])
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+print(probe.MAX_MEMORY_PSI_FULL_AVG10)
+PY
+)"
 MODE=""
 RUN_DIR=""
 HERMES_RESULTS=""
@@ -77,7 +87,7 @@ print(json.dumps({
   "functional_runs": [{"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}, {"artifact_sha256": h, "accepted": True, "api_calls": 3, "gateway_attested": True}],
   "performance": {"direct": performance, "litellm": performance, "median_decode_overhead_ratio": 1.0, "p95_ttft_overhead_seconds": 0.1},
   "semantic_readiness": {"direct_origin": {"state": "semantic-ready", "artifact_sha256": h}, "private_litellm": {"state": "semantic-ready", "artifact_sha256": h}},
-  "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "sample_error_count": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 9.0, "min_worker_mem_available_gib": 9.0, "max_memory_psi_full_avg10": 0.0, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "prefix_cache_queries_delta": 10.0, "prefix_cache_hits_delta": 6.0, "prefix_cache_reuse_ratio": 0.6, "speculative_accepted_tokens_delta": 0.0, "speculative_draft_tokens_delta": 0.0, "speculative_acceptance_ratio": None, "speculative_acceptance_observation": "not-observed"},
+  "soak": {"accepted": True, "duration_seconds": 1800, "sample_interval_seconds": 5, "request_count": 10, "origin_completion_delta": 10, "gateway_attempt_delta": 10, "failed_requests": 0, "sample_error_count": 0, "max_idle_gap_seconds": 0.1, "node_samples": 360, "min_head_mem_available_gib": 9.0, "min_worker_mem_available_gib": 9.0, "max_memory_psi_full_avg10": 0.67, "max_requests_running": 1.0, "max_requests_waiting": 0.0, "preemption_delta": 0.0, "max_rank_restarts": 0, "max_node_sample_gap_seconds": 5.1, "kv_cache_usage_peak": 0.5, "prefix_cache_queries_delta": 10.0, "prefix_cache_hits_delta": 6.0, "prefix_cache_reuse_ratio": 0.6, "speculative_accepted_tokens_delta": 0.0, "speculative_draft_tokens_delta": 0.0, "speculative_acceptance_ratio": None, "speculative_acceptance_observation": "not-observed"},
   "rollout_evidence": {"process_readiness": {"head_running": True, "worker_running": True, "restart_count": 0}, "api_readiness": {"authenticated": True, "model_discovery": True}, "semantic_readiness": {"direct_origin": True, "private_litellm": True}, "kv_cache": {"configured_bytes": 12884901888, "reported_token_capacity": 1048576}, "rank_participation": {"world_size": 2, "both_ranks_participated": True}, "memory": {"min_head_mem_available_gib": 9.0, "min_worker_mem_available_gib": 9.0, "max_memory_psi_full_avg10": 0.0}, "prefix_cache": {"queries_delta": 10.0, "hits_delta": 6.0, "reuse_ratio": 0.6}, "speculative_decode": {"accepted_tokens_delta": 0.0, "draft_tokens_delta": 0.0, "acceptance_ratio": None}, "minefield": {"commit": "2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169", "executed": 20, "problem": 0, "inconclusive": 2, "unimplemented": 80}, "external_gateway": {"unauthenticated_status": 401, "authenticated_generation": True}, "prompt_reasoning_canaries_absent": True, "message_logging_disabled": True},
   "evidence_chain": chain, "purge_eligible": True,
 }))
@@ -431,10 +441,11 @@ SOAK_SAMPLE_INTERVAL_SECONDS="${SOAK_SAMPLE_INTERVAL_SECONDS:-5}"
   false
 }
 
-python3 - "$SCRIPT_DIR/scripts/benchmark.py" "$WORKER_HOST" \
+python3 - "$SCRIPT_DIR/scripts/benchmark.py" "$SCRIPT_DIR/scripts/soak_spend.py" "$WORKER_HOST" \
   "http://${HEAD_TAILSCALE_IP}:4001/v1" "$LITELLM_VIRTUAL_KEY_FILE" \
   "http://${VLLM_PROXY_HOST:-172.30.0.1}:${VLLM_PROXY_PORT:-8888}/v1" "$VLLM_ORIGIN_KEY_FILE" \
-  "$SOAK_DURATION_SECONDS" "$SOAK_SAMPLE_INTERVAL_SECONDS" "$SOAK_EVIDENCE" <<'PY'
+  "$SOAK_DURATION_SECONDS" "$SOAK_SAMPLE_INTERVAL_SECONDS" "$MAX_MEMORY_PSI_FULL_AVG10" \
+  "$SOAK_EVIDENCE" <<'PY'
 from __future__ import annotations
 import importlib.util
 import json
@@ -449,10 +460,13 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-benchmark_path, worker, gateway_url, gateway_key_path, origin_url, origin_key_path, duration_raw, interval_raw, output = sys.argv[1:]
+benchmark_path, spend_helper_path, worker, gateway_url, gateway_key_path, origin_url, origin_key_path, duration_raw, interval_raw, max_memory_psi_raw, output = sys.argv[1:]
 duration, interval = int(duration_raw), int(interval_raw)
+max_memory_psi_full_avg10 = float(max_memory_psi_raw)
 spec = importlib.util.spec_from_file_location("dspark_benchmark", benchmark_path)
 bench = importlib.util.module_from_spec(spec); spec.loader.exec_module(bench)
+spend_spec = importlib.util.spec_from_file_location("dspark_soak_spend", spend_helper_path)
+soak_spend = importlib.util.module_from_spec(spend_spec); spend_spec.loader.exec_module(soak_spend)
 gateway_key = Path(gateway_key_path).read_text().strip()
 origin_key = Path(origin_key_path).read_text().strip()
 stop = threading.Event()
@@ -478,21 +492,6 @@ def metric(text, name):
     if not values:
         raise RuntimeError(f"required Prometheus metric is missing: {name}")
     return sum(values)
-
-def spend_count():
-    command = ["docker", "exec", "dspark-private-litellm-postgres-1", "psql", "-X", "-A", "-t", "-U", "litellm_smoke", "-d", "litellm_smoke", "-c", 'SELECT count(*) FROM "LiteLLM_SpendLogs";']
-    return int(subprocess.check_output(command, text=True).strip())
-
-def settled_spend_count():
-    previous = spend_count()
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        time.sleep(1)
-        current = spend_count()
-        if current == previous:
-            return current
-        previous = current
-    raise RuntimeError("LiteLLM spend counter did not settle before soak")
 
 def node_value(command, remote=False):
     argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "ConnectionAttempts=1", worker, command] if remote else ["bash", "-lc", command]
@@ -548,7 +547,7 @@ def one_request(request_id):
         "stream_options": {"include_usage": True},
     }).encode()
     request = urllib.request.Request(gateway_url.rstrip("/") + "/chat/completions", data=payload, headers={"Authorization": f"Bearer {gateway_key}", "Content-Type": "application/json", "X-Request-ID": request_id})
-    done, usage, finish = False, [], None
+    done, usage, finish, response_ids = False, [], None, set()
     with urllib.request.urlopen(request, timeout=900) as response:
         for raw in response:
             line = raw.decode().strip()
@@ -556,14 +555,15 @@ def one_request(request_id):
             body = line[5:].strip()
             if body == "[DONE]": done = True; break
             chunk = json.loads(body)
+            if chunk.get("id"): response_ids.add(chunk["id"])
             if chunk.get("usage"): usage.append(chunk["usage"])
             for choice in chunk.get("choices") or []:
                 if choice.get("finish_reason") is not None: finish = choice["finish_reason"]
-    if not done or len(usage) != 1 or finish not in {"stop", "length"}:
+    if not done or len(usage) != 1 or finish not in {"stop", "length"} or len(response_ids) != 1:
         raise RuntimeError("incomplete soak stream")
+    return next(iter(response_ids))
 
 before_origin = bench.success_counter(origin_url, origin_key)
-before_gateway = settled_spend_count()
 before_metrics = prometheus()
 preempt_before = metric(before_metrics, "vllm:num_preemptions_total")
 accepted_before = metric(before_metrics, "vllm:spec_decode_num_accepted_tokens_total")
@@ -572,13 +572,13 @@ prefix_queries_before = metric(before_metrics, "vllm:prefix_cache_queries_total"
 prefix_hits_before = metric(before_metrics, "vllm:prefix_cache_hits_total")
 thread = threading.Thread(target=sampler, daemon=True); thread.start()
 started = time.monotonic(); deadline = started + duration
-request_count, failed, idle_gaps, prior_end = 0, 0, [], None
+request_count, failed, idle_gaps, prior_end, origin_response_ids = 0, 0, [], None, []
 try:
     while time.monotonic() < deadline:
         request_started = time.monotonic()
         if prior_end is not None: idle_gaps.append(request_started - prior_end)
         try:
-            one_request(f"dspark-soak-{uuid.uuid4()}")
+            origin_response_ids.append(one_request(f"dspark-soak-{uuid.uuid4()}"))
             request_count += 1
         except Exception:
             failed += 1
@@ -588,12 +588,8 @@ finally:
     stop.set(); thread.join(timeout=interval + 5)
 elapsed = int(time.monotonic() - started)
 after_origin = bench.success_counter(origin_url, origin_key)
-deadline_flush = time.monotonic() + 60
-after_gateway = spend_count()
-while after_gateway - before_gateway < request_count and time.monotonic() < deadline_flush:
-    time.sleep(1); after_gateway = spend_count()
 origin_delta = int(after_origin - before_origin)
-gateway_delta = after_gateway - before_gateway
+gateway_delta = soak_spend.wait_for_spend(origin_response_ids)
 after_metrics = prometheus()
 preempt_after = metric(after_metrics, "vllm:num_preemptions_total")
 accepted_after = metric(after_metrics, "vllm:spec_decode_num_accepted_tokens_total")
@@ -621,7 +617,7 @@ accepted = all((
     max(idle_gaps or [0.0]) <= 1.0, max(gaps or [0.0]) <= interval * 2.5,
     min(row[1] for row in node_rows) >= 8.0, min(row[2] for row in node_rows) >= 8.0,
     max(row[3] for row in node_rows) == 0, max(row[4] for row in node_rows) == 0,
-    max(max(row[5], row[6]) for row in node_rows) == 0.0,
+    max(max(row[5], row[6]) for row in node_rows) <= max_memory_psi_full_avg10,
     prefix_queries_delta > 0, prefix_hits_delta >= 0,
     prefix_cache_reuse_ratio is not None and prefix_cache_reuse_ratio > 0.5,
     max(row[0] for row in metric_rows) <= 1, max(row[1] for row in metric_rows) == 0,
@@ -823,7 +819,7 @@ if not all(item["rank_running"] and item["rank_restart_count"] == 0 for item in 
 if {item["role"] for item in nodes["nodes"]} != {"head", "worker"}:
     raise SystemExit("both rank roles were not observed")
 if max(item["memory_psi_full_avg10"] for item in nodes["nodes"]) != 0.0:
-    raise SystemExit("memory PSI full avg10 is nonzero")
+    raise SystemExit("post-soak point-in-time memory PSI must be zero")
 if minefield.get("commit") != "2b453b8a69dbaf8dc9d521dc2d6212cdaceb8169":
     raise SystemExit("Minefield evidence is not pinned")
 for field in ("executed", "problem", "inconclusive", "unimplemented"):

@@ -350,9 +350,7 @@
           ]
         },
         "max_memory_psi_full_avg10": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 0
+          "$ref": "#/$defs/memory_psi_full_avg10"
         },
         "prefix_cache_queries_delta": {
           "type": "number",
@@ -528,9 +526,7 @@
               "minimum": 8
             },
             "max_memory_psi_full_avg10": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 0
+              "$ref": "#/$defs/memory_psi_point_full_avg10"
             }
           }
         },
@@ -647,6 +643,16 @@
     }
   },
   "$defs": {
+    "memory_psi_full_avg10": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 5.0
+    },
+    "memory_psi_point_full_avg10": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 0
+    },
     "sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"

@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -9,6 +10,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deployments/private-smoke"
 SANITIZER = DEPLOY / "scripts/sanitize-evidence.py"
+SOAK_SPEND = DEPLOY / "scripts/soak_spend.py"
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class AcceptanceReportTest(unittest.TestCase):
@@ -43,11 +52,76 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertIn("sample_error_count", schema["properties"]["soak"]["required"])
         self.assertEqual(schema["properties"]["soak"]["properties"]["sample_error_count"]["maximum"], 3)
 
-    def test_soak_waits_for_litellm_spend_counter_to_settle(self):
+    def test_soak_correlates_litellm_spend_to_observed_response_ids(self):
         text = (DEPLOY / "run-acceptance.sh").read_text()
-        self.assertIn("def settled_spend_count():", text)
-        self.assertIn("before_gateway = settled_spend_count()", text)
-        self.assertIn("spend counter did not settle before soak", text)
+        helper = SOAK_SPEND.read_text()
+        self.assertIn("def spend_count(response_ids", helper)
+        self.assertIn("def wait_for_spend(", helper)
+        self.assertIn('origin_response_ids.append(one_request(', text)
+        self.assertIn('WHERE t.request_id IN', helper)
+        self.assertIn(
+            "gateway_delta = soak_spend.wait_for_spend(origin_response_ids)",
+            text,
+        )
+        self.assertNotIn("before_gateway = settled_spend_count()", text)
+
+    def test_soak_spend_polling_is_bounded_correlated_and_preserves_partial_count(self):
+        helper = load_module("soak_spend", SOAK_SPEND)
+        ids = ["chatcmpl-0123456789abcdef", "chatcmpl-fedcba9876543210"]
+        counts = iter((1, 2))
+        self.assertEqual(
+            helper.wait_for_spend(
+                ids, count_fn=lambda _: next(counts), timeout=10,
+                monotonic=iter((0, 0, 1)).__next__, sleep=lambda _: None,
+            ),
+            2,
+        )
+        with self.assertRaisesRegex(RuntimeError, "duplicated"):
+            helper.wait_for_spend([ids[0], ids[0]], count_fn=lambda _: 0)
+        with self.assertRaisesRegex(RuntimeError, "format"):
+            helper.wait_for_spend(["not-a-completion-id"], count_fn=lambda _: 0)
+        with self.assertRaisesRegex(RuntimeError, "duplicate spend rows"):
+            helper.wait_for_spend(
+                ids, count_fn=lambda _: 3, timeout=10,
+                monotonic=iter((0, 0)).__next__, sleep=lambda _: None,
+            )
+        self.assertEqual(
+            helper.wait_for_spend(
+                ids, count_fn=lambda _: 1, timeout=1,
+                monotonic=iter((0, 0, 2)).__next__, sleep=lambda _: None,
+            ),
+            1,
+        )
+
+    def test_soak_memory_pressure_limit_matches_full_context_gate(self):
+        text = (DEPLOY / "run-acceptance.sh").read_text()
+        schema = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())
+        probe = load_module("full_context_probe", ROOT / "scripts/probe-full-context.py")
+        expected = probe.MAX_MEMORY_PSI_FULL_AVG10
+        self.assertIn("probe.MAX_MEMORY_PSI_FULL_AVG10", text)
+        self.assertIn("<= max_memory_psi_full_avg10", text)
+        definition = schema["$defs"]["memory_psi_full_avg10"]
+        self.assertEqual(definition["maximum"], expected)
+        self.assertEqual(
+            schema["properties"]["soak"]["properties"]["max_memory_psi_full_avg10"],
+            {"$ref": "#/$defs/memory_psi_full_avg10"},
+        )
+        self.assertEqual(
+            schema["properties"]["rollout_evidence"]["properties"]["memory"]
+            ["properties"]["max_memory_psi_full_avg10"],
+            {"$ref": "#/$defs/memory_psi_point_full_avg10"},
+        )
+        self.assertEqual(schema["$defs"]["memory_psi_point_full_avg10"]["maximum"], 0)
+        validator = load_module("evidence_validator", SANITIZER)
+        soak_psi = schema["properties"]["soak"]["properties"]["max_memory_psi_full_avg10"]
+        rollout_psi = schema["properties"]["rollout_evidence"]["properties"]["memory"]
+        rollout_psi = rollout_psi["properties"]["max_memory_psi_full_avg10"]
+        validator.validate(expected, soak_psi, schema)
+        with self.assertRaises(validator.EvidenceError):
+            validator.validate(expected + 0.01, soak_psi, schema)
+        validator.validate(0.0, rollout_psi, schema)
+        with self.assertRaises(validator.EvidenceError):
+            validator.validate(0.01, rollout_psi, schema)
 
     def test_soak_uses_multiple_shared_cache_blocks_before_the_nonce(self):
         text = (DEPLOY / "run-acceptance.sh").read_text()
