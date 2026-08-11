@@ -113,6 +113,7 @@ class HermesIsolationTest(unittest.TestCase):
             "HERMES_SMOKE_COLIMA_START_TIMEOUT", "start_colima_profile", "COLIMA_START_PID",
             "Colima profile start exceeded",
             "ps -p", "kill -TERM", "kill -KILL", "status=124",
+            "tr -d '[:space:]' || true",
             "started_at=$SECONDS", "sleep 0.1",
             "--provider", "custom:deepseek-smoke", "--model",
             "deepseek-v4-flash-0731-smoke", "--toolsets", "terminal",

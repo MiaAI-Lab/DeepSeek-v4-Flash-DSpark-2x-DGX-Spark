@@ -561,7 +561,7 @@ run_hermes() {
     capture_default_container_observation "$writer_observation"
     # An exited, unreaped child is still visible to kill -0 as a zombie.
     # Break so wait can collect its real exit status instead of timing out.
-    process_state="$(ps -p "$hermes_pid" -o state= 2>/dev/null | tr -d '[:space:]')"
+    process_state="$(ps -p "$hermes_pid" -o state= 2>/dev/null | tr -d '[:space:]' || true)"
     [ -n "$process_state" ] || break
     case "$process_state" in Z*) break ;; esac
     elapsed=$((SECONDS - started_at))
