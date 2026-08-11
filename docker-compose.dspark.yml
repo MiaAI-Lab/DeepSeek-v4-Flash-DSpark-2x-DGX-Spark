@@ -34,7 +34,10 @@ services:
       TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-0}"
       HF_HUB_DISABLE_XET: "${HF_HUB_DISABLE_XET:-1}"
       DSPARK_MODEL: "${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
-      # Pin HF revision (issue #19). Empty → tip of default branch / refs/main.
+      # Pin HF revision (issue #19). Both names are intentional: the startup
+      # gate resolves the exact snapshot through DSPARK_MODEL_REVISION, while
+      # downstream runtime integrations still consume DSPARK_REVISION.
+      DSPARK_MODEL_REVISION: "${DSPARK_MODEL_REVISION:?DSPARK_MODEL_REVISION must be set}"
       DSPARK_REVISION: "${DSPARK_REVISION:-}"
       VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
       VLLM_HOST_IP: "${VLLM_HOST_IP:-}"

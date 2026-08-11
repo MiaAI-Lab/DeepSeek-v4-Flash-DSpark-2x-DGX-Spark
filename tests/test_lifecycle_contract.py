@@ -404,6 +404,10 @@ class LifecycleContractTest(unittest.TestCase):
     def test_runtime_startup_aborts_and_uses_only_pinned_encoder(self):
         compose = (ROOT / "docker-compose.dspark.yml").read_text()
         command = compose.split("    command:", 1)[1].split("  origin-auth-proxy:", 1)[0]
+        self.assertIn(
+            'DSPARK_MODEL_REVISION: "${DSPARK_MODEL_REVISION:?DSPARK_MODEL_REVISION must be set}"',
+            compose,
+        )
         self.assertIn("set -euo pipefail;", command)
         self.assertIn("snapshots/$${DSPARK_MODEL_REVISION}/encoding/encoding_dsv4.py", command)
         self.assertNotIn("snapshots/*/encoding/encoding_dsv4.py", command)
