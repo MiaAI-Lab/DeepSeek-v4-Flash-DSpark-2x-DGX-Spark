@@ -6,10 +6,58 @@ Local **vision tool** MCP server for the DeepSeek-V4-Flash-0731 DSpark stack.
 `:8889` and returns description / OCR / comparison text so the 0731 agent can
 reason natively (including `reasoning_effort=max`) without switching models.
 
-Same extraction idea as `scripts/vision-reason.py` pass 1 — the MCP returns the
-description; pass 2 is the agent's own reasoning turn.
+---
 
-## Tools
+## Vision support
+
+This is the **production vision path** for the DSpark stack. Native MoonViT on
+0731 is retired; agents see images only through these tools (or the CLI helper).
+
+### Architecture
+
+```text
+  Agent harness (pi / OMP / Hermes / …)
+        │  tool call: describe_image / ocr_image / compare_images
+        ▼
+  dspark-vision-mcp  (stdio, launched via uvx)
+        │  OpenAI chat.completions + image_url (base64 data URI)
+        ▼
+  Qwen3-VL-4B sidecar  http://127.0.0.1:8889   (head node only)
+        │  factual description / OCR / comparison text
+        ▼
+  Agent continues on 0731  http://127.0.0.1:8888
+        │  text-only reasoning (high / max effort is stable here)
+        ▼
+  Final answer
+```
+
+| Piece | Role |
+|-------|------|
+| **0731** (`:8888`, `deepseek-v4-flash-0731`) | Reasoning / tools / chat — **text only** |
+| **VL sidecar** (`:8889`, `qwen3-vl-4b`) | Sees pixels; `enable_thinking=false`, `temperature=0` |
+| **This MCP** | Pass-1 extraction only; returns text for 0731 to reason over |
+| **`scripts/vision-reason.py`** | Same two-pass idea without a harness (CLI) |
+
+Why not send images to 0731 directly? Max/high-effort reasoning over image tokens
+was unstable on the retired MoonViT lane; text-only max effort is stable. Fusing
+vision as a **tool** keeps one conversation on 0731.
+
+### What the stack starts for you
+
+With `ENABLE_VL_SIDECAR=1` (default in `.env.dspark`):
+
+1. `./start-deepseek-v4-flash-dspark.sh` brings up 0731 (TP=2), **then** the
+   sidecar (ordering matters — concurrent GPU memory profiling fails).
+2. When the sidecar lists `qwen3-vl-4b`, start runs
+   `scripts/install-dspark-vision-mcp.sh` if `INSTALL_VISION_MCP` is on
+   (defaults to follow `ENABLE_VL_SIDECAR`).
+3. Detected harnesses get `dspark-vision` registered automatically.
+
+Compose: [`docker-compose.vl-sidecar.yml`](../../docker-compose.vl-sidecar.yml).
+Do not raise 0731 `GPU_MEMORY_UTILIZATION` without re-checking room for the
+sidecar.
+
+### Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -21,7 +69,48 @@ Accepts local paths and `http(s)` URLs. Missing files and a down sidecar return
 actionable `Error: …` strings. Oversized images are downscaled before upload.
 Hard limit: **4 images** per request (sidecar `--limit-mm-per-prompt`).
 
-## Seamless install (recommended)
+### Using it from an agent
+
+Stay on **`deepseek-v4-flash-0731`**. Give an absolute image path (or URL) and ask
+normally — the skill tells the model to call `describe_image` first, then reason:
+
+```text
+Look at /home/mia/pic2.jpg — what color is the sweater and what is the likely
+setting? Reason step by step.
+```
+
+Do **not** switch to the `qwen3-vl-sidecar` model for the answer; that lane is
+extraction-only from the agent’s point of view.
+
+### Env knobs (sidecar + MCP)
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ENABLE_VL_SIDECAR` | `1` in `.env.dspark` | Start Qwen3-VL on `:8889` |
+| `VL_SIDECAR_PORT` | `8889` | Sidecar listen port |
+| `INSTALL_VISION_MCP` | follows sidecar | Auto-register into harnesses on start |
+| `VISION_MCP_HARNESSES` | `auto` | `auto` or `pi,omp,hermes,…` |
+| `DSPARK_VL_BASE_URL` | `http://127.0.0.1:8889` | Where this MCP posts completions |
+| `DSPARK_VL_MODEL` | `qwen3-vl-4b` | Served model id |
+| `DSPARK_VL_MAX_TOKENS` | `1024` | Extraction max tokens |
+
+### Errors you should see
+
+| Situation | Tool returns |
+|-----------|----------------|
+| Missing file | `Error: image file not found: …` |
+| Sidecar down | `Error: vision sidecar unreachable at …` (+ start hint) |
+| Too many images | `Error: too many images (N); sidecar limit is 4 …` |
+
+### Retired: native MoonViT
+
+`plugins/dsv4_moonvit_vllm` and the overlay model dir are **not** the production
+path. Historical notes: [`docs/VISION.md`](../../docs/VISION.md),
+[`docs/PROJECTOR-FINETUNE.md`](../../docs/PROJECTOR-FINETUNE.md).
+
+---
+
+## Seamless harness install (recommended)
 
 When `ENABLE_VL_SIDECAR=1`, `./start-deepseek-v4-flash-dspark.sh` waits for the
 sidecar then runs:
@@ -63,12 +152,6 @@ eager-connect):
 uvx --from ./plugins/dspark_vision_mcp dspark-vision-mcp
 ```
 
-Env overrides (optional):
-
-- `DSPARK_VL_BASE_URL` (default `http://127.0.0.1:8889`)
-- `DSPARK_VL_MODEL` (default `qwen3-vl-4b`)
-- `DSPARK_VL_MAX_TOKENS` (default `1024`)
-
 ## Manual pi registration (if not using the installer)
 
 pi has no built-in MCP — use [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter)
@@ -100,4 +183,11 @@ curl -s http://127.0.0.1:8889/v1/models | head -c 200
 
 uv run --directory plugins/dspark_vision_mcp python -c \
   'from dspark_vision_mcp.server import describe_image; print(describe_image("/home/mia/pic2.jpg", "sweater color?"))'
+```
+
+CLI two-pass (extract + 0731 max reasoning):
+
+```bash
+python3 scripts/vision-reason.py --image /home/mia/pic2.jpg \
+  --question "What color is the sweater and what is the likely setting?"
 ```
