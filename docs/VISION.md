@@ -1,3 +1,15 @@
+# Native MoonViT vision (DeepSeek-V4-Flash-0731) — RETIRED
+
+> **2026-08-11: this lane is retired.** The production setup is now a local
+> **Qwen3-VL-4B sidecar** (`docker-compose.vl-sidecar.yml`, port 8889) with the
+> 0731 serve text-only; see `README.md` §Vision and `scripts/vision-reason.py`.
+> Reasons: even after the v3.x projector fine-tunes (color gate 10/10), the
+> adapter ceiling remained — weak fine-grained recognition, LM text priors
+> overriding image evidence on some phrasings, and unstable max-effort
+> reasoning over image tokens. The sidecar has none of these issues and stays
+> fully on-prem. This document is kept for reference; the content below
+> describes the retired native path.
+
 # Native MoonViT vision (DeepSeek-V4-Flash-0731)
 
 When **enabled**, the same DSpark vLLM process serves **text + images** for 0731 using WebBrain’s **MoonViT + PatchMerger** in-process. This is **not** a caption sidecar and **not** the SGLang production path.
@@ -99,6 +111,25 @@ Image answers can be trapped in unclosed `<think>` if reasoning is on. For agent
 
 or set `DEFAULT_THINKING=off` for the vision lane. 0731 encoding / tools / parsers remain the same as text-only.
 
+**`reasoning_effort=max` with images is unstable (measured 2026-08-10):** with
+image tokens in the prompt, max/high-effort reasoning nondeterministically
+falls into repetition attractors (scene-vocabulary loops, e.g. 狗/猫/电视…),
+returning empty `content` (`finish_reason=length`) roughly half the time.
+Text-only max reasoning is stable; `low` effort with images works for short
+answers; repetition/presence penalties do **not** fix it. Root cause is in the
+abliterated LM's long-horizon reasoning over image embeddings, not the vision
+input (the loop vocabulary is scene-relevant).
+
+For deep reasoning about image content use the **two-pass pattern** —
+extract with thinking off (stable), then reason at max over the description
+(text-only, stable):
+
+```bash
+python3 scripts/vision-reason.py --image photo.jpg \
+  --question "Is this home pet-friendly? Reason step by step." \
+  --show-description
+```
+
 ### Text-only
 
 Omit image parts; same `model` id and endpoint. Encoding, tool-call parser, and reasoning parser are unchanged.
@@ -197,19 +228,27 @@ Solid-color checks work best with pure RGB fixtures (≥256²) and a short force
 
 MoonViT tower must load with WebBrain key names (`encoder.blocks.*.wqkv`, not `attn.qkv_proj`). Enable `--mm-encoder-tp-mode data` (model sets `supports_encoder_tp_data`).
 
-### Color QA reliability (measured 2026-08-10, DSpark ON, temp=0, N=10)
+### Color QA reliability (measured 2026-08-10, DSpark ON, temp=0, N=10, v3 projector)
 
 | Fixture | Pass rate | Notes |
 | --- | --- | --- |
-| black, white | 80–100% | luminance-extremes are reliable |
-| red | ~40–50% | flips Red/Black/White across identical requests |
-| green | ~30–40% | usually drift to Red |
-| blue | ~0% | systematically misread as Red/Black |
+| red, black, white, green, blue | **10/10 each** | stable across identical requests |
 
-This is **adapter-intrinsic** (WebBrain MoonViT→0731 hue association is weak; never
-GPU-validated by the publisher on 0731), not a serve misconfiguration — it persists on
-both the abliterated and official 0731 backbones. Do **not** build automation that
-depends on hue answers; black/white and general image presence are dependable.
+This requires the **v3 embedding-aligned projector**
+(`webbrain-0731-moonvit-src/mm_projector-v3-0731.safetensors`, deployed via
+`DSV4_MOONVIT_PROJECTOR` in `.env.dspark`). The original WebBrain projector is
+adapter-limited for 0731 (red ~40–60%, green ~40%, blue 0%): it was trained for
+Kimi's embedding space, and its output rows are ~18x the 0731 token-embedding
+scale (norm ~127 vs ~7.3). The v3 projector is fine-tuned against the real
+MoonViT tower + the real 0731 `embed.weight` table (InfoNCE caption alignment +
+color CE + norm anchor); see `docs/PROJECTOR-FINETUNE.md`.
+
+Deployment gotcha: the serve resolves the projector from
+`DSV4_MOONVIT_PROJECTOR` / compose auto-discovery
+(`webbrain-0731-moonvit-src/mm_projector.safetensors` first candidate) — **not**
+from the `mm_projector.safetensors` symlink inside the overlay model dir.
+Verify with the serve log: `encode_image ... norm=` should be ~10–20 per-row
+with v3, ~127 with the original.
 
 N-trial gate (exits non-zero when pass rates miss thresholds, captures DSpark metrics):
 
@@ -217,5 +256,22 @@ N-trial gate (exits non-zero when pass rates miss thresholds, captures DSpark me
 python3 scripts/smoke-moonvit-colors.py --trials 10 --out results/smoke-mm-status.json
 ```
 
-Status thresholds: red ≥0.90, black/white ≥0.80, green/blue ≥0.50 (reported honestly;
-current adapter does not pass red/green/blue).
+Status thresholds: red ≥0.90, black/white ≥0.80, green/blue ≥0.50 (v3 passes all).
+
+### Open-ended color naming and LM text priors (v3.1/v3.2, 2026-08-10)
+
+The v3.1+ projectors add anchors for pink/brown/gray/beige/navy/olive/teal/maroon,
+so open-ended color naming works for solid fields and neutral phrasings
+("what color is the top?" → pink). One residual ceiling is **not** fixable at
+the adapter level: the abliterated LM has strong text priors for certain
+phrasings — it answers "Blue" to *"What color is the person's sweater?"* **even
+with no image attached**, and that prior can override correct image evidence.
+Object-context anchor training (v3.2) did not move it; image-first ordering
+only nudges it. Guidance for clients:
+
+- Prefer neutral phrasings: "main color", "what color is the top/clothing item",
+  or forced-choice lists ("pink/blue/yellow") — all verified reliable.
+- Avoid garment-noun questions ("sweater", "dress") when the answer matters;
+  or use `scripts/vision-reason.py`, whose extraction prompt is neutral.
+- Occasional open-ended descriptions may drift to Chinese; re-ask or pin
+  "Answer in English."

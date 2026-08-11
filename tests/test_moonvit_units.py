@@ -333,3 +333,105 @@ class TestArtifactShas:
         assert rep["projector_ok"], rep
         assert rep["tower_sha256"] == TOWER_SHA256
         assert rep["projector_sha256"] == PROJECTOR_SHA256
+
+
+class TestProjectorFinetuned:
+    """Tests for fine-tuned projector (drop-in replacement)."""
+
+    def _finetuned_path(self) -> Path:
+        """Return path to fine-tuned projector if it exists.
+
+        Preference: env override → v3 (embedding-aligned) → v2 (color CE).
+        """
+        env = os.environ.get("DSV4_MOONVIT_FINETUNED_PROJECTOR")
+        if env:
+            return Path(env)
+        hf = Path.home() / ".cache/huggingface"
+        for candidate in (
+            hf / "webbrain-0731-moonvit-src/mm_projector-v3-0731.safetensors",
+            hf / "projector-v3/mm_projector-v3-0731.safetensors",
+            hf / "mm_projector-finetuned-0731.safetensors",
+        ):
+            if candidate.is_file():
+                return candidate
+        return hf / "mm_projector-finetuned-0731.safetensors"
+
+    def test_projector_finetuned_loads(self):
+        """New projector file loads, shapes match, missing=0."""
+        path = self._finetuned_path()
+        if not path.is_file():
+            pytest.skip(f"fine-tuned projector not at {path}")
+        m = PatchMerger()
+        loaded = m.load_webbrain_safetensors(path, device="cpu", dtype=torch.bfloat16)
+        assert len(loaded) == 6, f"expected 6 tensors, got {len(loaded)}"
+        # Verify shapes match original
+        assert m.pre_norm.weight.shape == (1152,)
+        assert m.linear_1.weight.shape == (4608, 4608)
+        assert m.linear_2.weight.shape == (4096, 4608)
+
+    def test_projector_finetuned_shape(self):
+        """Forward pass produces correct (T, 4096) output."""
+        path = self._finetuned_path()
+        if not path.is_file():
+            pytest.skip(f"fine-tuned projector not at {path}")
+        m = PatchMerger()
+        m.load_webbrain_safetensors(path, device="cpu", dtype=torch.bfloat16)
+        # Test various input shapes
+        for n_tokens in [1, 7, 50, 512]:
+            x = torch.randn(n_tokens, 4, 1152, dtype=torch.bfloat16)
+            y = m(x)
+            assert y.shape == (n_tokens, 4096), f"failed for {n_tokens} tokens"
+            assert y.dtype == torch.bfloat16
+
+    def test_projector_finetuned_deterministic(self):
+        """Same input produces same output (deterministic)."""
+        path = self._finetuned_path()
+        if not path.is_file():
+            pytest.skip(f"fine-tuned projector not at {path}")
+        m = PatchMerger()
+        m.load_webbrain_safetensors(path, device="cpu", dtype=torch.bfloat16)
+        x = torch.randn(10, 4, 1152, dtype=torch.bfloat16)
+        y1 = m(x)
+        y2 = m(x)
+        assert torch.equal(y1, y2)
+
+    def test_projector_finetuned_param_count(self):
+        """Fine-tuned projector has same param count as original."""
+        path = self._finetuned_path()
+        if not path.is_file():
+            pytest.skip(f"fine-tuned projector not at {path}")
+        m = PatchMerger()
+        m.load_webbrain_safetensors(path, device="cpu", dtype=torch.bfloat16)
+        count = count_parameters(m)
+        assert count == expected_projector_param_count(), (
+            f"param count mismatch: {count} != {expected_projector_param_count()}"
+        )
+
+    def test_projector_finetuned_differs_from_original(self):
+        """Fine-tuned weights differ from original (training happened)."""
+        path = self._finetuned_path()
+        orig_path = os.environ.get(
+            "DSV4_MOONVIT_PROJECTOR",
+            str(
+                Path.home()
+                / ".cache/huggingface/webbrain-0731-moonvit-src/mm_projector.safetensors"
+            ),
+        )
+        if not path.is_file():
+            pytest.skip(f"fine-tuned projector not at {path}")
+        if not Path(orig_path).is_file():
+            pytest.skip(f"original projector not at {orig_path}")
+
+        from safetensors.torch import load_file
+
+        orig_state = load_file(str(orig_path), device="cpu")
+        ft_state = load_file(str(path), device="cpu")
+
+        # At least one tensor should differ
+        any_different = False
+        for key in orig_state:
+            if key in ft_state:
+                if not torch.equal(orig_state[key], ft_state[key]):
+                    any_different = True
+                    break
+        assert any_different, "fine-tuned weights are identical to original - no training occurred"

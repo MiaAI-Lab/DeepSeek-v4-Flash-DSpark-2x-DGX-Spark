@@ -1,0 +1,20 @@
+{
+  "settings": {
+    "toolPrefix": "none"
+  },
+  "mcpServers": {
+    "dspark-vision": {
+      "command": "/home/mia/.local/bin/uvx",
+      "args": [
+        "--from",
+        "/home/mia/models/deepSeek-v4-Flash-DSpark/plugins/dspark_vision_mcp",
+        "dspark-vision-mcp"
+      ],
+      "directTools": [
+        "describe_image",
+        "ocr_image",
+        "compare_images"
+      ]
+    }
+  }
+}

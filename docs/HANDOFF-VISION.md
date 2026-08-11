@@ -458,6 +458,16 @@ Native MoonViT on dual-node vLLM+DSpark is **running**: overlay model `dsv4-0731
 
 ## 15. Goal-2 addendum (2026-08-10): flakiness root-caused; hue ceiling documented
 
+> **Superseded later the same day:** the "not reachable" verdict applied to the
+> *original* WebBrain adapter. A projector fine-tuned against the real 0731
+> embedding table (`mm_projector-v3-0731.safetensors`, see
+> `docs/PROJECTOR-FINETUNE.md` and `docs/HANDOFF-PROJECTOR-FINETUNE.md`) passes
+> the full color gate 10/10 × 5 colors with DSpark ON. The analysis below remains
+> the correct diagnosis of *why the original adapter* fails (plus two serving
+> bugs it missed: the fine-tune was never actually loaded — the plugin reads
+> `DSV4_MOONVIT_PROJECTOR`, not the model-dir symlink — and an ~18× embedding
+> scale mismatch vs 0731's token embeddings).
+
 **TL;DR:** The flakiness is **not** DSpark, not prefix cache, not the encoder, not the
 backbone, not the port. The WebBrain adapter's hue signal into 0731 is intrinsically weak
 (frontend embeddings near-collinear: red↔green rel_l2 0.03); the LM reads luminance

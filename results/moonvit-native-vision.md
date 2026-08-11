@@ -219,3 +219,36 @@ re-attach images every turn (the original user pain) and genuine 2–4 image pro
   the reliable signal.
 - Budget: 4×512 = 2048 prompt tokens vs `max_num_batched_tokens` 8192 — no config change needed.
 - `--mm-processor-cache-gb 0` and `--mm-encoder-tp-mode data` kept unchanged.
+
+---
+
+## 2026-08-10 (PM) — v3 projector: color QA fixed
+
+**Live gate (N=10, temp=0, DSpark MTP-6 ON, v3 projector): red 10/10, black 10/10,
+white 10/10, green 10/10, blue 10/10; text-only `VISION_TEXT_OK`; spec-decode
+acceptance non-zero (24% after 50 image requests; 60% text-only before).**
+Evidence: `results/projector-v3-colors.json`.
+
+Root causes found this session (all three had to be fixed):
+
+1. v2 fine-tune trained on a **random stand-in tower** and a discarded
+   classifier head — its "results" were noise.
+2. The v2 file was **never actually served**: the plugin resolves the projector
+   from `DSV4_MOONVIT_PROJECTOR` / compose auto-discovery
+   (`webbrain-0731-moonvit-src/mm_projector.safetensors`), not from the overlay
+   model-dir symlink. Head and worker symlinks had also diverged.
+3. The WebBrain projector emits image embeddings at row-norm **~127** vs 0731
+   token embeddings **~7.3** (~18× scale mismatch, Kimi-scaled), on top of the
+   near-collinear hue directions documented in §Goal-2.
+
+v3 training (`scripts/train-projector-v3.py`): real frozen MoonViT tower +
+real 0731 `embed.weight` anchors (InfoNCE + color CE + log-norm match),
+COCO val2017 + synthetic colors, 3000 steps. Offline: color-word retrieval
+1/10 → 10/10; min hue rel_l2 0.03 → 1.25; row-norm 127 → 7.35.
+
+Real-image check (COCO): colors and coarse scene/layout are read correctly;
+fine-grained object identity is still weak (giraffes → "elephants"). Colors and
+luminance are now dependable; detailed captioning is not production-grade.
+
+Deploy mechanism (both nodes): `DSV4_MOONVIT_PROJECTOR=...mm_projector-v3-0731.safetensors`
+in `.env.dspark` + stop/start. Verify via serve log `encode_image ... norm=`.

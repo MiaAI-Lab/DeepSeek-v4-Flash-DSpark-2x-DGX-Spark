@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dspark-vision-mcp"
+version = "0.1.0"
+description = "Local vision MCP tools for DeepSeek-V4-Flash-0731 via Qwen3-VL sidecar"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.9,<2",
+  "pillow>=10",
+]
+
+[project.scripts]
+dspark-vision-mcp = "dspark_vision_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dspark_vision_mcp*"]

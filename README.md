@@ -1006,7 +1006,52 @@ blaming the DSpark weights.
   1.75M, with the same boot/log/speed gates. Raw KV math alone is not enough
   because DeepSeek V4 sparse MLA also allocates max-length-dependent workspaces.
 
-## Vision (experimental)
+## Vision
 
-Native MoonViT on vLLM/DSpark: see [docs/VISION.md](docs/VISION.md) and [PLAN-VISION.md](PLAN-VISION.md).
+**Current (2026-08-11): local VL sidecar + MCP tools.** The 0731 serve is
+text-only; vision is provided by a **Qwen3-VL-4B-Instruct-FP8** sidecar on the
+head node (`http://127.0.0.1:8889`, served name `qwen3-vl-4b`), started by
+`start-deepseek-v4-flash-dspark.sh` when `ENABLE_VL_SIDECAR=1` (default in
+`.env.dspark`). Compose: `docker-compose.vl-sidecar.yml`. 0731's
+`GPU_MEMORY_UTILIZATION` is tuned (see `.env.dspark`) to leave room for the
+sidecar — do not raise it without re-checking concurrent GPU memory.
+
+### Agent path: MCP vision tools (pi / OMP / Hermes / opencode / goose / grok / openclaw)
+
+[`plugins/dspark_vision_mcp`](plugins/dspark_vision_mcp) exposes `describe_image`,
+`ocr_image`, and `compare_images` so 0731 can *see* via tools without switching
+models. After the sidecar is healthy, **start auto-registers** the server into
+detected harnesses (`INSTALL_VISION_MCP` defaults on when the sidecar is
+enabled; set `INSTALL_VISION_MCP=0` to skip):
+
+```bash
+./scripts/install-dspark-vision-mcp.sh          # also runnable alone
+./scripts/install-dspark-vision-mcp.sh --dry-run
+```
+
+| Harness | Config written |
+|---------|----------------|
+| pi | `~/.config/mcp/mcp.json` (+ `pi-mcp-adapter`, skill) |
+| OMP | `~/.omp/agent/mcp.json` (+ skill) |
+| Hermes | `mcp_servers.dspark-vision` in `~/.hermes/config.yaml` (+ skill) |
+| opencode | `~/.config/opencode/opencode.json` `mcp` block (+ skill) |
+| goose | `extensions.dspark-vision` in `~/.config/goose/config.yaml` (+ skill); see [goose-docs.ai](https://goose-docs.ai/) |
+| grok | `[mcp_servers.dspark-vision]` in `~/.grok/config.toml` (+ skill); see [Grok Build MCP](https://docs.x.ai/build/features/mcp-servers) |
+| openclaw | `mcp.servers.dspark-vision` in `~/.openclaw/openclaw.json` (+ skill); see [OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp) |
+
+Details: [`plugins/dspark_vision_mcp/README.md`](plugins/dspark_vision_mcp/README.md).
+
+### CLI two-pass helper
+
+```bash
+python3 scripts/vision-reason.py --image X --question "..."
+```
+
+Same architecture: sidecar extracts, 0731 reasons at max effort.
+
+The native MoonViT lane (`plugins/dsv4_moonvit_vllm`, overlay model dir) is
+**retired** — superseded by the sidecar after the projector fine-tuning work
+(`docs/PROJECTOR-FINETUNE.md`) hit the adapter's quality ceiling. Historical
+docs: [docs/VISION.md](docs/VISION.md), [PLAN-VISION.md](PLAN-VISION.md),
+`docs/HANDOFF-VISION.md`.
 

@@ -1,0 +1,55 @@
+# VL sidecar for the DSpark stack: Qwen3-VL-4B on the HEAD node only.
+#
+# Started by start-deepseek-v4-flash-dspark.sh when ENABLE_VL_SIDECAR=1
+# (never launched on the worker). Vision requests go to this endpoint;
+# DeepSeek-V4-Flash-0731 stays a text-only reasoning lane. Same project
+# (deepseek-v4-flash) so stop-deepseek-v4-flash-dspark.sh tears it down
+# as part of the project.
+services:
+  vl-sidecar:
+    image: ${DSPARK_VLLM_IMAGE:-ghcr.io/anemll/dspark-vllm-gx10:0.1.1}
+    pull_policy: if_not_present
+    entrypoint: []
+    network_mode: host
+    ipc: host
+    shm_size: "8gb"
+
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+    gpus: all
+
+    volumes:
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      - ${DSPARK_TMP_HOST:-${HOME}/.cache/dspark-tmp}:/tmp
+
+    environment:
+      HF_HOME: /cache/huggingface
+      HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
+      TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-0}"
+      HF_HUB_DISABLE_XET: "${HF_HUB_DISABLE_XET:-1}"
+      VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
+      TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-12.1a}"
+      FLASHINFER_CUDA_ARCH_LIST: "${FLASHINFER_CUDA_ARCH_LIST:-12.1a}"
+      CUTE_DSL_ARCH: "${CUTE_DSL_ARCH:-sm_121a}"
+      FLASHINFER_DISABLE_VERSION_CHECK: "${FLASHINFER_DISABLE_VERSION_CHECK:-1}"
+      FLASHINFER_WORKSPACE_BASE: "${FLASHINFER_WORKSPACE_BASE:-/cache/huggingface/flashinfer}"
+      PYTORCH_CUDA_ALLOC_CONF: "${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+    command:
+      - bash
+      - -lc
+      - >
+        export PATH="/usr/local/cuda/bin:/usr/local/bin:$${PATH:-}";
+        export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$${LD_LIBRARY_PATH:-}";
+        exec /usr/local/bin/vllm serve ${VL_SIDECAR_MODEL:-Qwen/Qwen3-VL-4B-Instruct-FP8}
+        --served-model-name ${VL_SIDECAR_SERVED_NAME:-qwen3-vl-4b}
+        --host 0.0.0.0
+        --port ${VL_SIDECAR_PORT:-8889}
+        --trust-remote-code
+        --max-model-len ${VL_SIDECAR_MAX_MODEL_LEN:-65536}
+        --max-num-seqs ${VL_SIDECAR_MAX_NUM_SEQS:-4}
+        --gpu-memory-utilization ${VL_SIDECAR_GPU_UTIL:-0.12}
+        --enable-prefix-caching
+        --limit-mm-per-prompt '{"image":4}'
