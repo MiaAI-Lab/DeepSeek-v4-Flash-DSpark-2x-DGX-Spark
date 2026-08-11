@@ -7,11 +7,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ISSUE21 = ROOT / "patches" / "hotfix-encoding-dsv4-issue21.py"
 ISSUE22 = ROOT / "patches" / "hotfix-nvfp4-ds-mla-issue22.py"
+VERIFIER = ROOT / "scripts" / "verify-runtime-hotfixes.py"
 
 
 def load_module(name: str, path: Path):
@@ -118,6 +120,22 @@ class RuntimeHotfixTest(unittest.TestCase):
         self.assertIn("RUN python3 /opt/dspark-hotfixes/hotfix-nvfp4", dockerfile)
         self.assertEqual(manifest["issue21_upstream_commit"], "94baabf")
         self.assertEqual(manifest["issue22_upstream_commit"], "6c42a7a")
+
+    def test_image_verifier_distinguishes_patcher_from_effective_runtime(self):
+        verifier = load_module("runtime_verifier", VERIFIER)
+        with mock.patch.object(
+            verifier,
+            "docker_markers",
+            return_value={
+                "issue21_patcher_present": False,
+                "issue22_runtime_present": True,
+            },
+        ):
+            with self.assertRaisesRegex(ValueError, "Issue #21 patcher"):
+                verifier.verify_image("synthetic:image")
+        source = VERIFIER.read_text()
+        self.assertIn("issue21_patcher_present", source)
+        self.assertNotIn('return {"image": image, "image_id": image_id, "issue21": True', source)
 
 
 if __name__ == "__main__":

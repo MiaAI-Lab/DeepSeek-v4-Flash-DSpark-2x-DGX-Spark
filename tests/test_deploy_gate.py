@@ -14,6 +14,7 @@ class DeployGateTest(unittest.TestCase):
             "--all", "validate-dspark-config.sh", "verify-fabric.sh",
             "verify-artifact-manifest.py", "docker image inspect", "MemAvailable",
             "df -", "VLLM_ORIGIN_KEY_FILE", "ss -ltn", "WORKER_HOST",
+            "verify-runtime-hotfixes.py",
         ):
             self.assertIn(required, text)
 

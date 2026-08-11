@@ -63,6 +63,8 @@ check_capacity worker "$WORKER_HOST"
 head_image="$(docker image inspect "$DSPARK_VLLM_IMAGE" -f '{{.Id}}')"
 worker_image="$(ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' -f '{{.Id}}'")"
 [ "$head_image" = "$worker_image" ] || { echo "Pinned image IDs differ." >&2; exit 1; }
+python3 "$ROOT_DIR/scripts/verify-runtime-hotfixes.py" \
+  --repo-root "$ROOT_DIR" --image "$DSPARK_VLLM_IMAGE"
 
 [ -f "$HEAD_MANIFEST" ] && [ -f "$WORKER_MANIFEST" ] || { echo "Artifact manifests are missing." >&2; exit 1; }
 python3 "$ROOT_DIR/scripts/verify-artifact-manifest.py" compare \

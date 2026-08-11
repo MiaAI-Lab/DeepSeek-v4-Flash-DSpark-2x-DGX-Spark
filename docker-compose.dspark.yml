@@ -36,7 +36,6 @@ services:
       DSPARK_MODEL: "${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
       # Pin HF revision (issue #19). Empty → tip of default branch / refs/main.
       DSPARK_REVISION: "${DSPARK_REVISION:-}"
-      DSPARK_ENCODING_FILE: "${DSPARK_ENCODING_FILE:-}"
       VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
       VLLM_HOST_IP: "${VLLM_HOST_IP:-}"
 
@@ -97,25 +96,14 @@ services:
       - bash
       - -lc
       - >
+        set -euo pipefail;
         export PATH="/usr/local/cuda/bin:/usr/local/bin:$${PATH:-}";
         export CUDA_HOME="$${CUDA_HOME:-/usr/local/cuda}";
         export CUDA_PATH="$${CUDA_PATH:-$${CUDA_HOME}}";
         export CUDAToolkit_ROOT="$${CUDAToolkit_ROOT:-$${CUDA_HOME}}";
         export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$${LD_LIBRARY_PATH:-}";
-        ENCODING_SOURCE="$${DSPARK_ENCODING_FILE:-}";
-        if [ -z "$${ENCODING_SOURCE}" ]; then
-          MODEL_HUB_DIR=$$(printf '%s' "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}" | sed 's|/|--|g');
-          if [ -n "$${DSPARK_REVISION:-}" ] && [ -f "/cache/huggingface/hub/models--$${MODEL_HUB_DIR}/snapshots/$${DSPARK_REVISION}/encoding/encoding_dsv4.py" ]; then
-            ENCODING_SOURCE="/cache/huggingface/hub/models--$${MODEL_HUB_DIR}/snapshots/$${DSPARK_REVISION}/encoding/encoding_dsv4.py";
-          fi;
-          if [ -z "$${ENCODING_SOURCE}" ]; then
-            for candidate in /cache/huggingface/hub/models--$${MODEL_HUB_DIR}/snapshots/*/encoding/encoding_dsv4.py; do
-              if [ -f "$${candidate}" ]; then ENCODING_SOURCE="$${candidate}"; break; fi;
-            done;
-          fi;
-        fi;
-        if [ -z "$${ENCODING_SOURCE}" ]; then for candidate in /cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731/snapshots/*/encoding/encoding_dsv4.py; do if [ -f "$${candidate}" ]; then ENCODING_SOURCE="$${candidate}"; break; fi; done; fi;
-        if [ -z "$${ENCODING_SOURCE}" ] && [ -f /models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py ]; then ENCODING_SOURCE=/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py; fi;
+        MODEL_HUB_DIR=$$(printf '%s' "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}" | sed 's|/|--|g');
+        ENCODING_SOURCE="/cache/huggingface/hub/models--$${MODEL_HUB_DIR}/snapshots/$${DSPARK_MODEL_REVISION}/encoding/encoding_dsv4.py";
         if [ -z "$${ENCODING_SOURCE}" ] || [ ! -f "$${ENCODING_SOURCE}" ]; then echo "DeepSeek encoder source not found; refusing unpatched startup" >&2; exit 1; fi;
         cp "$${ENCODING_SOURCE}" /usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py;
         python3 -c 'from pathlib import Path; p=Path("/usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4.py"); s=p.read_text(); old="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            else:\n                reasoning_effort = \"high\""; new="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            elif reasoning_effort == \"high\":\n                reasoning_effort = \"high\"\n            else:\n                reasoning_effort = \"low\""; updated=s.replace(old,new); assert new in updated; p.write_text(updated)';

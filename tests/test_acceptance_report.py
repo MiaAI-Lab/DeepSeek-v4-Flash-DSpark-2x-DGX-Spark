@@ -91,6 +91,8 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertIn("reuse_full_context=1", text)
         self.assertIn("reuse_long_context_decode=1", text)
         self.assertIn('report.get("baseline_tps", -1)', text)
+        self.assertIn('report.get("evidence_identity") != expected_identity', text)
+        self.assertIn("CAPACITY_EVIDENCE_IDENTITY", text)
         self.assertIn("age > 24 * 3600", text)
         self.assertIn("Missing pre-capacity acceptance evidence", text)
         self.assertIn("Capacity resume requires exactly two Hermes result files", text)

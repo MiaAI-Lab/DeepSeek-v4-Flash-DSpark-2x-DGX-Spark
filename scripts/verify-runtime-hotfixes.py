@@ -13,7 +13,7 @@ import sys
 MANIFEST_PATH = Path("recipe/runtime-hotfixes.manifest.json")
 ISSUE21_MARKER = "if isinstance(raw, dict):"
 ISSUE22_MARKER = 'self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")'
-RUNTIME_ISSUE21 = "/usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py"
+ISSUE21_PATCHER = "/opt/dspark-hotfixes/hotfix-encoding-dsv4-issue21.py"
 RUNTIME_ISSUE22 = "/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/flashmla_sparse.py"
 
 
@@ -50,8 +50,8 @@ def verify_manifest(root: Path) -> dict:
 def docker_markers(image: str) -> dict:
     code = (
         "from pathlib import Path; import json; "
-        f"print(json.dumps({{'issue21': {ISSUE21_MARKER!r} in Path('/opt/dspark-hotfixes/hotfix-encoding-dsv4-issue21.py').read_text(), "
-        f"'issue22': {ISSUE22_MARKER!r} in Path({RUNTIME_ISSUE22!r}).read_text()}}))"
+        f"print(json.dumps({{'issue21_patcher_present': {ISSUE21_MARKER!r} in Path({ISSUE21_PATCHER!r}).read_text(), "
+        f"'issue22_runtime_present': {ISSUE22_MARKER!r} in Path({RUNTIME_ISSUE22!r}).read_text()}}))"
     )
     result = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "python3", image, "-c", code],
@@ -66,9 +66,9 @@ def docker_markers(image: str) -> dict:
 
 def verify_image(image: str) -> dict:
     markers = docker_markers(image)
-    if markers.get("issue21") is not True:
+    if markers.get("issue21_patcher_present") is not True:
         raise ValueError("Issue #21 patcher is absent from derived image")
-    if markers.get("issue22") is not True:
+    if markers.get("issue22_runtime_present") is not True:
         raise ValueError("Issue #22 is absent from derived runtime")
     image_id = subprocess.run(
         ["docker", "image", "inspect", image, "-f", "{{.Id}}"],
@@ -76,7 +76,12 @@ def verify_image(image: str) -> dict:
         capture_output=True,
         check=True,
     ).stdout.strip()
-    return {"image": image, "image_id": image_id, "issue21": True, "issue22": True}
+    return {
+        "image": image,
+        "image_id": image_id,
+        "issue21_patcher_present": True,
+        "issue22_runtime_present": True,
+    }
 
 
 def main() -> int:

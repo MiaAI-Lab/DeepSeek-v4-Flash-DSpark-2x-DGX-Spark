@@ -91,12 +91,13 @@ class PrivateGatewayTest(unittest.TestCase):
 
     def test_egress_policy_builds_rules_under_nounset(self):
         policy = (GATEWAY / "egress-policy.sh").read_text()
-        self.assertIn("sudo -n true", policy)
-        self.assertIn("--privileged --pid host --entrypoint nsenter", policy)
+        self.assertIn('sudo -n iptables "$@"', policy)
+        self.assertNotIn("--privileged", policy)
+        self.assertNotIn("--pid host", policy)
+        self.assertNotIn("nsenter", policy)
         self.assertIn("DOCKER-USER", policy)
         self.assertIn("ESTABLISHED,RELATED", policy)
         self.assertIn("172.29.0.10", policy)
-        self.assertIn("sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8", policy)
         with tempfile.TemporaryDirectory() as temporary:
             sudo = Path(temporary) / "sudo"
             sudo.write_text("#!/bin/sh\nexit 0\n")

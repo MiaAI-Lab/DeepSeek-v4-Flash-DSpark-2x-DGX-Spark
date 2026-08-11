@@ -196,6 +196,7 @@ def main() -> int:
     parser.add_argument("--model")
     parser.add_argument("--sample-interval", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=3600.0)
+    parser.add_argument("--evidence-identity")
     parser.add_argument("--output", type=Path, default=Path("artifacts/health-rollout/full-context.json"))
     args = parser.parse_args()
     if args.max_output_tokens != 1:
@@ -264,6 +265,7 @@ def main() -> int:
     report = {
         "schema": "dspark-full-context-gate/v1",
         "profile": args.profile,
+        "evidence_identity": args.evidence_identity,
         "model": model,
         "target_prompt_tokens": target,
         "constructed_prompt_tokens": constructed_tokens,

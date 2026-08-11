@@ -35,15 +35,12 @@ local_project_has_resources() {
 # Force-remove VL / 0731 containers by compose project label + known names.
 # Used when compose down misses a service (e.g. worker missing vl-sidecar.yml).
 force_rm_project_containers() {
-  local project="$1"
-  local failed=0
-
-  if local_project_has_resources "$project"; then
-    echo "Stopping DSpark head project ${project}..."
-    COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$project" --env-file "$ENV_FILE" \
-      -f "$COMPOSE_FILE" --profile head-proxy down --remove-orphans || failed=1
+  local project="$1" target="$2"
+  if [ "$target" = "local" ]; then
+    ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
+    [ -z "$ids" ] || docker rm -f $ids >/dev/null
   else
-    ssh "$WORKER_HOST" "$cmd" || true
+    ssh "$WORKER_HOST" "ids=\$(docker ps -aq --filter 'label=com.docker.compose.project=$project'); [ -z \"\$ids\" ] || docker rm -f \$ids >/dev/null"
   fi
 }
 
@@ -111,6 +108,7 @@ stop_main_head() {
 
 stop_main_worker() {
   local project="$1"
+  local failed=0
   ssh "$WORKER_HOST" "
     cd '$WORKER_DIR' || exit 1
     if {
@@ -129,6 +127,17 @@ stop_main_worker() {
       echo 'No DSpark 0731 worker resources for project $project on $WORKER_HOST; skipping.'
     fi
   " || failed=1
+  return "$failed"
+}
+
+stop_project() {
+  local project="$1" failed=0
+  stop_vl_sidecar_worker "$project" || failed=1
+  stop_vl_sidecar_head "$project" || failed=1
+  stop_main_worker "$project" || failed=1
+  stop_main_head "$project" || failed=1
+  force_rm_project_containers "$project" worker || failed=1
+  force_rm_project_containers "$project" local || failed=1
   return "$failed"
 }
 

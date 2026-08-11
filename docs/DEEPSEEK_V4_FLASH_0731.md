@@ -20,7 +20,7 @@ The default two-Spark profile uses MTP-5 probabilistic speculation, NVFP4 MLA KV
 
 The model card does not ship a Jinja chat template. It includes an `encoding` package that defines message encoding and output parsing, including `low`, `high`, and `max` reasoning effort. Validate multi-turn role boundaries, reasoning separation, and tool calls after runtime upgrades because successful weight loading alone does not prove encoding compatibility.
 
-Set `DSPARK_ENCODING_FILE` to the checkpoint's `encoding/encoding_dsv4.py` path inside the container when the runtime image predates the checkpoint. The launcher installs that encoder into vLLM before import, on both ranks. It also corrects pre-0731 tokenizer wrappers that mapped `low` reasoning effort to `high`, and applies the Issue #21 hotfix so `encode_arguments_to_dsml` accepts dict tool `arguments` (not only JSON strings) — otherwise multi-turn tool history can be poisoned. These changes are required for the 0731 `reasoning_content`, reasoning-effort, and tool-argument semantics.
+The launcher installs `encoding/encoding_dsv4.py` from the exact pinned `DSPARK_MODEL_REVISION` into vLLM before import, on both ranks. It also corrects pre-0731 tokenizer wrappers that mapped `low` reasoning effort to `high`, and applies the Issue #21 hotfix so `encode_arguments_to_dsml` accepts dict tool `arguments` (not only JSON strings) — otherwise multi-turn tool history can be poisoned. These changes are required for the 0731 `reasoning_content`, reasoning-effort, and tool-argument semantics.
 
 The equivalent Unsloth GGUF Jinja template implements the same central DS4
 behavior—DSML tools, `<think>` boundaries, `high`/`max` instruction prefixes,

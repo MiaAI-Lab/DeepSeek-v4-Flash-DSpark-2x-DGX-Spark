@@ -128,6 +128,12 @@ class ArtifactContractTest(unittest.TestCase):
         self.assertIn("PREPARE_DOWNLOAD=0", script)
         self.assertIn('${HF_DOWNLOAD_WORKERS:=4}', script)
         self.assertNotIn("rsync -a --delete", script)
+        for obsolete in (
+            "DSPARK_MODEL_OFFICIAL", "DSPARK_MODEL_ABLITERATED",
+            "DEFAULT_OFFICIAL_REVISION", "resolve_checkpoint", "resolve_revision",
+        ):
+            self.assertNotIn(obsolete, script)
+        self.assertIn("os.environ['DSPARK_MODEL_REVISION']", script)
 
     def test_manifest_is_deterministic_full_snapshot_and_detects_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:

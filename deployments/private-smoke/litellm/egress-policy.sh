@@ -3,19 +3,12 @@ set -euo pipefail
 
 MODE="${1:---check}"
 COMMENT="dspark-smoke-litellm-egress"
-IPTABLES_HELPER_IMAGE="ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
 
 iptables_cmd() {
-  if sudo -n true 2>/dev/null; then
-    sudo iptables "$@"
-    return
-  fi
-  command -v docker >/dev/null || {
-    echo "iptables requires passwordless sudo or the local Docker daemon" >&2
+  sudo -n iptables "$@" || {
+    echo "iptables requires narrowly scoped passwordless sudo on this host" >&2
     return 1
   }
-  docker run --rm --network none --privileged --pid host --entrypoint nsenter \
-    "$IPTABLES_HELPER_IMAGE" -t 1 -m -n -- /usr/sbin/iptables "$@"
 }
 
 rule() {

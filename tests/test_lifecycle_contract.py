@@ -392,10 +392,40 @@ class LifecycleContractTest(unittest.TestCase):
         stop = (ROOT / "stop-deepseek-v4-flash-dspark.sh").read_text()
         status = (ROOT / "status-deepseek-v4-flash-dspark.sh").read_text()
         self.assertIn("verify_stopped", stop)
+        self.assertIn("stop_project()", stop)
+        self.assertNotIn('ssh "$WORKER_HOST" "$cmd"', stop)
         self.assertIn("exit 1", stop)
         self.assertIn("--expect", status)
         self.assertIn("VLLM_ORIGIN_KEY_FILE", status)
         self.assertIn("SERVED_MODEL_NAME", status)
+        self.assertIn("Issue #21 runtime marker is missing", status)
+        self.assertIn("Issue #22 runtime marker is missing", status)
+
+    def test_runtime_startup_aborts_and_uses_only_pinned_encoder(self):
+        compose = (ROOT / "docker-compose.dspark.yml").read_text()
+        command = compose.split("    command:", 1)[1].split("  origin-auth-proxy:", 1)[0]
+        self.assertIn("set -euo pipefail;", command)
+        self.assertIn("snapshots/$${DSPARK_MODEL_REVISION}/encoding/encoding_dsv4.py", command)
+        self.assertNotIn("snapshots/*/encoding/encoding_dsv4.py", command)
+        self.assertNotIn("DSPARK_ENCODING_FILE", command)
+        self.assertLess(command.index("set -euo pipefail;"), command.index("hotfix-encoding"))
+
+    def test_proxy_normalizes_reasoning_content_and_closes_failed_streams(self):
+        proxy = load_script("origin-auth-proxy.py")
+        payload = {
+            "model": "synthetic",
+            "messages": [
+                {"role": "assistant", "content": None, "reasoning_content": "kept"}
+            ],
+        }
+        normalized = json.loads(proxy.ProxyHandler._normalize_chat_body(json.dumps(payload).encode()))
+        assistant = normalized["messages"][0]
+        self.assertEqual(assistant["reasoning"], "kept")
+        self.assertNotIn("reasoning_content", assistant)
+        source = (SCRIPTS / "origin-auth-proxy.py").read_text()
+        self.assertIn("response_started = False", source)
+        self.assertIn("if response_started:", source)
+        self.assertIn("self.close_connection = True", source)
 
     def test_semantic_smoke_covers_stream_reasoning_and_tools(self):
         text = (SCRIPTS / "smoke-openai-compat.py").read_text()
@@ -687,11 +717,15 @@ class LifecycleContractTest(unittest.TestCase):
             baseline_tps=1.0,
         )
         self.assertFalse(slow["passed"])
+        for invalid in (0, -1, float("nan"), float("inf")):
+            with self.subTest(invalid_baseline=invalid), self.assertRaises(ValueError):
+                probe.evaluate_decode_gate(healthy, baseline_tps=invalid)
         source = (SCRIPTS / "probe-long-context-decode.py").read_text()
         self.assertIn('"stream": True', source)
         self.assertIn('"temperature": 0', source)
         self.assertIn('"reasoning_effort": "none"', source)
         self.assertIn("identical_prompt_sha256", source)
+        self.assertIn("evidence_identity", source)
 
     def test_u3_remote_observation_preserves_shell_command_boundaries(self):
         for name in ("probe-full-context.py", "benchmark-scheduler.py"):

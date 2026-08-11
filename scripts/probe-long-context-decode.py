@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -134,6 +135,8 @@ def stream_trial(base_url: str, key: str, model: str, prompt: str, timeout: floa
 
 
 def evaluate_decode_gate(trials: list[dict], baseline_tps: float | None = None) -> dict:
+    if baseline_tps is not None and (not math.isfinite(baseline_tps) or baseline_tps <= 0):
+        raise ValueError("baseline_tps must be finite and greater than zero")
     valid = [trial for trial in trials if trial.get("post_first_tokens", 0) >= MIN_POST_FIRST_TOKENS]
     minimum_tps = min((trial.get("decode_tps", 0.0) for trial in valid), default=0.0)
     checks = {
@@ -156,12 +159,17 @@ def main() -> int:
     parser.add_argument("--trials", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument("--baseline-tps", type=float)
+    parser.add_argument("--evidence-identity")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.target_prompt_tokens < 600_000:
         parser.error("--target-prompt-tokens must be at least 600000")
     if args.trials < 2:
         parser.error("--trials must be at least 2")
+    if args.baseline_tps is not None and (
+        not math.isfinite(args.baseline_tps) or args.baseline_tps <= 0
+    ):
+        parser.error("--baseline-tps must be finite and greater than zero")
     values = parse_env(args.env_file)
     key = read_key_file(args.key_file or Path(values.get("VLLM_ORIGIN_KEY_FILE", "")))
     base_url = args.base_url or f"http://{values.get('VLLM_PROXY_HOST', '172.30.0.1')}:{values.get('VLLM_PROXY_PORT', '8888')}/v1"
@@ -177,6 +185,7 @@ def main() -> int:
         "target_prompt_tokens": args.target_prompt_tokens,
         "observed_prompt_tokens": observed,
         "baseline_tps": args.baseline_tps,
+        "evidence_identity": args.evidence_identity,
         "identical_prompt_sha256": __import__("hashlib").sha256(prompt.encode()).hexdigest(),
         "trials": trials,
         "gate": gate,

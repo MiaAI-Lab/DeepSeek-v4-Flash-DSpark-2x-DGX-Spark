@@ -108,6 +108,36 @@ source "$ENV_FILE"
 source "$LITELLM_ENV_FILE"
 set +a
 
+CAPACITY_EVIDENCE_IDENTITY="$(python3 - "$ROOT_DIR" "$FIXTURE" <<'PY'
+import hashlib, json, os, subprocess, sys
+from pathlib import Path
+root, fixture = Path(sys.argv[1]), Path(sys.argv[2])
+hermes = [
+    root / "deployments/private-smoke/hermes/config.yaml",
+    root / "deployments/private-smoke/hermes/fixtures/transform-input.json",
+    root / "deployments/private-smoke/hermes/fixtures/tool-contract.json",
+]
+inputs = [
+    root / "docker-compose.dspark.yml",
+    root / "recipe/runtime-hotfixes.manifest.json",
+    root / "patches/hotfix-encoding-dsv4-issue21.py",
+    root / "patches/hotfix-nvfp4-ds-mla-issue22.py",
+    root / "deployments/private-smoke/litellm/config.yaml",
+    *hermes,
+    fixture,
+]
+runtime = os.environ["DSPARK_VLLM_IMAGE"]
+runtime_digest = runtime if runtime.startswith("sha256:") else "sha256:" + runtime.rsplit("@sha256:", 1)[1]
+pins = {
+    "model_revision": os.environ["DSPARK_MODEL_REVISION"],
+    "runtime_image_digest": runtime_digest,
+    "repo_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+    "config_sha256": hashlib.sha256(b"".join(path.read_bytes() for path in inputs)).hexdigest(),
+}
+print(hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+PY
+)"
+
 if [ -z "$RUN_DIR" ]; then
   RUN_DIR="$(find "$ROOT_DIR/artifacts/acceptance" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort | tail -n 1)"
 fi
@@ -659,12 +689,13 @@ fi
 FAILURE_STAGE="full-context"
 reuse_full_context=0
 if [ "$MODE" = "resume-capacity" ] && [ -e "$FULL_CONTEXT_EVIDENCE" ]; then
-  if python3 - "$FULL_CONTEXT_EVIDENCE" <<'PY'
+  if python3 - "$FULL_CONTEXT_EVIDENCE" "$CAPACITY_EVIDENCE_IDENTITY" <<'PY'
 import json, os, sys, time
-path = sys.argv[1]
+path, expected_identity = sys.argv[1:]
 report = json.load(open(path))
 age = time.time() - os.stat(path).st_mtime
-if age < 0 or age > 24 * 3600 or report.get("gate", {}).get("passed") is not True:
+if (age < 0 or age > 24 * 3600 or report.get("gate", {}).get("passed") is not True
+        or report.get("evidence_identity") != expected_identity):
     raise SystemExit(1)
 PY
   then
@@ -682,6 +713,7 @@ fi
 if [ "$reuse_full_context" -eq 0 ]; then
   python3 "$ROOT_DIR/scripts/probe-full-context.py" \
     --env-file "$ENV_FILE" --key-file "$VLLM_ORIGIN_KEY_FILE" \
+    --evidence-identity "$CAPACITY_EVIDENCE_IDENTITY" \
     --output "$FULL_CONTEXT_EVIDENCE"
 fi
 "$SANITIZER" --scan-only <"$FULL_CONTEXT_EVIDENCE" >/dev/null
@@ -690,13 +722,14 @@ FAILURE_STAGE="long-context-decode"
 : "${LONG_CONTEXT_DECODE_BASELINE_TPS:?LONG_CONTEXT_DECODE_BASELINE_TPS is required for the 5x regression gate}"
 reuse_long_context_decode=0
 if [ "$MODE" = "resume-capacity" ] && [ -e "$LONG_CONTEXT_DECODE_EVIDENCE" ]; then
-  if python3 - "$LONG_CONTEXT_DECODE_EVIDENCE" "$LONG_CONTEXT_DECODE_BASELINE_TPS" <<'PY'
+  if python3 - "$LONG_CONTEXT_DECODE_EVIDENCE" "$LONG_CONTEXT_DECODE_BASELINE_TPS" "$CAPACITY_EVIDENCE_IDENTITY" <<'PY'
 import json, math, os, sys, time
-path, baseline = sys.argv[1], float(sys.argv[2])
+path, baseline, expected_identity = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 report = json.load(open(path))
 age = time.time() - os.stat(path).st_mtime
 if (age < 0 or age > 24 * 3600 or report.get("gate", {}).get("passed") is not True
-        or not math.isclose(report.get("baseline_tps", -1), baseline)):
+        or not math.isclose(report.get("baseline_tps", -1), baseline)
+        or report.get("evidence_identity") != expected_identity):
     raise SystemExit(1)
 PY
   then
@@ -715,6 +748,7 @@ if [ "$reuse_long_context_decode" -eq 0 ]; then
   python3 "$ROOT_DIR/scripts/probe-long-context-decode.py" \
     --env-file "$ENV_FILE" --key-file "$VLLM_ORIGIN_KEY_FILE" \
     --baseline-tps "$LONG_CONTEXT_DECODE_BASELINE_TPS" \
+    --evidence-identity "$CAPACITY_EVIDENCE_IDENTITY" \
     --output "$LONG_CONTEXT_DECODE_EVIDENCE"
 fi
 "$SANITIZER" --scan-only <"$LONG_CONTEXT_DECODE_EVIDENCE" >/dev/null

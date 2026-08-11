@@ -77,6 +77,27 @@ worker_image="$(ssh "$WORKER_HOST" "docker inspect -f '{{.Config.Image}}' '${PRO
 [ "$head_image" = "$DSPARK_VLLM_IMAGE" ] || { echo "Head image mismatch." >&2; failed=1; }
 [ "$worker_image" = "$DSPARK_VLLM_IMAGE" ] || { echo "Worker image mismatch." >&2; failed=1; }
 
+runtime_marker='if isinstance(raw, dict):'
+runtime_encoder='/usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py'
+kernel_marker='self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")'
+kernel_backend='/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/flashmla_sparse.py'
+if ! docker exec "${PROJECT_NAME}-vllm-dspark-1" grep -Fq "$runtime_marker" "$runtime_encoder"; then
+  echo "Head Issue #21 runtime marker is missing." >&2
+  failed=1
+fi
+if ! docker exec "${PROJECT_NAME}-vllm-dspark-1" grep -Fq "$kernel_marker" "$kernel_backend"; then
+  echo "Head Issue #22 runtime marker is missing." >&2
+  failed=1
+fi
+if ! ssh "$WORKER_HOST" "docker exec '${PROJECT_NAME}-vllm-dspark-1' grep -Fq '$kernel_marker' '$kernel_backend'"; then
+  echo "Worker Issue #22 runtime marker is missing." >&2
+  failed=1
+fi
+if ! ssh "$WORKER_HOST" "docker exec '${PROJECT_NAME}-vllm-dspark-1' grep -Fq '$runtime_marker' '$runtime_encoder'"; then
+  echo "Worker Issue #21 runtime marker is missing." >&2
+  failed=1
+fi
+
 api_ready=0
 if python3 "$SCRIPT_DIR/scripts/smoke-openai-compat.py" \
     --api-liveness \

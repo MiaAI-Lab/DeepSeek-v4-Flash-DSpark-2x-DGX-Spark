@@ -200,6 +200,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    @staticmethod
+    def _normalize_chat_body(body: bytes) -> bytes:
+        payload = json.loads(body)
+        changed = False
+        for message in payload.get("messages", []):
+            if (
+                message.get("role") == "assistant"
+                and "reasoning" not in message
+                and isinstance(message.get("reasoning_content"), str)
+            ):
+                message["reasoning"] = message.pop("reasoning_content")
+                changed = True
+        return json.dumps(payload, separators=(",", ":")).encode() if changed else body
+
     def _proxy(self) -> None:
         client_ip = ipaddress.ip_address(self.client_address[0])
         if client_ip not in self.server.allow_network:  # type: ignore[attr-defined]
@@ -229,6 +243,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else None
         if is_chat_target and not self._validate_chat_body(body):
             return
+        if is_chat_target and body is not None:
+            body = self._normalize_chat_body(body)
         headers = {
             key: value
             for key, value in self.headers.items()
@@ -242,6 +258,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.server.upstream_port,  # type: ignore[attr-defined]
             timeout=self.server.upstream_timeout,  # type: ignore[attr-defined]
         )
+        response_started = False
         try:
             upstream.request(self.command, self.path, body=body, headers=headers)
             response = upstream.getresponse()
@@ -251,6 +268,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     self.send_header(key, value)
             self.send_header("Connection", "close")
             self.end_headers()
+            response_started = True
             # ``HTTPResponse.read(n)`` blocks until n bytes or EOF.  A normal
             # 512-token SSE completion is smaller than 64 KiB, so using read()
             # here silently buffered the entire stream and turned TTFT into
@@ -262,7 +280,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             self.close_connection = True
         except (OSError, http.client.HTTPException) as exc:
-            if not self.wfile.closed:
+            if response_started:
+                self.close_connection = True
+            elif not self.wfile.closed:
                 self._json_error(502, f"upstream unavailable: {type(exc).__name__}")
         finally:
             upstream.close()

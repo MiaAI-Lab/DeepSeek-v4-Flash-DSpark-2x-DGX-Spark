@@ -152,7 +152,7 @@ Runtime:
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0`
 - compose installs checkpoint `encoding/encoding_dsv4.py` into vLLM on both ranks
   and applies the Issue #21 `encode_arguments_to_dsml` dict-args hotfix
-  (override with `DSPARK_ENCODING_FILE` when needed)
+  from the exact pinned `DSPARK_MODEL_REVISION`
 - `--moe-backend flashinfer_b12x`
 - `VLLM_USE_FLASHINFER_SAMPLER=1`
 - `HF_HUB_OFFLINE=1` recommended after both nodes have a complete hub cache
@@ -1137,9 +1137,9 @@ blaming the DSpark weights.
   memory pressure (e.g., during concurrent deep-context workloads), even when the
   system has available swap or the OOM is transient. Disabling it avoids spurious
   process termination and service disruption.
-- The example template binds to `0.0.0.0:8888` for multi-host agents; set
-  `VLLM_HOST=127.0.0.1` for head-only testing and control exposure at the
-  firewall.
+- vLLM binds only to `127.0.0.1:8889`. Multi-host clients use the authenticated
+  bridge at `VLLM_PROXY_HOST:VLLM_PROXY_PORT`; `VLLM_HOST` is not an exposure
+  control. See the private-origin request examples above.
 - The next max-sequence ladder to try is approximately 1.25M, 1.5M, then
   1.75M, with the same boot/log/speed gates. Raw KV math alone is not enough
   because DeepSeek V4 sparse MLA also allocates max-length-dependent workspaces.
