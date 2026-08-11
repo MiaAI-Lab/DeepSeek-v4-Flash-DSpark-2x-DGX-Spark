@@ -1,10 +1,10 @@
 ---
-name: dspark-vision
+name: ds4f-vision
 description: >-
   Local vision for DeepSeek-V4-Flash-0731 via the on-prem Qwen3-VL sidecar.
   Use when the user attaches or mentions an image path/URL and needs visual
   facts, OCR, or image comparison — stay on 0731; do not switch to a VL model.
-  Call from IPython: await dspark_vision.describe_image(...), ocr_image(...),
+  Call from IPython: await ds4f_vision.describe_image(...), ocr_image(...),
   compare_images(...).
 ---
 
@@ -21,11 +21,11 @@ to the Qwen3-VL sidecar (`http://127.0.0.1:8889`) directly from the kernel.
 ## IPython usage
 
 ```python
-import dspark_vision
+import ds4f_vision
 
-print(await dspark_vision.describe_image("/abs/path.jpg", question="What color is the sweater?"))
-print(await dspark_vision.ocr_image("/abs/path.jpg"))
-print(await dspark_vision.compare_images(["/a.jpg", "/b.jpg"], question="What changed?"))
+print(await ds4f_vision.describe_image("/abs/path.jpg", question="What color is the sweater?"))
+print(await ds4f_vision.ocr_image("/abs/path.jpg"))
+print(await ds4f_vision.compare_images(["/a.jpg", "/b.jpg"], question="What changed?"))
 ```
 
 ## Notes

@@ -36,4 +36,4 @@ TP=2 across both Sparks).
 
 - Sidecar must be running (`./start-deepseek-v4-flash-dspark.sh`, `ENABLE_VL_SIDECAR=1`).
 - Max 4 images per compare call. Huge images are auto-downscaled.
-- Native MoonViT on 0731 is retired — do not try to send `image_url` to `:8888`.
+- Do not send `image_url` to `:8888` — 0731 is text-only.

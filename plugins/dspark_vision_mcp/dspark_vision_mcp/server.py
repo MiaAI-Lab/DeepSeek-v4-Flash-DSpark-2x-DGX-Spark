@@ -34,7 +34,7 @@ COMPARE_PROMPT = (
 )
 
 mcp = FastMCP(
-    "dspark-vision",
+    "ds4f-vision",
     instructions=(
         "Local vision tools for DeepSeek-V4-Flash-0731. Call describe_image "
         "(or ocr_image / compare_images) with a filesystem path or URL; the "

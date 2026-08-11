@@ -107,7 +107,7 @@ def load_image_as_data_uri(path_or_url: str) -> str:
         try:
             req = urllib.request.Request(
                 raw,
-                headers={"User-Agent": "dspark-vision-mcp/0.1"},
+                headers={"User-Agent": "ds4f-vision-mcp/0.1"},
             )
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = resp.read()

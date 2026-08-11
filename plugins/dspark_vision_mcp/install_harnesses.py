@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Idempotent vision-MCP registration for pi / OMP / Hermes / opencode / goose /
-grok / openclaw / zcode / prime-agent.
+grok / openclaw / zcode / prime-agent / Factory (Droid) / Command Code.
 
-Used by scripts/install-dspark-vision-mcp.sh. Does not wipe existing MCP
-entries — only upserts the ``dspark-vision`` server key (and copies the skill).
+Used by scripts/install-ds4f-vision-mcp.sh. Does not wipe existing MCP
+entries — only upserts the ``ds4f-vision`` server key (and copies the skill).
 """
 
 from __future__ import annotations
@@ -28,8 +28,12 @@ SUPPORTED = (
     "openclaw",
     "zcode",
     "prime",
+    "factory",
+    "commandcode",
 )
-SERVER_KEY = "dspark-vision"
+SERVER_KEY = "ds4f-vision"
+# Previous MCP / skill id — removed on install so harnesses don't keep a stale entry.
+LEGACY_SERVER_KEY = "dspark-vision"
 
 
 def _log(msg: str) -> None:
@@ -49,6 +53,13 @@ def which(name: str) -> Path | None:
         cand = Path.home() / ".grok" / "bin" / "grok"
         if cand.is_file() and os.access(cand, os.X_OK):
             return cand.resolve()
+    if name == "droid":
+        for cand in (
+            Path.home() / ".factory" / "bin" / "droid",
+            Path.home() / ".local" / "bin" / "droid",
+        ):
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return cand.resolve()
     return None
 
 
@@ -85,6 +96,10 @@ def copy_skill(src: Path, dest_dir: Path) -> None:
             else:
                 child.unlink()
     shutil.copy2(skill_src, dest_dir / "SKILL.md")
+    # Drop legacy skill dir next to the new one when renaming.
+    legacy = dest_dir.parent / LEGACY_SERVER_KEY
+    if legacy.is_dir() and legacy.resolve() != dest_dir.resolve():
+        shutil.rmtree(legacy)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -120,7 +135,7 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 def stdio_entry(uvx: Path, plugin: Path, base_url: str, *, style: str) -> dict[str, Any]:
     """Build a harness-specific stdio MCP server entry."""
-    args = ["--from", str(plugin), "dspark-vision-mcp"]
+    args = ["--from", str(plugin), "ds4f-vision-mcp"]
     env = {"DSPARK_VL_BASE_URL": base_url}
     if style == "pi":
         return {
@@ -157,7 +172,7 @@ def stdio_entry(uvx: Path, plugin: Path, base_url: str, *, style: str) -> dict[s
         return {
             "type": "stdio",
             "name": SERVER_KEY,
-            "display_name": "DSpark Vision",
+            "display_name": "ds4f-vision",
             "description": (
                 "Local Qwen3-VL sidecar tools (describe_image / ocr_image / "
                 "compare_images) for DeepSeek-V4-Flash-0731"
@@ -184,6 +199,24 @@ def stdio_entry(uvx: Path, plugin: Path, base_url: str, *, style: str) -> dict[s
             "args": args,
             "env": env,
         }
+    if style == "factory":
+        # https://docs.factory.ai/cli/configuration/mcp — ~/.factory/mcp.json
+        return {
+            "type": "stdio",
+            "command": str(uvx),
+            "args": args,
+            "env": env,
+            "disabled": False,
+        }
+    if style == "commandcode":
+        # https://commandcode.ai/docs/mcp — ~/.commandcode/mcp.json (user scope)
+        return {
+            "type": "stdio",
+            "command": str(uvx),
+            "args": args,
+            "env": env,
+            "enabled": True,
+        }
     raise ValueError(f"unknown style: {style}")
 
 
@@ -204,6 +237,7 @@ def upsert_mcp_servers_json(
     servers = data.get(servers_key)
     if not isinstance(servers, dict):
         servers = {}
+    servers.pop(LEGACY_SERVER_KEY, None)
     servers[SERVER_KEY] = entry
     data[servers_key] = servers
     write_json(path, data)
@@ -246,7 +280,7 @@ def install_pi(ctx: dict[str, Any]) -> str:
     settings_extra = {"toolPrefix": "none"}
     for path in (Path.home() / ".config" / "mcp" / "mcp.json", agent / "mcp.json"):
         upsert_mcp_servers_json(path, entry, settings=settings_extra)
-    copy_skill(ctx["skill"], agent / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], agent / "skills" / "ds4f-vision")
     return "installed (mcp.json + skill + pi-mcp-adapter)"
 
 
@@ -260,7 +294,7 @@ def install_omp(ctx: dict[str, Any]) -> str:
     entry = stdio_entry(ctx["uvx"], ctx["plugin"], ctx["base_url"], style="omp")
     upsert_mcp_servers_json(agent / "mcp.json", entry)
     # OMP discovers user skills under ~/.omp/agent/skills (and project .omp/skills).
-    copy_skill(ctx["skill"], agent / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], agent / "skills" / "ds4f-vision")
     return "installed (~/.omp/agent/mcp.json + skill)"
 
 
@@ -295,7 +329,7 @@ def _upsert_yaml_mapping_entry(
     entry: dict[str, Any],
     header_comment: str,
 ) -> None:
-    """Insert/replace ``parent_key.dspark-vision`` without rewriting the whole file."""
+    """Insert/replace ``parent_key.ds4f-vision`` without rewriting the whole file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
     block = _yaml_keyed_block(entry, indent=2)
@@ -303,9 +337,17 @@ def _upsert_yaml_mapping_entry(
     marker_end = f"  # END {SERVER_KEY}"
 
     if path.is_file():
-        bak = path.with_suffix(path.suffix + ".bak-dspark-vision")
+        bak = path.with_suffix(path.suffix + ".bak-ds4f-vision")
         if not bak.is_file():
             shutil.copy2(path, bak)
+
+    # Drop legacy marker block (old server key) if present.
+    legacy_begin = f"  # BEGIN {LEGACY_SERVER_KEY}"
+    legacy_end = f"  # END {LEGACY_SERVER_KEY}"
+    if legacy_begin in text and legacy_end in text:
+        pre, rest = text.split(legacy_begin, 1)
+        _, post = rest.split(legacy_end, 1)
+        text = pre.rstrip("\n") + "\n" + post.lstrip("\n")
 
     if marker_begin in text and marker_end in text:
         pre, rest = text.split(marker_begin, 1)
@@ -347,7 +389,7 @@ def _upsert_hermes_mcp_servers(path: Path, entry: dict[str, Any]) -> None:
         entry=entry,
         header_comment=(
             "# ── DSpark local vision MCP (auto-installed by "
-            "install-dspark-vision-mcp.sh) ──"
+            "install-ds4f-vision-mcp.sh) ──"
         ),
     )
 
@@ -356,7 +398,7 @@ def install_hermes(ctx: dict[str, Any]) -> str:
     path = Path.home() / ".hermes" / "config.yaml"
     entry = stdio_entry(ctx["uvx"], ctx["plugin"], ctx["base_url"], style="hermes")
     _upsert_hermes_mcp_servers(path, entry)
-    copy_skill(ctx["skill"], Path.home() / ".hermes" / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], Path.home() / ".hermes" / "skills" / "ds4f-vision")
     return "installed (mcp_servers in config.yaml + skill)"
 
 
@@ -379,12 +421,13 @@ def install_opencode(ctx: dict[str, Any]) -> str:
     mcp = data.get("mcp")
     if not isinstance(mcp, dict):
         mcp = {}
+    mcp.pop(LEGACY_SERVER_KEY, None)
     mcp[SERVER_KEY] = stdio_entry(
         ctx["uvx"], ctx["plugin"], ctx["base_url"], style="opencode"
     )
     data["mcp"] = mcp
     write_json(path, data)
-    copy_skill(ctx["skill"], cfg_dir / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], cfg_dir / "skills" / "ds4f-vision")
     return f"installed ({path} + skill)"
 
 
@@ -405,10 +448,10 @@ def install_goose(ctx: dict[str, Any]) -> str:
         entry=entry,
         header_comment=(
             "# ── DSpark local vision MCP extension (auto-installed by "
-            "install-dspark-vision-mcp.sh) ──"
+            "install-ds4f-vision-mcp.sh) ──"
         ),
     )
-    copy_skill(ctx["skill"], Path.home() / ".config" / "goose" / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], Path.home() / ".config" / "goose" / "skills" / "ds4f-vision")
     return "installed (~/.config/goose/config.yaml extensions + skill)"
 
 
@@ -427,7 +470,7 @@ def _grok_mcp_toml_block(uvx: Path, plugin: Path, base_url: str) -> str:
     return (
         f"[mcp_servers.{SERVER_KEY}]\n"
         f"command = {q(str(uvx))}\n"
-        f"args = [{q('--from')}, {q(str(plugin))}, {q('dspark-vision-mcp')}]\n"
+        f"args = [{q('--from')}, {q(str(plugin))}, {q('ds4f-vision-mcp')}]\n"
         f"env = {{ DSPARK_VL_BASE_URL = {q(base_url)} }}\n"
         "enabled = true\n"
         "startup_timeout_sec = 120\n"
@@ -436,7 +479,7 @@ def _grok_mcp_toml_block(uvx: Path, plugin: Path, base_url: str) -> str:
 
 
 def _upsert_grok_mcp_servers(path: Path, uvx: Path, plugin: Path, base_url: str) -> None:
-    """Insert/replace [mcp_servers.dspark-vision] without rewriting the whole file."""
+    """Insert/replace [mcp_servers.ds4f-vision] without rewriting the whole file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
     block = _grok_mcp_toml_block(uvx, plugin, base_url)
@@ -444,9 +487,22 @@ def _upsert_grok_mcp_servers(path: Path, uvx: Path, plugin: Path, base_url: str)
     marker_end = f"# END {SERVER_KEY}"
 
     if path.is_file():
-        bak = path.with_suffix(".toml.bak-dspark-vision")
+        bak = path.with_suffix(".toml.bak-ds4f-vision")
         if not bak.is_file():
             shutil.copy2(path, bak)
+
+    # Drop legacy marker / section from the previous plugin id.
+    legacy_begin = f"# BEGIN {LEGACY_SERVER_KEY}"
+    legacy_end = f"# END {LEGACY_SERVER_KEY}"
+    if legacy_begin in text and legacy_end in text:
+        pre, rest = text.split(legacy_begin, 1)
+        _, post = rest.split(legacy_end, 1)
+        text = pre.rstrip("\n") + "\n" + post.lstrip("\n")
+    text = re.sub(
+        rf"(?ms)^\[mcp_servers\.{re.escape(LEGACY_SERVER_KEY)}\][^\[]*",
+        "",
+        text,
+    )
 
     if marker_begin in text and marker_end in text:
         pre, rest = text.split(marker_begin, 1)
@@ -464,7 +520,7 @@ def _upsert_grok_mcp_servers(path: Path, uvx: Path, plugin: Path, base_url: str)
 
     appendix = (
         "\n# ── DSpark local vision MCP (auto-installed by "
-        "install-dspark-vision-mcp.sh) ──\n"
+        "install-ds4f-vision-mcp.sh) ──\n"
         f"{marker_begin}\n"
         f"{block}"
         f"{marker_end}\n"
@@ -477,7 +533,7 @@ def _upsert_grok_mcp_servers(path: Path, uvx: Path, plugin: Path, base_url: str)
 def install_grok(ctx: dict[str, Any]) -> str:
     path = Path.home() / ".grok" / "config.toml"
     _upsert_grok_mcp_servers(path, ctx["uvx"], ctx["plugin"], ctx["base_url"])
-    copy_skill(ctx["skill"], Path.home() / ".grok" / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], Path.home() / ".grok" / "skills" / "ds4f-vision")
     return "installed (~/.grok/config.toml mcp_servers + skill)"
 
 
@@ -496,6 +552,13 @@ def install_openclaw(ctx: dict[str, Any]) -> str:
     if cli is not None:
         try:
             subprocess.run(
+                [str(cli), "mcp", "unset", LEGACY_SERVER_KEY],
+                check=False,
+                timeout=30,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
                 [
                     str(cli),
                     "mcp",
@@ -508,7 +571,7 @@ def install_openclaw(ctx: dict[str, Any]) -> str:
                 capture_output=True,
                 text=True,
             )
-            copy_skill(ctx["skill"], Path.home() / ".openclaw" / "skills" / "dspark-vision")
+            copy_skill(ctx["skill"], Path.home() / ".openclaw" / "skills" / "ds4f-vision")
             return f"installed (via {cli.name} mcp set + skill)"
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
             _warn(f"openclaw mcp set failed ({exc}); falling back to openclaw.json upsert")
@@ -521,15 +584,16 @@ def install_openclaw(ctx: dict[str, Any]) -> str:
     servers = mcp.get("servers")
     if not isinstance(servers, dict):
         servers = {}
+    servers.pop(LEGACY_SERVER_KEY, None)
     servers[SERVER_KEY] = entry
     mcp["servers"] = servers
     data["mcp"] = mcp
     if path.is_file():
-        bak = path.with_suffix(".json.bak-dspark-vision")
+        bak = path.with_suffix(".json.bak-ds4f-vision")
         if not bak.is_file():
             shutil.copy2(path, bak)
     write_json(path, data)
-    copy_skill(ctx["skill"], Path.home() / ".openclaw" / "skills" / "dspark-vision")
+    copy_skill(ctx["skill"], Path.home() / ".openclaw" / "skills" / "ds4f-vision")
     return "installed (~/.openclaw/openclaw.json mcp.servers + skill)"
 
 
@@ -553,18 +617,19 @@ def install_zcode(ctx: dict[str, Any]) -> str:
     servers = mcp.get("servers")
     if not isinstance(servers, dict):
         servers = {}
+    servers.pop(LEGACY_SERVER_KEY, None)
     servers[SERVER_KEY] = entry
     mcp["servers"] = servers
     data["mcp"] = mcp
     if path.is_file():
-        bak = path.with_suffix(".json.bak-dspark-vision")
+        bak = path.with_suffix(".json.bak-ds4f-vision")
         if not bak.is_file():
             shutil.copy2(path, bak)
     write_json(path, data)
-    # ZCode-only skill path. Do NOT also write ~/.agents/skills/dspark-vision:
+    # ZCode-only skill path. Do NOT also write ~/.agents/skills/ds4f-vision:
     # pi (and other agents) scan that tree and report a name collision with
-    # ~/.pi/agent/skills/dspark-vision from install_pi().
-    copy_skill(ctx["skill"], Path.home() / ".zcode" / "cli" / "skills" / "dspark-vision")
+    # ~/.pi/agent/skills/ds4f-vision from install_pi().
+    copy_skill(ctx["skill"], Path.home() / ".zcode" / "cli" / "skills" / "ds4f-vision")
     return "installed (~/.zcode/cli/config.json mcp.servers + skill)"
 
 
@@ -585,8 +650,11 @@ def install_prime(ctx: dict[str, Any]) -> str:
     if not (src / "SKILL.md").is_file() or not (src / "pyproject.toml").is_file():
         raise FileNotFoundError(f"missing prime skill template under {src}")
 
-    dest = Path.home() / ".prime" / "agent" / "skills" / "dspark-vision"
+    dest = Path.home() / ".prime" / "agent" / "skills" / "ds4f-vision"
     dest.parent.mkdir(parents=True, exist_ok=True)
+    legacy_dest = dest.parent / LEGACY_SERVER_KEY
+    if legacy_dest.is_dir():
+        shutil.rmtree(legacy_dest)
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
@@ -609,15 +677,85 @@ def install_prime(ctx: dict[str, Any]) -> str:
     if not isinstance(skills, list):
         skills = []
     skill_ref = str(dest)
-    if skill_ref not in skills and "dspark-vision" not in skills:
+    legacy_ref = str(legacy_dest)
+    skills = [
+        s
+        for s in skills
+        if s not in (LEGACY_SERVER_KEY, legacy_ref) and not str(s).endswith(
+            f"/{LEGACY_SERVER_KEY}"
+        )
+    ]
+    if skill_ref not in skills and "ds4f-vision" not in skills:
         skills.append(skill_ref)
-        settings["skills"] = skills
-        write_json(settings_path, settings)
+    settings["skills"] = skills
+    write_json(settings_path, settings)
 
     return (
-        "installed (~/.prime/agent/skills/dspark-vision Python skill; "
+        "installed (~/.prime/agent/skills/ds4f-vision Python skill; "
         "Prime MCP is HTTP-only so this calls :8889 directly)"
     )
+
+
+def detect_factory() -> bool:
+    """Factory Droid (https://factory.ai / https://docs.factory.ai/cli/configuration/mcp)."""
+    if which("droid") is not None:
+        return True
+    home = Path.home() / ".factory"
+    return home.is_dir() or (home / "mcp.json").is_file()
+
+
+def install_factory(ctx: dict[str, Any]) -> str:
+    # User-scope MCP: ~/.factory/mcp.json → mcpServers
+    path = Path.home() / ".factory" / "mcp.json"
+    entry = stdio_entry(ctx["uvx"], ctx["plugin"], ctx["base_url"], style="factory")
+    if path.is_file():
+        bak = path.with_suffix(".json.bak-ds4f-vision")
+        if not bak.is_file():
+            shutil.copy2(path, bak)
+    upsert_mcp_servers_json(path, entry)
+    # Personal skills: ~/.factory/skills/<name>/SKILL.md
+    copy_skill(ctx["skill"], Path.home() / ".factory" / "skills" / "ds4f-vision")
+    return "installed (~/.factory/mcp.json mcpServers + skill)"
+
+
+def detect_commandcode() -> bool:
+    """Command Code (https://commandcode.ai/docs/mcp)."""
+    home = Path.home() / ".commandcode"
+    if home.is_dir() or (home / "mcp.json").is_file():
+        return True
+    if which("commandcode") is not None:
+        return True
+    # Published CLI is `cmd`; only accept it when MCP subcommand looks present
+    # (plain `cmd` on some systems is unrelated).
+    cli = which("cmd")
+    if cli is None:
+        return False
+    try:
+        proc = subprocess.run(
+            [str(cli), "mcp", "--help"],
+            check=False,
+            timeout=8,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    blob = (proc.stdout or "") + (proc.stderr or "")
+    return "mcp" in blob.lower() and proc.returncode == 0
+
+
+def install_commandcode(ctx: dict[str, Any]) -> str:
+    # User-scope MCP: ~/.commandcode/mcp.json → mcpServers
+    path = Path.home() / ".commandcode" / "mcp.json"
+    entry = stdio_entry(ctx["uvx"], ctx["plugin"], ctx["base_url"], style="commandcode")
+    if path.is_file():
+        bak = path.with_suffix(".json.bak-ds4f-vision")
+        if not bak.is_file():
+            shutil.copy2(path, bak)
+    upsert_mcp_servers_json(path, entry)
+    # Global skills: ~/.commandcode/skills/<name>/SKILL.md
+    copy_skill(ctx["skill"], Path.home() / ".commandcode" / "skills" / "ds4f-vision")
+    return "installed (~/.commandcode/mcp.json mcpServers + skill)"
 
 
 ADAPTERS: dict[str, tuple[Callable[[], bool], Callable[[dict[str, Any]], str]]] = {
@@ -630,6 +768,8 @@ ADAPTERS: dict[str, tuple[Callable[[], bool], Callable[[dict[str, Any]], str]]] 
     "openclaw": (detect_openclaw, install_openclaw),
     "zcode": (detect_zcode, install_zcode),
     "prime": (detect_prime, install_prime),
+    "factory": (detect_factory, install_factory),
+    "commandcode": (detect_commandcode, install_commandcode),
 }
 
 
@@ -655,7 +795,7 @@ def main() -> int:
     ap.add_argument(
         "--harnesses",
         default=os.environ.get("VISION_MCP_HARNESSES", "auto"),
-        help="auto | comma list: pi,omp,hermes,opencode,goose,grok,openclaw,zcode,prime",
+        help="auto | comma list: pi,omp,hermes,opencode,goose,grok,openclaw,zcode,prime,factory,commandcode",
     )
     ap.add_argument(
         "--base-url",

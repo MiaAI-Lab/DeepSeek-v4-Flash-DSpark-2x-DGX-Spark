@@ -1,26 +1,34 @@
 #!/usr/bin/env bash
-# Register dspark-vision MCP into detected agent harnesses
-# (pi, OMP, Hermes, opencode, goose, grok, openclaw, zcode, prime).
+# Register ds4f-vision MCP into detected agent harnesses
+# (pi, OMP, Hermes, opencode, goose, grok, openclaw, zcode, prime, factory, commandcode).
 # Idempotent. Non-fatal by default (use --strict to fail on adapter errors).
+#
+# Requires ENABLE_VL_SIDECAR=1 in .env.dspark (vision mode). Use --force to
+# override when installing manually while the sidecar is already up.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="${ENV_FILE:-$REPO_DIR/.env.dspark}"
 PLUGIN_DIR="${VISION_MCP_PLUGIN_DIR:-$REPO_DIR/plugins/dspark_vision_mcp}"
 INSTALL_PY="$PLUGIN_DIR/install_harnesses.py"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--strict] [--dry-run] [--harnesses LIST] [--base-url URL]
+Usage: $(basename "$0") [--strict] [--dry-run] [--force] [--harnesses LIST] [--base-url URL]
 
-Registers the local dspark-vision MCP server into harnesses present on this
-machine. Supported: pi, omp, hermes, opencode, goose, grok, openclaw, zcode, prime.
+Registers the local ds4f-vision MCP server into harnesses present on this
+machine. Supported: pi, omp, hermes, opencode, goose, grok, openclaw, zcode,
+prime, factory (https://factory.ai), commandcode (https://commandcode.ai).
+
+Requires ENABLE_VL_SIDECAR=1 in .env.dspark unless --force is passed.
 
 Options:
   --strict         Exit non-zero if a detected harness fails to install
   --dry-run        Detect only; do not write configs
+  --force          Install even when ENABLE_VL_SIDECAR is not 1
   --harnesses LIST auto (default) or comma list:
-                   pi,omp,hermes,opencode,goose,grok,openclaw,zcode,prime
+                   pi,omp,hermes,opencode,goose,grok,openclaw,zcode,prime,factory,commandcode
   --base-url URL   VL sidecar base (default DSPARK_VL_BASE_URL / :8889)
   -h, --help       Show this help
 
@@ -29,11 +37,13 @@ Env:
   DSPARK_VL_BASE_URL     sidecar base URL
   VL_SIDECAR_PORT        used when building the default base URL
   VISION_MCP_PLUGIN_DIR  override plugin path
+  ENV_FILE               path to .env.dspark (default: repo .env.dspark)
 EOF
 }
 
 STRICT=0
 DRY_RUN=0
+FORCE=0
 HARNESSES="${VISION_MCP_HARNESSES:-auto}"
 BASE_URL="${DSPARK_VL_BASE_URL:-}"
 
@@ -41,6 +51,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --strict) STRICT=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --force) FORCE=1; shift ;;
     --harnesses)
       [ "$#" -ge 2 ] || { echo "--harnesses requires a value" >&2; exit 2; }
       HARNESSES="$2"; shift 2 ;;
@@ -57,6 +68,19 @@ done
 if [ ! -f "$INSTALL_PY" ]; then
   echo "Missing installer: $INSTALL_PY" >&2
   exit 1
+fi
+
+# Gate on vision flag from .env.dspark (start also only calls us when enabled).
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+if [ "$FORCE" != "1" ] && [ "${ENABLE_VL_SIDECAR:-0}" != "1" ]; then
+  echo "Skipping vision MCP install: ENABLE_VL_SIDECAR=${ENABLE_VL_SIDECAR:-0} in ${ENV_FILE}." >&2
+  echo "  Set ENABLE_VL_SIDECAR=1 and restart, or pass --force to install anyway." >&2
+  exit 0
 fi
 
 # Prefer repo-local / user uvx on PATH; Python helper installs uv if needed.

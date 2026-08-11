@@ -138,6 +138,34 @@ within batch FP-nondeterminism).
 
 ---
 
+## Issue #21 — `encode_arguments_to_dsml` corrupts dict tool arguments
+
+### Symptom
+Multi-turn tool calling fails after the first successful tool turn: prior assistant
+tool calls are re-encoded into the prompt with a single wrapped `arguments`
+parameter instead of the real keys. The model then imitates that corrupt history.
+
+### Root cause
+HF checkpoint `encoding/encoding_dsv4.py` always does `json.loads(tool_call["arguments"])`.
+When `arguments` is already a `dict` (common in OpenAI-compatible replay),
+`json.loads` raises and the `except` path wraps it as `{"arguments": <dict>}`.
+
+Upstream: `deepseek-ai/DeepSeek-V4-Flash-0731` `encoding/encoding_dsv4.py` (same
+bug in the Keys abliterated snapshot). Not a vLLM recipe weights bug.
+
+### Fix
+Dispatch on type before parsing; keep the wrap only for non-JSON strings.
+Applied at container boot after encoder install via
+`patches/hotfix-encoding-dsv4-issue21.py` (mounted at
+`/opt/hotfix-encoding-dsv4-issue21.py`).
+
+### Test
+```bash
+python3 scripts/test-encoding-dsv4-issue21.py
+```
+
+---
+
 ## Issue #22 — `nvfp4_ds_mla` long-context decode regression
 
 ### Symptom

@@ -58,6 +58,11 @@ EOF
 
 stop_vl_sidecar_head() {
   local project="$1"
+  # Text-only ship: skip noisy VL down when nothing is running.
+  if [ "${ENABLE_VL_SIDECAR:-0}" != "1" ] \
+    && ! docker ps -aq --filter "name=${project}-vl-sidecar" | grep -q .; then
+    return 0
+  fi
   if [ ! -f "$SIDECAR_COMPOSE_FILE" ]; then
     echo "No $SIDECAR_COMPOSE_FILE on head; force-removing any VL containers..."
     force_rm_project_containers "$project" local
@@ -73,6 +78,14 @@ stop_vl_sidecar_head() {
 
 stop_vl_sidecar_worker() {
   local project="$1"
+  # Text-only: still sweep if a zombie VL exists; otherwise skip SSH noise.
+  local worker_has_vl=0
+  if ssh "$WORKER_HOST" "docker ps -aq --filter 'name=${project}-vl-sidecar' 2>/dev/null | grep -q ."; then
+    worker_has_vl=1
+  fi
+  if [ "${ENABLE_VL_SIDECAR:-0}" != "1" ] && [ "$worker_has_vl" != "1" ]; then
+    return 0
+  fi
   # Ensure worker has the compose file so `down` can target the VL service.
   if [ -f "$SIDECAR_COMPOSE_FILE" ]; then
     ssh "$WORKER_HOST" "mkdir -p '$WORKER_DIR'" || true
@@ -147,4 +160,8 @@ if [ "$LEGACY_PROJECT_NAME" != "$PROJECT_NAME" ]; then
   stop_project "$LEGACY_PROJECT_NAME"
 fi
 
-echo "DeepSeek V4 Flash DSpark stopped (0731 + VL vision sidecar)."
+if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then
+  echo "DeepSeek V4 Flash DSpark stopped (0731 + VL vision sidecar)."
+else
+  echo "DeepSeek V4 Flash DSpark stopped (0731 text-only; any leftover VL sidecar swept)."
+fi

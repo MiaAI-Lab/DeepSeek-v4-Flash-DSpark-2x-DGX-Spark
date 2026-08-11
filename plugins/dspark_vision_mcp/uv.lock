@@ -238,7 +238,7 @@ wheels = [
 ]
 
 [[package]]
-name = "dspark-vision-mcp"
+name = "ds4f-vision-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -32,12 +32,17 @@ export GPU_MEMORY_UTILIZATION
 
 DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
 DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
+DEFAULT_OFFICIAL_REVISION="9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
 if [ "${ABLITERATED:-0}" = "1" ]; then
   DSPARK_MODEL="$DSPARK_MODEL_ABLITERATED"
+  DSPARK_REVISION="${DSPARK_REVISION_ABLITERATED:-}"
 else
   DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+  if [ -z "${DSPARK_REVISION+x}" ]; then
+    DSPARK_REVISION="$DEFAULT_OFFICIAL_REVISION"
+  fi
 fi
-export DSPARK_MODEL
+export DSPARK_MODEL DSPARK_REVISION
 
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
@@ -50,6 +55,11 @@ echo "  master: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "  image: ${DSPARK_VLLM_IMAGE}"
 echo "  serve mode: $DSPARK_SERVE_MODE (ENABLE_VL_SIDECAR=${ENABLE_VL_SIDECAR:-0})"
 echo "  checkpoint: $DSPARK_MODEL (ABLITERATED=${ABLITERATED:-0})"
+if [ -n "${DSPARK_REVISION:-}" ]; then
+  echo "  revision: $DSPARK_REVISION"
+else
+  echo "  revision: (default branch tip / unpinned)"
+fi
 echo "  model: ${DSPARK_MODEL}"
 echo "  served model: ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
 echo "  max model len: ${MAX_MODEL_LEN:-1048576}"
@@ -69,5 +79,6 @@ env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   COMPOSE_DISABLE_ENV_FILE=1 \
   GPU_MEMORY_UTILIZATION="$GPU_MEMORY_UTILIZATION" \
   DSPARK_MODEL="$DSPARK_MODEL" \
+  DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DSPARK_REVISION'

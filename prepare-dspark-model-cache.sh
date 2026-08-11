@@ -15,8 +15,16 @@ on this node, then optionally on the worker.
   --abliterated   Download Keys abliterated weights (sets ABLITERATED=1)
   --yes           Non-interactive: use ABLITERATED from .env.dspark (or 0)
 
+Official downloads default to DSPARK_REVISION=9e165c30… (tested pin). Override
+via DSPARK_REVISION in .env.dspark, or clear it to follow tip of main.
+Abliterated uses DSPARK_REVISION_ABLITERATED (default: unpinned).
+
 With no flags and a TTY, you are asked which checkpoint to download.
 Worker recurse (PREPARE_WORKER=0) never re-asks — it uses the already-chosen model.
+
+Optional / experimental: set PREPARE_VL_SIDECAR_MODEL=1 to also download
+VL_SIDECAR_MODEL (Qwen3-VL) on head + worker. Default is 0 (text-only ship).
+See README §Experimental: Vision.
 EOF
 }
 
@@ -50,14 +58,32 @@ fi
 
 DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
 DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
+# Official tested pin (issue #19). Override with DSPARK_REVISION=<sha> or clear with
+# DSPARK_REVISION= to follow tip of main. Abliterated uses DSPARK_REVISION_ABLITERATED
+# (default empty = tip of that repo).
+DEFAULT_OFFICIAL_REVISION="9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
 # Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
 : "${IMAGE_PYTHON:=/usr/bin/python3}"
-# VL sidecar is TP=2 across head+worker; cache on both nodes for offline serve.
+# VL sidecar is optional/experimental (TP=2). Default off for the text-only ship;
+# set PREPARE_VL_SIDECAR_MODEL=1 (and ENABLE_VL_SIDECAR=1) when experimenting.
 : "${VL_SIDECAR_MODEL:=cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit}"
-: "${PREPARE_VL_SIDECAR_MODEL:=1}"
+: "${PREPARE_VL_SIDECAR_MODEL:=0}"
+
+resolve_revision() {
+  # Export a single DSPARK_REVISION for prepare + compose (may be empty = unpin).
+  if [ "${ABLITERATED:-0}" = "1" ]; then
+    DSPARK_REVISION="${DSPARK_REVISION_ABLITERATED:-}"
+  elif [ -n "${DSPARK_REVISION+x}" ]; then
+    # Explicitly set in env (including empty → follow main tip).
+    :
+  else
+    DSPARK_REVISION="$DEFAULT_OFFICIAL_REVISION"
+  fi
+  export DSPARK_REVISION
+}
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -147,14 +173,24 @@ need_cmd docker
 mkdir -p "$HF_CACHE"
 verify_local_image
 resolve_checkpoint
+resolve_revision
 
 # Serve profiles keep HF_HUB_OFFLINE=1; download must ignore that for this run only.
 echo "prepare: forcing HF online for download (serve can keep HF_HUB_OFFLINE=1)" >&2
-echo "prepare: ABLITERATED=${ABLITERATED:-0} → $DSPARK_MODEL" >&2
+if [ -n "${DSPARK_REVISION:-}" ]; then
+  echo "prepare: ABLITERATED=${ABLITERATED:-0} → $DSPARK_MODEL @ $DSPARK_REVISION" >&2
+else
+  echo "prepare: ABLITERATED=${ABLITERATED:-0} → $DSPARK_MODEL @ (tip of default branch)" >&2
+fi
 
 run_download() {
   local model="${1:?model id required}"
-  echo "prepare: downloading $model → $HF_CACHE" >&2
+  local revision="${2:-}"
+  if [ -n "$revision" ]; then
+    echo "prepare: downloading $model @ $revision → $HF_CACHE" >&2
+  else
+    echo "prepare: downloading $model → $HF_CACHE" >&2
+  fi
   docker run --rm -i \
     -v "${HF_CACHE}:/cache/huggingface" \
     -e HF_HOME=/cache/huggingface \
@@ -162,14 +198,38 @@ run_download() {
     -e TRANSFORMERS_OFFLINE=0 \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
     -e DSPARK_MODEL="$model" \
+    -e DSPARK_REVISION="$revision" \
     -e HF_DOWNLOAD_WORKERS="$HF_DOWNLOAD_WORKERS" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
-    -c 'from huggingface_hub import snapshot_download; import os; print(snapshot_download(os.environ["DSPARK_MODEL"], max_workers=int(os.environ.get("HF_DOWNLOAD_WORKERS", "1"))))'
+    - <<'PY'
+import os
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+repo_id = os.environ["DSPARK_MODEL"]
+revision = (os.environ.get("DSPARK_REVISION") or "").strip() or None
+kwargs = {
+    "repo_id": repo_id,
+    "max_workers": int(os.environ.get("HF_DOWNLOAD_WORKERS", "1")),
+}
+if revision:
+    kwargs["revision"] = revision
+path = Path(snapshot_download(**kwargs))
+print(path)
+# Keep offline serve of the bare repo id working: pin refs/main to this commit
+# when we downloaded a specific revision (issue #19).
+if revision:
+    refs_dir = path.parent.parent / "refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    (refs_dir / "main").write_text(f"{revision}\n", encoding="utf-8")
+    print(f"refs/main -> {revision}")
+PY
 }
 
 verify_cache() {
   local model="${1:?model id required}"
+  local revision="${2:-}"
   # local_files_only=True; force offline so verify never re-hits the hub.
   docker run --rm -i \
     -v "${HF_CACHE}:/cache/huggingface" \
@@ -178,6 +238,7 @@ verify_cache() {
     -e TRANSFORMERS_OFFLINE=1 \
     -e HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}" \
     -e DSPARK_MODEL="$model" \
+    -e DSPARK_REVISION="$revision" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
     - <<'PY'
@@ -186,7 +247,12 @@ import os
 from pathlib import Path
 from huggingface_hub import snapshot_download
 
-path = Path(snapshot_download(os.environ["DSPARK_MODEL"], local_files_only=True))
+repo_id = os.environ["DSPARK_MODEL"]
+revision = (os.environ.get("DSPARK_REVISION") or "").strip() or None
+kwargs = {"repo_id": repo_id, "local_files_only": True}
+if revision:
+    kwargs["revision"] = revision
+path = Path(snapshot_download(**kwargs))
 index_path = path / "model.safetensors.index.json"
 if index_path.is_file():
     index = json.loads(index_path.read_text())
@@ -197,6 +263,7 @@ else:
         raise SystemExit(f"no safetensors found under {path}")
 missing = [name for name in needed if not (path / name).exists()]
 print(f"snapshot={path}")
+print(f"revision={revision or 'default-branch'}")
 print(f"safetensor_shards={len(needed)}")
 print(f"missing_shards={len(missing)}")
 if missing:
@@ -206,14 +273,18 @@ if missing:
 PY
 }
 
-run_download "$DSPARK_MODEL"
-verify_cache "$DSPARK_MODEL"
+run_download "$DSPARK_MODEL" "${DSPARK_REVISION:-}"
+verify_cache "$DSPARK_MODEL" "${DSPARK_REVISION:-}"
 
-# VL sidecar TP=2 needs weights on every rank (head prepare + worker recurse).
-if [ "${PREPARE_VL_SIDECAR_MODEL:-1}" = "1" ]; then
-  echo "prepare: VL sidecar model ($VL_SIDECAR_MODEL)" >&2
-  run_download "$VL_SIDECAR_MODEL"
-  verify_cache "$VL_SIDECAR_MODEL"
+# Optional / experimental VL weights (default off — text-only ship).
+# TP=2 needs the cache on every rank when enabled (head prepare + worker recurse).
+# No revision pin — tip of the VL repo (override with a future VL_SIDECAR_REVISION if needed).
+if [ "${PREPARE_VL_SIDECAR_MODEL:-0}" = "1" ]; then
+  echo "prepare: VL sidecar model ($VL_SIDECAR_MODEL) [experimental]" >&2
+  run_download "$VL_SIDECAR_MODEL" ""
+  verify_cache "$VL_SIDECAR_MODEL" ""
+else
+  echo "prepare: skipping VL sidecar weights (PREPARE_VL_SIDECAR_MODEL=0; text-only default)" >&2
 fi
 
 if [ "${PREPARE_WORKER:-1}" = "1" ]; then
@@ -226,5 +297,5 @@ if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   verify_worker_image
   scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
   scp "$ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
-  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ABLITERATED='$ABLITERATED' ./prepare-dspark-model-cache.sh --yes"
+  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ABLITERATED='$ABLITERATED' DSPARK_REVISION='${DSPARK_REVISION:-}' DSPARK_REVISION_ABLITERATED='${DSPARK_REVISION_ABLITERATED:-}' ./prepare-dspark-model-cache.sh --yes"
 fi

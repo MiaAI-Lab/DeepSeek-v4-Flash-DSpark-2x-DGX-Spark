@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "prime-agent-skill-dspark-vision"
+name = "prime-agent-skill-ds4f-vision"
 version = "0.1.0"
 description = "Local Qwen3-VL sidecar vision helpers for Prime Agent"
 requires-python = ">=3.10"
@@ -11,4 +11,4 @@ dependencies = ["pillow>=10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["dspark_vision*"]
+include = ["ds4f_vision*"]

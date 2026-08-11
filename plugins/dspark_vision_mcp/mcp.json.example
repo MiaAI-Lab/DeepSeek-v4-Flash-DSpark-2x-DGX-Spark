@@ -3,12 +3,12 @@
     "toolPrefix": "none"
   },
   "mcpServers": {
-    "dspark-vision": {
+    "ds4f-vision": {
       "command": "/home/mia/.local/bin/uvx",
       "args": [
         "--from",
         "/home/mia/models/deepSeek-v4-Flash-DSpark/plugins/dspark_vision_mcp",
-        "dspark-vision-mcp"
+        "ds4f-vision-mcp"
       ],
       "directTools": [
         "describe_image",

@@ -1,4 +1,4 @@
-# dspark-vision-mcp
+# ds4f-vision-mcp
 
 Local **vision tool** MCP server for the DeepSeek-V4-Flash-0731 DSpark stack.
 
@@ -10,17 +10,17 @@ reason natively (including `reasoning_effort=max`) without switching models.
 
 ## Vision support
 
-This is the **production vision path** for the DSpark stack. Native MoonViT on
-0731 is retired; agents see images only through these tools (or the CLI helper).
+This is the **production vision path** for the DSpark stack. Agents see images
+only through these tools (or `scripts/vision-reason.py`).
 
 ### Architecture
 
 ```text
-  Agent harness (pi / OMP / Hermes / goose / grok / openclaw / ZCode Desktop / …)
+  Agent harness (pi / OMP / Hermes / goose / grok / openclaw / ZCode / Factory / Command Code / …)
         │  tool call: describe_image / ocr_image / compare_images
-        │  (Prime Agent: await dspark_vision.* from IPython skill)
+        │  (Prime Agent: await ds4f_vision.* from IPython skill)
         ▼
-  dspark-vision-mcp  (stdio, launched via uvx)  — or Prime Python skill
+  ds4f-vision-mcp  (stdio, launched via uvx)  — or Prime Python skill
         │  OpenAI chat.completions + image_url (base64 data URI)
         ▼
   Qwen3-VL-4B AWQ-4bit sidecar  http://127.0.0.1:8889   (TP=2 head+worker)
@@ -39,14 +39,14 @@ This is the **production vision path** for the DSpark stack. Native MoonViT on
 | **This MCP** | Pass-1 extraction only; returns text for 0731 to reason over |
 | **`scripts/vision-reason.py`** | Same two-pass idea without a harness (CLI) |
 
-Why not send images to 0731 directly? Max/high-effort reasoning over image tokens
-was unstable on the retired MoonViT lane; text-only max effort is stable. Fusing
-vision as a **tool** keeps one conversation on 0731.
+Why not send images to 0731 directly? 0731 stays text-only; fusing vision as
+a **tool** keeps one conversation on 0731 with stable high/max reasoning.
 
 ### What the stack starts for you
 
-1. `./prepare-dspark-model-cache.sh` caches 0731 **and** `VL_SIDECAR_MODEL` on
-   head **and** worker (TP=2). Serve keeps `HF_HUB_OFFLINE=1`.
+1. `./prepare-dspark-model-cache.sh` caches 0731 on head **and** worker.
+   Set `PREPARE_VL_SIDECAR_MODEL=1` to also download `VL_SIDECAR_MODEL` (default
+   is **0** / text-only). Serve keeps `HF_HUB_OFFLINE=1`.
 2. With `ENABLE_VL_SIDECAR=1` (off by default in `.env.dspark`),
    `./start-deepseek-v4-flash-dspark.sh` sets main util from
    `GPU_MEMORY_UTILIZATION_VISION` (**0.80**), brings up 0731 (TP=2), **then** the
@@ -54,16 +54,17 @@ vision as a **tool** keeps one conversation on 0731.
    With `ENABLE_VL_SIDECAR=0` (default), util comes from `GPU_MEMORY_UTILIZATION_TEXT`
    (**0.835**) and the sidecar is skipped (larger main KV).
 3. When the sidecar lists `qwen3-vl-4b`, start runs
-   `scripts/install-dspark-vision-mcp.sh` if `INSTALL_VISION_MCP` is on
-   (defaults to follow `ENABLE_VL_SIDECAR`).
-4. Detected harnesses get `dspark-vision` registered automatically (ZCode Desktop
+   `scripts/install-ds4f-vision-mcp.sh` **only if** `ENABLE_VL_SIDECAR=1`
+   (and `INSTALL_VISION_MCP` is not `0`). The installer itself also refuses
+   when the flag is off unless you pass `--force`.
+4. Detected harnesses get `ds4f-vision` registered automatically (ZCode Desktop
    included via `~/.zcode/cli/config.json`).
 
 Compose: [`docker-compose.vl-sidecar.yml`](../../docker-compose.vl-sidecar.yml).
 Measured Available KV (2026-08-11): vision main **13.37 GiB / 1.37M** tokens
 (util **0.80**) + VL **1.54 GiB / 84k** (util **0.04**, int4); text-only
 (~util **0.835**) ~**18.08 GiB / ~2.49M**. True `nvfp4` KV for Qwen needs
-FlashInfer SM100 (GB10 is SM12.1). See root `README.md` §Vision on/off.
+FlashInfer SM100 (GB10 is SM12.1). See root `README.md` §Experimental: Vision.
 
 ### Tools
 
@@ -100,13 +101,13 @@ extraction-only from the agent’s point of view.
 | `VL_SIDECAR_MODEL` | `cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit` | HF id; cached by `./prepare-dspark-model-cache.sh` on both nodes |
 | `VL_SIDECAR_TP_SIZE` / `VL_SIDECAR_NNODES` | `2` / `2` | Shards vision across both Sparks |
 | `VL_SIDECAR_MASTER_PORT` | `25100` | NCCL master port (DeepSeek uses `25000`) |
-| `VL_SIDECAR_GPU_UTIL` | `0.03` | Per-GPU util after TP shard (0.022 also OK when worker free ≥~4.5 GiB) |
+| `VL_SIDECAR_GPU_UTIL` | `0.04` | Per-GPU util after TP shard (~5 GB/GPU budget; 0.02–0.03 can boot but is tight) |
 | `VL_SIDECAR_KV_CACHE_DTYPE` | `int4_per_token_head` | 4-bit KV via Triton; `nvfp4` blocked on SM12.1 (needs FlashInfer SM100) |
 | `VL_SIDECAR_ATTENTION_BACKEND` | `TRITON_ATTN` | Required for int4 KV; also avoids FlashInfer fp8 `plan()` issues |
-| `PREPARE_VL_SIDECAR_MODEL` | `1` | Prepare-cache downloads VL weights on head **and** worker |
+| `PREPARE_VL_SIDECAR_MODEL` | `0` | Set `1` so prepare-cache also downloads VL weights on head **and** worker |
 | `VL_SIDECAR_PORT` | `8889` | Sidecar listen port (head API rank) |
-| `INSTALL_VISION_MCP` | follows sidecar | Auto-register into harnesses on start |
-| `VISION_MCP_HARNESSES` | `auto` | `auto` or `pi,omp,hermes,…,zcode,prime` |
+| `INSTALL_VISION_MCP` | `1` when vision on | Auto-register into harnesses on start (ignored if `ENABLE_VL_SIDECAR=0`) |
+| `VISION_MCP_HARNESSES` | `auto` | `auto` or `pi,omp,…,factory,commandcode` |
 | `DSPARK_VL_BASE_URL` | `http://127.0.0.1:8889` | Where this MCP posts completions |
 | `DSPARK_VL_MODEL` | `qwen3-vl-4b` | Served model id |
 | `DSPARK_VL_MAX_TOKENS` | `1024` | Extraction max tokens |
@@ -119,12 +120,6 @@ extraction-only from the agent’s point of view.
 | Sidecar down | `Error: vision sidecar unreachable at …` (+ start hint) |
 | Too many images | `Error: too many images (N); sidecar limit is 4 …` |
 
-### Retired: native MoonViT
-
-`plugins/dsv4_moonvit_vllm` and the overlay model dir are **not** the production
-path. Historical notes: [`docs/VISION.md`](../../docs/VISION.md),
-[`docs/PROJECTOR-FINETUNE.md`](../../docs/PROJECTOR-FINETUNE.md).
-
 ---
 
 ## Seamless harness install (recommended)
@@ -133,12 +128,14 @@ When `ENABLE_VL_SIDECAR=1`, `./start-deepseek-v4-flash-dspark.sh` waits for the
 sidecar then runs:
 
 ```bash
-./scripts/install-dspark-vision-mcp.sh
+./scripts/install-ds4f-vision-mcp.sh
 ```
 
-That detects installed harnesses and upserts the `dspark-vision` MCP server
-(plus skill where applicable). Opt out with `INSTALL_VISION_MCP=0`. Restrict
+That detects installed harnesses and upserts the `ds4f-vision` MCP server
+(plus skill where applicable). Re-install removes the legacy `dspark-vision`
+key/skill dirs. Opt out with `INSTALL_VISION_MCP=0`. Restrict
 with `VISION_MCP_HARNESSES=pi,omp` (default `auto` = all supported).
+The installer **no-ops** when `ENABLE_VL_SIDECAR≠1` (pass `--force` to override).
 
 Supported harnesses:
 
@@ -146,29 +143,31 @@ Supported harnesses:
 |---------|--------|--------|
 | **pi** | `pi` + `~/.pi/agent` | `~/.config/mcp/mcp.json`, `~/.pi/agent/mcp.json`, skill, `pi-mcp-adapter` |
 | **OMP** | `omp` + `~/.omp` | `~/.omp/agent/mcp.json`, skill under `~/.omp/agent/skills/` |
-| **Hermes** | `hermes` + `~/.hermes/config.yaml` | `mcp_servers.dspark-vision` (surgical YAML append), skill |
+| **Hermes** | `hermes` + `~/.hermes/config.yaml` | `mcp_servers.ds4f-vision` (surgical YAML append), skill |
 | **opencode** | `opencode` or `~/.config/opencode` | `~/.config/opencode/opencode.json` `mcp` block + skill |
-| **goose** | `goose` or `~/.config/goose/config.yaml` | `extensions.dspark-vision` in `~/.config/goose/config.yaml` + skill ([goose-docs.ai](https://goose-docs.ai/)) |
-| **grok** | `grok` / `~/.grok/bin/grok` or `~/.grok/config.toml` | `[mcp_servers.dspark-vision]` in `~/.grok/config.toml` + skill ([Grok Build](https://docs.x.ai/build/features/mcp-servers)) |
-| **openclaw** | `openclaw`/`oclaw` or `~/.openclaw` | `mcp.servers.dspark-vision` in `~/.openclaw/openclaw.json` + skill ([OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp)) |
-| **zcode** | `zcode` or `~/.zcode` | User-scope `mcp.servers.dspark-vision` in `~/.zcode/cli/config.json` (+ skill under `~/.zcode/cli/skills/`). **ZCode Desktop** reads this same MCP file (Settings → MCP Servers); restart/refresh if the app was already open ([ZCode MCP](https://zcode.z.ai/en/docs/mcp-services)). Does **not** write `~/.agents/skills/dspark-vision` (that collided with pi’s `~/.pi/agent/skills/dspark-vision`). |
-| **prime** | `prime-agent` or `~/.prime/agent` | Python skill `~/.prime/agent/skills/dspark-vision` calling `:8889` directly (Prime MCP is HTTP-only; [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)) |
+| **goose** | `goose` or `~/.config/goose/config.yaml` | `extensions.ds4f-vision` in `~/.config/goose/config.yaml` + skill ([goose-docs.ai](https://goose-docs.ai/)) |
+| **grok** | `grok` / `~/.grok/bin/grok` or `~/.grok/config.toml` | `[mcp_servers.ds4f-vision]` in `~/.grok/config.toml` + skill ([Grok Build](https://docs.x.ai/build/features/mcp-servers)) |
+| **openclaw** | `openclaw`/`oclaw` or `~/.openclaw` | `mcp.servers.ds4f-vision` in `~/.openclaw/openclaw.json` + skill ([OpenClaw MCP](https://docs2.openclaw.ai/tools/mcp)) |
+| **zcode** | `zcode` or `~/.zcode` | User-scope `mcp.servers.ds4f-vision` in `~/.zcode/cli/config.json` (+ skill under `~/.zcode/cli/skills/`). **ZCode Desktop** reads this same MCP file (Settings → MCP Servers); restart/refresh if the app was already open ([ZCode MCP](https://zcode.z.ai/en/docs/mcp-services)). Does **not** write `~/.agents/skills/ds4f-vision` (that collided with pi’s `~/.pi/agent/skills/ds4f-vision`). |
+| **prime** | `prime-agent` or `~/.prime/agent` | Python skill `~/.prime/agent/skills/ds4f-vision` calling `:8889` directly (Prime MCP is HTTP-only; [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)) |
+| **factory** ([Factory](https://factory.ai) / Droid) | `droid` or `~/.factory` | User-scope `mcpServers.ds4f-vision` in `~/.factory/mcp.json` + skill under `~/.factory/skills/` ([Factory MCP](https://docs.factory.ai/cli/configuration/mcp)) |
+| **commandcode** ([Command Code](https://commandcode.ai)) | `~/.commandcode` / `commandcode` / `cmd mcp` | User-scope `mcpServers.ds4f-vision` in `~/.commandcode/mcp.json` + skill under `~/.commandcode/skills/` ([Command Code MCP](https://commandcode.ai/docs/mcp)) |
 
 Idempotent; never wipes other MCP entries. Failures are non-fatal unless
 `--strict`. Run alone anytime (sidecar should be up for Hermes sessions that
 eager-connect):
 
 ```bash
-./scripts/install-dspark-vision-mcp.sh
-./scripts/install-dspark-vision-mcp.sh --dry-run
-./scripts/install-dspark-vision-mcp.sh --harnesses pi,hermes
+./scripts/install-ds4f-vision-mcp.sh
+./scripts/install-ds4f-vision-mcp.sh --dry-run
+./scripts/install-ds4f-vision-mcp.sh --harnesses pi,hermes
 ```
 
 ## Run (stdio)
 
 ```bash
 # from repo root — uvx installs deps into an ephemeral env
-uvx --from ./plugins/dspark_vision_mcp dspark-vision-mcp
+uvx --from ./plugins/dspark_vision_mcp ds4f-vision-mcp
 ```
 
 ## Manual pi registration (if not using the installer)
@@ -180,12 +179,12 @@ plus `~/.config/mcp/mcp.json`. Prefer the installer above; example fragment:
 {
   "settings": { "toolPrefix": "none" },
   "mcpServers": {
-    "dspark-vision": {
+    "ds4f-vision": {
       "command": "/home/YOU/.local/bin/uvx",
       "args": [
         "--from",
         "/path/to/deepSeek-v4-Flash-DSpark/plugins/dspark_vision_mcp",
-        "dspark-vision-mcp"
+        "ds4f-vision-mcp"
       ],
       "directTools": ["describe_image", "ocr_image", "compare_images"]
     }
