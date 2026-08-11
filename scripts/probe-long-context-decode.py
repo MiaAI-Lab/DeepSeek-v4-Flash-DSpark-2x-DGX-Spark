@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import time
 import urllib.request
@@ -69,17 +70,25 @@ def tokenize(base_url: str, key: str, model: str, content: str, timeout: float) 
     return count
 
 
-def build_prompt(base_url: str, key: str, model: str, target: int, timeout: float) -> tuple[str, int]:
+def build_prompt(
+    base_url: str,
+    key: str,
+    model: str,
+    target: int,
+    timeout: float,
+    prompt_nonce: str,
+) -> tuple[str, int]:
+    prefix = f" dspark-probe-nonce-{prompt_nonce}"
     unit = " dspark-decode-datum"
     repeats = max(1, target // 4)
-    content = unit * repeats + PROMPT_SUFFIX
+    content = prefix + unit * repeats + PROMPT_SUFFIX
     observed = 0
     for _ in range(8):
         observed = tokenize(base_url, key, model, content, timeout)
         if target - 64 <= observed <= target + 64:
             return content, observed
         repeats = max(1, int(repeats * target / observed))
-        content = unit * repeats + PROMPT_SUFFIX
+        content = prefix + unit * repeats + PROMPT_SUFFIX
     raise RuntimeError(f"could not calibrate long-context prompt: observed={observed}")
 
 
@@ -164,6 +173,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument("--baseline-tps", type=float)
     parser.add_argument("--evidence-identity")
+    parser.add_argument("--prompt-nonce")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.target_prompt_tokens < 600_000:
@@ -175,11 +185,17 @@ def main() -> int:
     ):
         parser.error("--baseline-tps must be finite and greater than zero")
     values = parse_env(args.env_file)
+    prompt_nonce = args.prompt_nonce or values.get("LONG_CONTEXT_DECODE_PROMPT_NONCE", "")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", prompt_nonce):
+        parser.error(
+            "--prompt-nonce or LONG_CONTEXT_DECODE_PROMPT_NONCE must be 8-128 "
+            "characters from A-Z, a-z, 0-9, dot, underscore, or hyphen"
+        )
     key = read_key_file(args.key_file or Path(values.get("VLLM_ORIGIN_KEY_FILE", "")))
     base_url = args.base_url or f"http://{values.get('VLLM_PROXY_HOST', '172.30.0.1')}:{values.get('VLLM_PROXY_PORT', '8888')}/v1"
     model = args.model or values.get("SERVED_MODEL_NAME", "deepseek-v4-flash-0731")
     prompt, observed = build_prompt(
-        base_url, key, model, args.target_prompt_tokens, args.timeout
+        base_url, key, model, args.target_prompt_tokens, args.timeout, prompt_nonce
     )
     trials = [stream_trial(base_url, key, model, prompt, args.timeout) for _ in range(args.trials)]
     gate = evaluate_decode_gate(trials, args.baseline_tps)
@@ -190,6 +206,7 @@ def main() -> int:
         "observed_prompt_tokens": observed,
         "baseline_tps": args.baseline_tps,
         "evidence_identity": args.evidence_identity,
+        "prompt_nonce": prompt_nonce,
         "identical_prompt_sha256": __import__("hashlib").sha256(prompt.encode()).hexdigest(),
         "trials": trials,
         "gate": gate,

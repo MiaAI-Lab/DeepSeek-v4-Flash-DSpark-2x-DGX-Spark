@@ -720,16 +720,18 @@ fi
 
 FAILURE_STAGE="long-context-decode"
 : "${LONG_CONTEXT_DECODE_BASELINE_TPS:?LONG_CONTEXT_DECODE_BASELINE_TPS is required for the 5x regression gate}"
+: "${LONG_CONTEXT_DECODE_PROMPT_NONCE:?LONG_CONTEXT_DECODE_PROMPT_NONCE is required to defeat stale prefix-cache reuse}"
 reuse_long_context_decode=0
 if [ "$MODE" = "resume-capacity" ] && [ -e "$LONG_CONTEXT_DECODE_EVIDENCE" ]; then
-  if python3 - "$LONG_CONTEXT_DECODE_EVIDENCE" "$LONG_CONTEXT_DECODE_BASELINE_TPS" "$CAPACITY_EVIDENCE_IDENTITY" <<'PY'
+  if python3 - "$LONG_CONTEXT_DECODE_EVIDENCE" "$LONG_CONTEXT_DECODE_BASELINE_TPS" "$CAPACITY_EVIDENCE_IDENTITY" "$LONG_CONTEXT_DECODE_PROMPT_NONCE" <<'PY'
 import json, math, os, sys, time
-path, baseline, expected_identity = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+path, baseline, expected_identity, expected_nonce = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4]
 report = json.load(open(path))
 age = time.time() - os.stat(path).st_mtime
 if (age < 0 or age > 24 * 3600 or report.get("gate", {}).get("passed") is not True
         or not math.isclose(report.get("baseline_tps", -1), baseline)
-        or report.get("evidence_identity") != expected_identity):
+        or report.get("evidence_identity") != expected_identity
+        or report.get("prompt_nonce") != expected_nonce):
     raise SystemExit(1)
 PY
   then
@@ -749,6 +751,7 @@ if [ "$reuse_long_context_decode" -eq 0 ]; then
     --env-file "$ENV_FILE" --key-file "$VLLM_ORIGIN_KEY_FILE" \
     --baseline-tps "$LONG_CONTEXT_DECODE_BASELINE_TPS" \
     --evidence-identity "$CAPACITY_EVIDENCE_IDENTITY" \
+    --prompt-nonce "$LONG_CONTEXT_DECODE_PROMPT_NONCE" \
     --output "$LONG_CONTEXT_DECODE_EVIDENCE"
 fi
 "$SANITIZER" --scan-only <"$LONG_CONTEXT_DECODE_EVIDENCE" >/dev/null

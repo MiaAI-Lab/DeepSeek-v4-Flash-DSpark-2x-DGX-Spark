@@ -57,9 +57,15 @@ class RuntimeHotfixTest(unittest.TestCase):
         probe = load_module("long_context_probe", LONG_CONTEXT_PROBE)
         with mock.patch.object(probe, "tokenize", return_value=600_000):
             prompt, observed = probe.build_prompt(
-                "http://127.0.0.1:8888/v1", "secret", "model", 600_000, 1
+                "http://127.0.0.1:8888/v1",
+                "secret",
+                "model",
+                600_000,
+                1,
+                "rollout-57f75ac",
             )
         self.assertEqual(observed, 600_000)
+        self.assertTrue(prompt.startswith(" dspark-probe-nonce-rollout-57f75ac"))
         self.assertTrue(prompt.endswith(probe.PROMPT_SUFFIX))
         self.assertIn("integers 1 through 80", probe.PROMPT_SUFFIX)
 
