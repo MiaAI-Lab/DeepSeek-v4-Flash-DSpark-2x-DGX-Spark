@@ -20,6 +20,7 @@ class QwenLifecycleTest(unittest.TestCase):
         self.assertIn("verify_current_identity(manifest)", text)
         self.assertIn('get("Running") is not False', text)
         self.assertIn('"inventory_method"] = "stopped-identity-refresh"', text)
+        self.assertIn('refreshed["container"]["running"] = False', text)
         self.assertIn("os.O_CREAT | os.O_EXCL | os.O_WRONLY", text)
 
     def test_inventory_is_sanitized_and_records_stable_metadata(self):

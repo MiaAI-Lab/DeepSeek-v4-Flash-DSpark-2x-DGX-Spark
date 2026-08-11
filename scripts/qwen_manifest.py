@@ -287,6 +287,11 @@ def refresh_stopped_manifest(manifest_path: Path, output: Path) -> None:
     refreshed["original_manifest_sha256"] = manifest_sha256(manifest_path)
     refreshed["inventory_method"] = "stopped-identity-refresh"
     refreshed["created_at"] = utc_now()
+    refreshed["container"] = dict(manifest["container"])
+    refreshed["container"]["running"] = False
+    refreshed["container"]["health"] = (
+        (current.get("State", {}).get("Health") or {}).get("Status")
+    )
     write_new_json(output, refreshed)
 
 
