@@ -501,7 +501,7 @@ class LifecycleContractTest(unittest.TestCase):
             ],
         )
 
-    def test_tool_history_render_matches_string_and_dictionary_arguments(self):
+    def test_tool_history_render_uses_canonical_json_arguments(self):
         smoke = load_semantic_smoke()
         seen = []
 
@@ -509,14 +509,16 @@ class LifecycleContractTest(unittest.TestCase):
             self.assertEqual(url, "http://origin/tokenize")
             arguments = payload["messages"][1]["tool_calls"][0]["function"]["arguments"]
             seen.append(type(arguments))
-            if isinstance(arguments, str):
-                arguments = json.loads(arguments)
-            rendered = "\n".join(f'{key}={value}' for key, value in arguments.items())
+            arguments = json.loads(arguments)
+            rendered = "\n".join(
+                f'<parameter name="{key}">{value}</parameter>'
+                for key, value in arguments.items()
+            )
             return {"token_strs": [rendered], "count": 2}
 
         with mock.patch.object(smoke, "request_json_url", side_effect=fake_render):
             smoke.run_tool_history_render("http://origin/v1", "secret", "model")
-        self.assertEqual(seen, [str, dict])
+        self.assertEqual(seen, [str])
 
     def test_semantic_smoke_requires_unknown_field_http_400(self):
         smoke = load_semantic_smoke()

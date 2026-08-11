@@ -406,16 +406,18 @@ def tool_history_payload(model: str, arguments) -> dict:
 def run_tool_history_render(base_url: str, key: str, model: str) -> None:
     url = tokenize_url(base_url)
     arguments = {"amount": 125, "scope": "synthetic"}
-    rendered_string = rendered_prompt(
+    # OpenAI's wire contract requires function.arguments to be JSON text. The
+    # runtime hotfix makes that canonical form render as its actual parameters
+    # instead of nesting it under a synthetic `arguments` parameter. A dict is
+    # intentionally rejected by vLLM's request model before the encoder runs.
+    rendered = rendered_prompt(
         request_json_url(url, key, tool_history_payload(model, json.dumps(arguments)))
     )
-    rendered_dict = rendered_prompt(
-        request_json_url(url, key, tool_history_payload(model, arguments))
-    )
-    if rendered_string != rendered_dict:
-        raise AssertionError("string and dictionary tool history rendered differently")
-    if 'name="arguments"' in rendered_dict:
-        raise AssertionError("tool history wrapped dictionary under arguments parameter")
+    if 'name="arguments"' in rendered:
+        raise AssertionError("tool history wrapped JSON under arguments parameter")
+    for name in arguments:
+        if f'name="{name}"' not in rendered:
+            raise AssertionError(f"tool history omitted {name} parameter")
 
 
 def run_multiturn_tool(
