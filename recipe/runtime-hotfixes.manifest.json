@@ -1,0 +1,11 @@
+{
+  "schema": "dspark-runtime-hotfixes/v1",
+  "base_image": "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8",
+  "issue21_upstream_commit": "94baabf",
+  "issue22_upstream_commit": "6c42a7a",
+  "inputs": {
+    "recipe/Dockerfile.anemll-runtime-hotfixes": "ac7409eb1924c1e2136252c4e48931e81f656f2df2aefc4683b825793b33a161",
+    "patches/hotfix-encoding-dsv4-issue21.py": "8ff034dd8d4d07a723790c4612f3dba54119d4689218e1db4741d5345f19ca61",
+    "patches/hotfix-nvfp4-ds-mla-issue22.py": "044612438c6f821879dcfe8adabf445188b2eeb7106cf4c0b8722ff586f4192e"
+  }
+}

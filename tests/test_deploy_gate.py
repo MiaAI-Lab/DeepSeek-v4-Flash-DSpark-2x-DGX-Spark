@@ -74,6 +74,8 @@ class DeployGateTest(unittest.TestCase):
             'HISTORY_REASONING_FIELDS = ("reasoning", "reasoning_content")',
             'LIVE_HISTORY_REASONING_FIELDS = ("reasoning",)',
             '"drop_thinking": False', 'return_token_strs',
+            "run_tool_history_render", "run_multiturn_tool",
+            '"tool_call_id": first_call.get',
         ):
             self.assertIn(required, text)
 
@@ -84,6 +86,10 @@ class DeployGateTest(unittest.TestCase):
         self.assertIn('ssh -o BatchMode=yes "$WORKER_HOST" docker load', text)
         self.assertIn('if [ "$head_nccl" != "$worker_nccl" ]', text)
         self.assertIn('NCCL test image IDs differ between ranks.', text)
+        self.assertEqual(text.count('build-anemll-runtime-hotfixes.sh"'), 1)
+        self.assertIn('docker load <"$runtime_archive"', text)
+        self.assertIn('Runtime hotfix image IDs differ between ranks.', text)
+        self.assertIn('scripts/verify-runtime-hotfixes.py', text)
 
     def test_benchmark_enforces_workload_timing_usage_and_correlation(self):
         text = (DEPLOY / "scripts/benchmark.py").read_text()

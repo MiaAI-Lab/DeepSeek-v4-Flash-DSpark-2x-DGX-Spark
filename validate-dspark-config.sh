@@ -20,30 +20,6 @@ set -a
 source "$ENV_FILE"
 set +a
 
-# Match start-deepseek-v4-flash-dspark.sh: flag selects main util profile.
-if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then
-  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_VISION:-0.80}"
-  DSPARK_SERVE_MODE="vision"
-else
-  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_TEXT:-0.835}"
-  DSPARK_SERVE_MODE="text"
-fi
-export GPU_MEMORY_UTILIZATION
-
-DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
-DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
-DEFAULT_OFFICIAL_REVISION="9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
-if [ "${ABLITERATED:-0}" = "1" ]; then
-  DSPARK_MODEL="$DSPARK_MODEL_ABLITERATED"
-  DSPARK_REVISION="${DSPARK_REVISION_ABLITERATED:-}"
-else
-  DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
-  if [ -z "${DSPARK_REVISION+x}" ]; then
-    DSPARK_REVISION="$DEFAULT_OFFICIAL_REVISION"
-  fi
-fi
-export DSPARK_MODEL DSPARK_REVISION
-
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
 : "${MASTER_PORT:?MASTER_PORT must be set in $ENV_FILE}"
@@ -55,8 +31,8 @@ if ! [[ "$DSPARK_MODEL_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "DSPARK_MODEL_REVISION must be a 40-character commit SHA." >&2
   exit 1
 fi
-if ! [[ "$DSPARK_VLLM_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
-  echo "DSPARK_VLLM_IMAGE must use an immutable @sha256 digest." >&2
+if ! [[ "$DSPARK_VLLM_IMAGE" =~ (@sha256:|^sha256:)[0-9a-f]{64}$ ]]; then
+  echo "DSPARK_VLLM_IMAGE must use an immutable repository digest or local image ID." >&2
   exit 1
 fi
 if [ ! -f "$VLLM_ORIGIN_KEY_FILE" ] || [ -L "$VLLM_ORIGIN_KEY_FILE" ] || [ ! -s "$VLLM_ORIGIN_KEY_FILE" ]; then
@@ -125,14 +101,7 @@ echo "DSpark config:"
 echo "  worker: ${WORKER_HOST}"
 echo "  master: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "  image: ${DSPARK_VLLM_IMAGE}"
-echo "  serve mode: $DSPARK_SERVE_MODE (ENABLE_VL_SIDECAR=${ENABLE_VL_SIDECAR:-0})"
-echo "  checkpoint: $DSPARK_MODEL (ABLITERATED=${ABLITERATED:-0})"
-if [ -n "${DSPARK_REVISION:-}" ]; then
-  echo "  revision: $DSPARK_REVISION"
-else
-  echo "  revision: (default branch tip / unpinned)"
-fi
-echo "  model: ${DSPARK_MODEL}"
+echo "  model: ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}"
 echo "  served model: ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
 echo "  max model len: ${MAX_MODEL_LEN:-1048576}"
 echo "  max num seqs: ${MAX_NUM_SEQS:-6}"
@@ -150,9 +119,6 @@ echo
 echo "Rendered vLLM command (secret values redacted):"
 env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   COMPOSE_DISABLE_ENV_FILE=1 \
-  GPU_MEMORY_UTILIZATION="$GPU_MEMORY_UTILIZATION" \
-  DSPARK_MODEL="$DSPARK_MODEL" \
-  DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
   | python3 -c 'import pathlib,sys; secret=pathlib.Path(sys.argv[1]).read_text().strip(); data=sys.stdin.read(); sys.stdout.write(data.replace(secret, "[REDACTED]") if secret else data)' "$VLLM_ORIGIN_KEY_FILE" \
   | grep -E -- '--revision|--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--kv-cache-memory-bytes|--gpu-memory-utilization|--enforce-eager|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS'

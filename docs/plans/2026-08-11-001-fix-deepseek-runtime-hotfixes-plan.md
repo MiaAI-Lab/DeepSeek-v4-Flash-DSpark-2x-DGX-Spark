@@ -85,7 +85,7 @@ Both active ranks still contain the pre-Issue #21 encoder and pre-Issue #22 `nvf
 
 - KTD1. **Merge current upstream while resolving conflicts in favor of hardened contracts.** Port the two fixes as first-class branch behavior and accept only upstream changes that do not weaken R5-R12. (session-settled: user-approved — chosen over replacing the branch with upstream main: the existing hardening has already passed near-1M and soak acceptance.)
 - KTD2. **Bake Issue #22 into a derived image.** Build from the pinned digest and fail the build when the vulnerable source anchor or patched condition cannot be verified. (session-settled: user-approved — chosen over mutating running containers after startup: image-level identity makes both ranks reproducible and rollback attributable.)
-- KTD3. **Apply Issue #21 after encoder installation.** Mount the versioned patch read-only and execute it in the compose startup command immediately after the checkpoint encoder copy. (session-settled: user-approved — chosen over patching only the base image: the runtime copy would overwrite a baked encoder fix.)
+- KTD3. **Apply Issue #21 after encoder installation.** Bake the versioned patcher into the derived image and execute that immutable copy in the compose startup command immediately after the checkpoint encoder copy. (session-settled: user-approved — chosen over patching the encoder itself only at image build: the runtime copy would overwrite that encoder fix.)
 - KTD4. **Make every hotfix fail closed.** Missing files, unknown source anchors, checksum divergence, patch verification failure, and rank mismatch stop startup or rollout. This tightens upstream scripts that currently warn or continue after an unsuccessful patch.
 - KTD5. **Prove behavior at the real boundaries.** Unit tests prove source transformation, compose tests prove installation order, live tool replay proves multi-turn semantics, and matched long-context probes prove kernel-path impact.
 - KTD6. **Keep one PR branch and one live cutover.** Reconcile `upstream/main` on `codex/dual-dgx-deepseek-hermes-smoke`, push reviewed commits to PR #23, and deploy only the exact pushed revision.
@@ -156,7 +156,7 @@ flowchart TB
 - **Requirements:** R1, R3, R6-R8; AE1, AE3; KTD2-KTD4.
 - **Dependencies:** U4.
 - **Files:** `recipe/Dockerfile.anemll-runtime-hotfixes`, `recipe/runtime-hotfixes.manifest.json`, `patches/hotfix-nvfp4-ds-mla-issue22.py`, `patches/hotfix-encoding-dsv4-issue21.py`, `build-anemll-runtime-hotfixes.sh`, `scripts/verify-runtime-hotfixes.py`, `tests/test_runtime_hotfixes.py`, `.env.dspark.example`.
-- **Approach:** Add idempotent source transformations with strict source anchors. Bake Issue #22 during image construction. Install the Issue #21 patch artifact into the derived image for post-copy use. Build from an allowlisted temporary context and a versioned provenance manifest; record labels and a machine-readable receipt whose values are independently recomputed during verification.
+- **Approach:** Add idempotent source transformations with strict source anchors. Bake Issue #22 during image construction and install the Issue #21 patcher into the same immutable image for post-copy execution. Build from an allowlisted temporary context and a versioned provenance manifest; record labels and a machine-readable receipt whose values are independently recomputed during verification.
 - **Execution note:** Start with tests that demonstrate the vulnerable source transformations and fail when either patch is missing or already differs unexpectedly.
 - **Patterns to follow:** Manifest hashing in `scripts/verify-artifact-manifest.py`, immutable pin validation in `validate-dspark-config.sh`, and the existing patch documentation in `docs/PATCHES.md`.
 - **Test scenarios:**
@@ -176,7 +176,7 @@ flowchart TB
 - **Requirements:** R5-R8, R10; AE3, AE5; KTD2-KTD4.
 - **Dependencies:** U1.
 - **Files:** `docker-compose.dspark.yml`, `start-deepseek-v4-flash-dspark.sh`, `validate-dspark-config.sh`, `scripts/generate-node-env.py`, `tests/test_artifact_contract.py`, `tests/test_lifecycle_contract.py`, `tests/test_deploy_gate.py`.
-- **Approach:** Run Issue #21 after encoder copy and before vLLM import. Project the derived image identity and patch inputs through the existing allowlisted head/worker environment. Transfer the canonical head-built image and one SHA-addressed, allowlisted release archive to the worker before compose validation. Fail preflight on missing files, ordering errors, archive/image mismatch, or rank divergence.
+- **Approach:** Run the patcher baked into the derived image after encoder copy and before vLLM import. Project the derived image identity and provenance inputs through the existing allowlisted head/worker environment. Transfer the canonical head-built image and one SHA-addressed, allowlisted release archive to the worker before compose validation. Fail preflight on missing image-baked patchers, ordering errors, archive/image mismatch, or rank divergence.
 - **Execution note:** Prove rendered startup ordering and head/worker parity before invoking Docker on either node.
 - **Patterns to follow:** Worker env allowlisting, worker-first lifecycle, compose rendering, and cleanup-on-failure contracts already covered by the listed tests.
 - **Test scenarios:**

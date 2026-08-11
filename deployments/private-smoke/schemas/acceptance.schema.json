@@ -95,6 +95,7 @@
         "external_gateway",
         "prompt_reasoning_canary",
         "full_context",
+        "long_context_decode",
         "scheduler"
       ],
       "properties": {
@@ -141,6 +142,9 @@
           "const": true
         },
         "full_context": {
+          "const": true
+        },
+        "long_context_decode": {
           "const": true
         },
         "scheduler": {

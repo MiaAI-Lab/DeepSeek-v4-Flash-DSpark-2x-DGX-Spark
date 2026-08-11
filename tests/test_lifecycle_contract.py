@@ -148,6 +148,21 @@ def free_port():
 
 
 class LifecycleContractTest(unittest.TestCase):
+    def test_runtime_hotfixes_are_fail_closed_before_vllm_import(self):
+        compose = (ROOT / "docker-compose.dspark.yml").read_text()
+        start = (ROOT / "start-deepseek-v4-flash-dspark.sh").read_text()
+        copy_at = compose.index('cp "$${ENCODING_SOURCE}"')
+        issue21_at = compose.index(
+            "python3 /opt/dspark-hotfixes/hotfix-encoding-dsv4-issue21.py"
+        )
+        serve_at = compose.index("exec /usr/local/bin/vllm serve")
+        self.assertLess(copy_at, issue21_at)
+        self.assertLess(issue21_at, serve_at)
+        self.assertNotIn("hotfix-encoding-dsv4-issue21.py:ro", compose)
+        self.assertNotIn("DSPARK_SKIP_HOTFIX", start)
+        self.assertNotIn("restart vllm-dspark", start)
+        self.assertNotIn("hotfix-nvfp4-ds-mla-issue22.sh", start)
+
     def test_origin_proxy_authenticates_from_file_and_strips_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             key_file = Path(tmp) / "origin.key"
@@ -452,6 +467,23 @@ class LifecycleContractTest(unittest.TestCase):
             ],
         )
 
+    def test_tool_history_render_matches_string_and_dictionary_arguments(self):
+        smoke = load_semantic_smoke()
+        seen = []
+
+        def fake_render(url, _key, payload=None, timeout=300):
+            self.assertEqual(url, "http://origin/tokenize")
+            arguments = payload["messages"][1]["tool_calls"][0]["function"]["arguments"]
+            seen.append(type(arguments))
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            rendered = "\n".join(f'{key}={value}' for key, value in arguments.items())
+            return {"token_strs": [rendered], "count": 2}
+
+        with mock.patch.object(smoke, "request_json_url", side_effect=fake_render):
+            smoke.run_tool_history_render("http://origin/v1", "secret", "model")
+        self.assertEqual(seen, [str, dict])
+
     def test_semantic_smoke_requires_unknown_field_http_400(self):
         smoke = load_semantic_smoke()
         error = urllib.error.HTTPError(
@@ -637,6 +669,30 @@ class LifecycleContractTest(unittest.TestCase):
         )
         self.assertTrue(result["checks"]["near_max_prefill"])
 
+    def test_long_context_decode_gate_requires_repeated_64_token_streams(self):
+        probe = load_script("probe-long-context-decode.py")
+        healthy = [
+            {"post_first_tokens": 64, "decode_tps": 17.3},
+            {"post_first_tokens": 64, "decode_tps": 17.1},
+        ]
+        accepted = probe.evaluate_decode_gate(healthy, baseline_tps=1.0)
+        self.assertTrue(accepted["passed"])
+        too_short = probe.evaluate_decode_gate(
+            [{"post_first_tokens": 63, "decode_tps": 20.0}, healthy[1]],
+            baseline_tps=1.0,
+        )
+        self.assertFalse(too_short["passed"])
+        slow = probe.evaluate_decode_gate(
+            [{"post_first_tokens": 64, "decode_tps": 9.9}] * 2,
+            baseline_tps=1.0,
+        )
+        self.assertFalse(slow["passed"])
+        source = (SCRIPTS / "probe-long-context-decode.py").read_text()
+        self.assertIn('"stream": True', source)
+        self.assertIn('"temperature": 0', source)
+        self.assertIn('"reasoning_effort": "none"', source)
+        self.assertIn("identical_prompt_sha256", source)
+
     def test_u3_remote_observation_preserves_shell_command_boundaries(self):
         for name in ("probe-full-context.py", "benchmark-scheduler.py"):
             with self.subTest(script=name):
@@ -653,7 +709,11 @@ class LifecycleContractTest(unittest.TestCase):
         self.assertIn("VLLM_PROXY_UPSTREAM_TIMEOUT must be an integer", start)
 
     def test_u3_operator_scripts_require_mode_0600_key_files(self):
-        for script_name in ("probe-full-context.py", "benchmark-scheduler.py"):
+        for script_name in (
+            "probe-full-context.py",
+            "probe-long-context-decode.py",
+            "benchmark-scheduler.py",
+        ):
             with self.subTest(script=script_name), tempfile.TemporaryDirectory() as tmp:
                 script = load_script(script_name)
                 path = Path(tmp) / "origin.key"

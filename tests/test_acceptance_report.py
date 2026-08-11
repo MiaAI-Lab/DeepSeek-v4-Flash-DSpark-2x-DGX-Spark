@@ -89,6 +89,8 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertIn('previous_attempt="$FULL_CONTEXT_EVIDENCE.attempt-$attempt"', text)
         self.assertIn('mv "$FULL_CONTEXT_EVIDENCE" "$previous_attempt"', text)
         self.assertIn("reuse_full_context=1", text)
+        self.assertIn("reuse_long_context_decode=1", text)
+        self.assertIn('report.get("baseline_tps", -1)', text)
         self.assertIn("age > 24 * 3600", text)
         self.assertIn("Missing pre-capacity acceptance evidence", text)
         self.assertIn("Capacity resume requires exactly two Hermes result files", text)
@@ -99,7 +101,12 @@ class AcceptanceReportTest(unittest.TestCase):
         self.assertIn('benchmark-scheduler.py"', text)
         self.assertIn('"full-context", full_context_path', text)
         self.assertIn('"scheduler", scheduler_path', text)
-        self.assertIn('--required-gate full_context --required-gate scheduler', text)
+        self.assertIn(
+            '--required-gate full_context --required-gate long_context_decode --required-gate scheduler',
+            text,
+        )
+        self.assertIn("probe-long-context-decode.py", text)
+        self.assertIn("LONG_CONTEXT_DECODE_BASELINE_TPS", text)
 
     def test_direct_and_private_litellm_semantic_evidence_are_distinct(self):
         schema = json.loads((DEPLOY / "schemas/acceptance.schema.json").read_text())

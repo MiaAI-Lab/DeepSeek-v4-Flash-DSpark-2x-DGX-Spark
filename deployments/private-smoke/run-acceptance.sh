@@ -61,7 +61,7 @@ PY
 import hashlib, json
 h = "a" * 64
 performance = {"median_decode_tokens_per_second": 55.0, "p95_ttft_seconds": 2.0, "request_count": 24, "origin_completion_delta": 24, "accepted": True}
-gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged", "minefield", "external_gateway", "prompt_reasoning_canary", "full_context", "scheduler")}
+gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged", "minefield", "external_gateway", "prompt_reasoning_canary", "full_context", "long_context_decode", "scheduler")}
 pins = {"model_revision": "b" * 40, "runtime_image_digest": "sha256:" + h, "repo_commit": "c" * 40, "config_sha256": h}
 pin_hash = hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 chain = []; previous = "0" * 64
@@ -127,6 +127,7 @@ MINEFIELD_EVIDENCE="$RUN_DIR/minefield.json"
 EXTERNAL_GATEWAY_EVIDENCE="$RUN_DIR/external-gateway-auth.json"
 CANARY_EVIDENCE="$RUN_DIR/prompt-reasoning-canary-absence.json"
 FULL_CONTEXT_EVIDENCE="$RUN_DIR/full-context.json"
+LONG_CONTEXT_DECODE_EVIDENCE="$RUN_DIR/long-context-decode.json"
 SCHEDULER_EVIDENCE="$RUN_DIR/scheduler-current.json"
 SCHEDULER_BASELINE="${SCHEDULER_BASELINE:-$ROOT_DIR/artifacts/health-rollout/scheduler-baseline.json}"
 PROMPT_LOG_CANARY="DSPARK_PROMPT_LOG_CANARY_U5_20260809"
@@ -685,6 +686,39 @@ if [ "$reuse_full_context" -eq 0 ]; then
 fi
 "$SANITIZER" --scan-only <"$FULL_CONTEXT_EVIDENCE" >/dev/null
 
+FAILURE_STAGE="long-context-decode"
+: "${LONG_CONTEXT_DECODE_BASELINE_TPS:?LONG_CONTEXT_DECODE_BASELINE_TPS is required for the 5x regression gate}"
+reuse_long_context_decode=0
+if [ "$MODE" = "resume-capacity" ] && [ -e "$LONG_CONTEXT_DECODE_EVIDENCE" ]; then
+  if python3 - "$LONG_CONTEXT_DECODE_EVIDENCE" "$LONG_CONTEXT_DECODE_BASELINE_TPS" <<'PY'
+import json, math, os, sys, time
+path, baseline = sys.argv[1], float(sys.argv[2])
+report = json.load(open(path))
+age = time.time() - os.stat(path).st_mtime
+if (age < 0 or age > 24 * 3600 or report.get("gate", {}).get("passed") is not True
+        or not math.isclose(report.get("baseline_tps", -1), baseline)):
+    raise SystemExit(1)
+PY
+  then
+    reuse_long_context_decode=1
+  else
+    attempt=1
+    previous_attempt="$LONG_CONTEXT_DECODE_EVIDENCE.attempt-$attempt"
+    while [ -e "$previous_attempt" ]; do
+      attempt=$((attempt + 1))
+      previous_attempt="$LONG_CONTEXT_DECODE_EVIDENCE.attempt-$attempt"
+    done
+    mv "$LONG_CONTEXT_DECODE_EVIDENCE" "$previous_attempt"
+  fi
+fi
+if [ "$reuse_long_context_decode" -eq 0 ]; then
+  python3 "$ROOT_DIR/scripts/probe-long-context-decode.py" \
+    --env-file "$ENV_FILE" --key-file "$VLLM_ORIGIN_KEY_FILE" \
+    --baseline-tps "$LONG_CONTEXT_DECODE_BASELINE_TPS" \
+    --output "$LONG_CONTEXT_DECODE_EVIDENCE"
+fi
+"$SANITIZER" --scan-only <"$LONG_CONTEXT_DECODE_EVIDENCE" >/dev/null
+
 FAILURE_STAGE="scheduler"
 [ -f "$SCHEDULER_BASELINE" ] || { echo "Missing scheduler baseline: $SCHEDULER_BASELINE" >&2; false; }
 python3 "$ROOT_DIR/scripts/benchmark-scheduler.py" \
@@ -719,6 +753,7 @@ minefield_path = run_dir / "minefield.json"
 external_gateway_path = run_dir / "external-gateway-auth.json"
 canary_path = run_dir / "prompt-reasoning-canary-absence.json"
 full_context_path = run_dir / "full-context.json"
+long_context_decode_path = run_dir / "long-context-decode.json"
 scheduler_path = run_dir / "scheduler-current.json"
 def load(path): return json.loads(path.read_text())
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -732,9 +767,11 @@ env = env_file(env_path)
 manifest, direct, gateway, nodes, soak, interim = map(load, (manifest_path, direct_path, gateway_path, node_path, soak_path, interim_path))
 direct_semantic, litellm_semantic = map(load, (direct_semantic_path, litellm_semantic_path))
 minefield, external_gateway, canary = map(load, (minefield_path, external_gateway_path, canary_path))
-full_context, scheduler = map(load, (full_context_path, scheduler_path))
+full_context, long_context_decode, scheduler = map(load, (full_context_path, long_context_decode_path, scheduler_path))
 if full_context.get("gate", {}).get("passed") is not True:
     raise SystemExit("full-context evidence is not accepted")
+if long_context_decode.get("gate", {}).get("passed") is not True:
+    raise SystemExit("long-context decode evidence is not accepted")
 if scheduler.get("gate", {}).get("passed") is not True:
     raise SystemExit("scheduler evidence is not accepted")
 if direct_semantic != {"profile": "direct-origin", "ready": True, "state": "semantic-ready", "wall_timeout_seconds": 120}:
@@ -762,7 +799,7 @@ if canary != {"schema_version": 1, "prompt_reasoning_canaries_absent": True, "me
 if not all(item["accepted"] and item["shared_state"]["unchanged"] for item in hermes):
     raise SystemExit("Hermes evidence is not accepted")
 runtime = env["DSPARK_VLLM_IMAGE"]
-if "@sha256:" not in runtime: raise SystemExit("runtime image is not pinned")
+if not (runtime.startswith("sha256:") or "@sha256:" in runtime): raise SystemExit("runtime image is not pinned")
 import re
 capacity_matches = []
 started_at = subprocess.check_output(
@@ -790,12 +827,13 @@ hermes_pin_inputs = [root / "deployments/private-smoke/hermes/config.yaml", root
 expected_hermes_pin = hashlib.sha256(b"".join(path.read_bytes() for path in hermes_pin_inputs)).hexdigest()
 if {item["suite_pin_sha256"] for item in hermes} != {expected_hermes_pin}:
     raise SystemExit("Hermes pin changed between functional runs")
-config_inputs = [root / "docker-compose.dspark.yml", root / "deployments/private-smoke/litellm/config.yaml", *hermes_pin_inputs, fixture_path]
+config_inputs = [root / "docker-compose.dspark.yml", root / "recipe/runtime-hotfixes.manifest.json", root / "patches/hotfix-encoding-dsv4-issue21.py", root / "patches/hotfix-nvfp4-ds-mla-issue22.py", root / "deployments/private-smoke/litellm/config.yaml", *hermes_pin_inputs, fixture_path]
 config_hash = hashlib.sha256(b"".join(path.read_bytes() for path in config_inputs)).hexdigest()
 repo_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-pins = {"model_revision": env["DSPARK_MODEL_REVISION"], "runtime_image_digest": "sha256:" + runtime.rsplit("@sha256:", 1)[1], "repo_commit": repo_commit, "config_sha256": config_hash}
+runtime_digest = runtime if runtime.startswith("sha256:") else "sha256:" + runtime.rsplit("@sha256:", 1)[1]
+pins = {"model_revision": env["DSPARK_MODEL_REVISION"], "runtime_image_digest": runtime_digest, "repo_commit": repo_commit, "config_sha256": config_hash}
 pin_hash = hashlib.sha256(json.dumps(pins, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-evidence = [("qwen-manifest", manifest_path), ("semantic-direct-origin", direct_semantic_path), ("semantic-private-litellm", litellm_semantic_path), ("direct", direct_path), ("gateway", gateway_path), ("nodes", node_path), ("hermes-a", hermes_a), ("hermes-b", hermes_b), ("soak", soak_path), ("full-context", full_context_path), ("scheduler", scheduler_path), ("minefield", minefield_path), ("external-gateway-auth", external_gateway_path), ("prompt-reasoning-canary", canary_path), ("public-gateway", gateway_snapshot)]
+evidence = [("qwen-manifest", manifest_path), ("semantic-direct-origin", direct_semantic_path), ("semantic-private-litellm", litellm_semantic_path), ("direct", direct_path), ("gateway", gateway_path), ("nodes", node_path), ("hermes-a", hermes_a), ("hermes-b", hermes_b), ("soak", soak_path), ("full-context", full_context_path), ("long-context-decode", long_context_decode_path), ("scheduler", scheduler_path), ("minefield", minefield_path), ("external-gateway-auth", external_gateway_path), ("prompt-reasoning-canary", canary_path), ("public-gateway", gateway_snapshot)]
 previous = "0" * 64; chain = []
 for name, path in evidence:
     try:
@@ -810,7 +848,7 @@ def summary(item):
     value = item["summary"]
     return {"median_decode_tokens_per_second": value["median_decode_tokens_per_second"], "p95_ttft_seconds": value["p95_ttft_seconds"], "request_count": value["expected_completions"], "origin_completion_delta": value["metric_delta"], "accepted": value["accepted"]}
 d, g = summary(direct), summary(gateway)
-gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged", "minefield", "external_gateway", "prompt_reasoning_canary", "full_context", "scheduler")}
+gates = {name: True for name in ("fabric", "artifacts", "qwen_stopped", "direct", "gateway", "hermes", "performance", "soak", "isolation", "sanitization", "public_gateway_unchanged", "minefield", "external_gateway", "prompt_reasoning_canary", "full_context", "long_context_decode", "scheduler")}
 report = {
   "schema_version": 2, "run_id": manifest["run_id"], "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "accepted": True,
   "manifest_sha256": digest(manifest_path), "fixture_sha256": digest(fixture_path), "pin_set_sha256": pin_hash, "chain_head_sha256": previous,
@@ -842,7 +880,7 @@ PY
 python3 "$ROOT_DIR/scripts/qwen_manifest.py" verify-report --manifest "$QWEN_MANIFEST" \
   --report "$FINAL_REPORT" --max-age-hours 24 --required-gate fabric --required-gate artifacts \
   --required-gate direct --required-gate hermes \
-  --required-gate full_context --required-gate scheduler
+  --required-gate full_context --required-gate long_context_decode --required-gate scheduler
 
 trap - ERR
 echo "Acceptance passed and is purge_eligible: $FINAL_REPORT"

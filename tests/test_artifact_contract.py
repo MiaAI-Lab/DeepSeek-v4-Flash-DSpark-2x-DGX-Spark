@@ -104,6 +104,18 @@ class ArtifactContractTest(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(expected, result.stderr)
 
+    def test_validator_accepts_an_immutable_local_derived_image_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            image_id = "sha256:" + "a" * 64
+            env_file, _ = self.write_env(directory, image=image_id)
+            result = run(
+                "bash",
+                ROOT / "validate-dspark-config.sh",
+                env={**os.environ, "ENV_FILE": str(env_file), "VALIDATE_RENDER": "0"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_prepare_passes_revision_to_online_and_offline_snapshot_resolution(self):
         script = (ROOT / "prepare-dspark-model-cache.sh").read_text()
         self.assertGreaterEqual(script.count('revision=os.environ["DSPARK_MODEL_REVISION"]'), 2)

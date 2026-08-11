@@ -1,0 +1,23 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+ARG ISSUE21_UPSTREAM_COMMIT
+ARG ISSUE22_UPSTREAM_COMMIT
+LABEL org.opencontainers.image.title="DeepSeek V4 Flash DSpark runtime hotfixes" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      ai.mia.issue21.upstream="${ISSUE21_UPSTREAM_COMMIT}" \
+      ai.mia.issue22.upstream="${ISSUE22_UPSTREAM_COMMIT}"
+
+COPY patches/hotfix-encoding-dsv4-issue21.py /opt/dspark-hotfixes/hotfix-encoding-dsv4-issue21.py
+COPY patches/hotfix-nvfp4-ds-mla-issue22.py /opt/dspark-hotfixes/hotfix-nvfp4-ds-mla-issue22.py
+
+RUN python3 /opt/dspark-hotfixes/hotfix-nvfp4-ds-mla-issue22.py \
+    && python3 - <<'PY'
+from pathlib import Path
+
+path = Path("/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/flashmla_sparse.py")
+expected = 'self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")'
+if expected not in path.read_text(encoding="utf-8"):
+    raise SystemExit("Issue #22 runtime verification failed")
+PY

@@ -373,6 +373,99 @@ def run_history_preservation(
         assert_marker_inside_thinking(preserved, marker)
 
 
+def tool_history_payload(model: str, arguments) -> dict:
+    return {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": "Record the first synthetic expense."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_synthetic_1",
+                    "type": "function",
+                    "function": {"name": "record_expense", "arguments": arguments},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_synthetic_1",
+                "content": '{"status":"recorded","synthetic":true}',
+            },
+            {"role": "user", "content": "Continue with the second synthetic expense."},
+        ],
+        "chat_template_kwargs": {
+            "reasoning_effort": "none",
+            "drop_thinking": False,
+        },
+        "add_generation_prompt": True,
+        "return_token_strs": True,
+    }
+
+
+def run_tool_history_render(base_url: str, key: str, model: str) -> None:
+    url = tokenize_url(base_url)
+    arguments = {"amount": 125, "scope": "synthetic"}
+    rendered_string = rendered_prompt(
+        request_json_url(url, key, tool_history_payload(model, json.dumps(arguments)))
+    )
+    rendered_dict = rendered_prompt(
+        request_json_url(url, key, tool_history_payload(model, arguments))
+    )
+    if rendered_string != rendered_dict:
+        raise AssertionError("string and dictionary tool history rendered differently")
+    if 'name="arguments"' in rendered_dict:
+        raise AssertionError("tool history wrapped dictionary under arguments parameter")
+
+
+def run_multiturn_tool(
+    base_url: str, key: str, model: str, tools: list[dict], first_message: dict
+) -> None:
+    calls = first_message.get("tool_calls")
+    if not calls:
+        raise AssertionError("first tool turn did not include tool_calls")
+    first_call = calls[0]
+    if first_call.get("function", {}).get("name") != "record_expense":
+        raise AssertionError("first tool turn did not select record_expense")
+    arguments = first_call.get("function", {}).get("arguments")
+    if isinstance(arguments, str):
+        json.loads(arguments)
+    elif not isinstance(arguments, dict):
+        raise AssertionError("first tool arguments were neither JSON text nor a dictionary")
+    continuation = request_json(
+        base_url,
+        key,
+        "/chat/completions",
+        {
+            "model": model,
+            "messages": [
+                {"role": "user", "content": "Record a synthetic personal expense of 125."},
+                first_message,
+                {
+                    "role": "tool",
+                    "tool_call_id": first_call.get("id", "call_synthetic_1"),
+                    "content": '{"status":"recorded","synthetic":true}',
+                },
+                {
+                    "role": "user",
+                    "content": "Now use record_expense for a synthetic business expense of 2.",
+                },
+            ],
+            "tools": tools,
+            "tool_choice": {"type": "function", "function": {"name": "record_expense"}},
+            "temperature": 0,
+        },
+    )
+    second_calls = assert_message(continuation).get("tool_calls")
+    if not second_calls or second_calls[0].get("function", {}).get("name") != "record_expense":
+        raise AssertionError("second tool turn did not select record_expense")
+    second_arguments = second_calls[0]["function"].get("arguments")
+    if isinstance(second_arguments, str):
+        json.loads(second_arguments)
+    elif not isinstance(second_arguments, dict):
+        raise AssertionError("second tool arguments were not parseable")
+
+
 def run_reasoning_modes(base_url: str, key: str, model: str) -> None:
     for mode, template_kwargs in THINKING_MODE_KWARGS.items():
         response = request_json(
@@ -494,6 +587,7 @@ def run_once(base_url: str, key: str, model: str, *, profile: str) -> None:
         # `/tokenize` and the origin-only strict-field canary intentionally are
         # not public LiteLLM routes; validate them at the authenticated origin.
         run_history_preservation(base_url, key, model)
+        run_tool_history_render(base_url, key, model)
         run_unknown_field_rejection(base_url, key, model)
     run_cap_probe(base_url, key, model)
 
@@ -521,10 +615,8 @@ def run_once(base_url: str, key: str, model: str, *, profile: str) -> None:
             "temperature": 0,
         },
     )
-    calls = assert_message(tool_response).get("tool_calls")
-    if not calls or calls[0].get("function", {}).get("name") != "record_expense":
-        raise AssertionError("tool_calls did not select record_expense")
-    json.loads(calls[0]["function"]["arguments"])
+    first_message = assert_message(tool_response)
+    run_multiturn_tool(base_url, key, model, tools, first_message)
     run_stream(base_url, key, model)
 
 

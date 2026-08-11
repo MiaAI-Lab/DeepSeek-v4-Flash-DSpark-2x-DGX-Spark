@@ -30,7 +30,9 @@ if [ "$MODE" = "prepare" ]; then
   nccl_commit="da0b547b1b9c6e3b1d4c15578087874522ae3761"
   nccl_image="dspark-nccl-tests:$nccl_commit"
   nccl_context="$(mktemp -d /tmp/dspark-nccl-build.XXXXXX)"
-  trap 'find "$nccl_context" -depth -delete' EXIT
+  runtime_export_dir="$(mktemp -d /tmp/dspark-runtime-export.XXXXXX)"
+  runtime_archive="$runtime_export_dir/runtime-hotfixes.tar"
+  trap 'find "$nccl_context" -depth -delete; find "$runtime_export_dir" -depth -delete' EXIT
   docker build -t "$nccl_image" -f - "$nccl_context" \
     <"$ROOT_DIR/deployments/private-smoke/network/Dockerfile.nccl-tests"
   head_nccl="$(docker image inspect "$nccl_image" -f '{{.Id}}')"
@@ -43,6 +45,23 @@ if [ "$MODE" = "prepare" ]; then
   fi
   worker_nccl="$(ssh "$WORKER_HOST" "docker image inspect '$nccl_image' -f '{{.Id}}'")"
   [ "$head_nccl" = "$worker_nccl" ] || { echo "NCCL test image IDs differ between ranks." >&2; exit 1; }
+
+  runtime_tag="deepseek-v4-flash-dspark:runtime-hotfixes"
+  "$ROOT_DIR/build-anemll-runtime-hotfixes.sh" --tag "$runtime_tag"
+  head_runtime="$(docker image inspect "$runtime_tag" -f '{{.Id}}')"
+  worker_runtime="$(ssh "$WORKER_HOST" "docker image inspect '$runtime_tag' -f '{{.Id}}'" 2>/dev/null || true)"
+  if [ "$head_runtime" != "$worker_runtime" ]; then
+    docker save "$runtime_tag" -o "$runtime_archive"
+    ssh -o BatchMode=yes "$WORKER_HOST" docker load <"$runtime_archive" >/dev/null
+  fi
+  worker_runtime="$(ssh "$WORKER_HOST" "docker image inspect '$runtime_tag' -f '{{.Id}}'")"
+  [ "$head_runtime" = "$worker_runtime" ] || {
+    echo "Runtime hotfix image IDs differ between ranks." >&2
+    exit 1
+  }
+  python3 "$ROOT_DIR/scripts/verify-runtime-hotfixes.py" \
+    --repo-root "$ROOT_DIR" --image "$runtime_tag"
+  printf 'Set DSPARK_VLLM_IMAGE=%s in the deployment env before preflight.\n' "$head_runtime"
   ENV_FILE="$ENV_FILE" "$ROOT_DIR/prepare-dspark-model-cache.sh"
   exit 0
 fi
