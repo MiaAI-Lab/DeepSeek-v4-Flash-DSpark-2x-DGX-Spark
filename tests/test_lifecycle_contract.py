@@ -707,6 +707,15 @@ class LifecycleContractTest(unittest.TestCase):
         ]
         accepted = probe.evaluate_decode_gate(healthy, baseline_tps=1.0)
         self.assertTrue(accepted["passed"])
+        self.assertEqual(accepted["baseline_mode"], "vulnerable")
+        healthy_baseline = probe.evaluate_decode_gate(healthy, baseline_tps=17.0)
+        self.assertTrue(healthy_baseline["passed"])
+        self.assertEqual(healthy_baseline["baseline_mode"], "healthy")
+        healthy_regression = probe.evaluate_decode_gate(
+            [{"post_first_tokens": 64, "decode_tps": 12.0}] * 2,
+            baseline_tps=17.0,
+        )
+        self.assertFalse(healthy_regression["passed"])
         too_short = probe.evaluate_decode_gate(
             [{"post_first_tokens": 63, "decode_tps": 20.0}, healthy[1]],
             baseline_tps=1.0,
@@ -723,7 +732,8 @@ class LifecycleContractTest(unittest.TestCase):
         source = (SCRIPTS / "probe-long-context-decode.py").read_text()
         self.assertIn('"stream": True', source)
         self.assertIn('"temperature": 0', source)
-        self.assertIn('"reasoning_effort": "none"', source)
+        self.assertIn('"reasoning_effort": "max"', source)
+        self.assertIn("healthy_baseline_non_regression", source)
         self.assertIn("identical_prompt_sha256", source)
         self.assertIn("evidence_identity", source)
 

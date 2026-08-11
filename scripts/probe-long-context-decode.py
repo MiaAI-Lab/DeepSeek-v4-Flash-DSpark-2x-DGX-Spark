@@ -15,6 +15,7 @@ import urllib.request
 
 MIN_POST_FIRST_TOKENS = 64
 MIN_DECODE_TPS = 10.0
+HEALTHY_BASELINE_FLOOR_RATIO = 0.8
 PROMPT_SUFFIX = (
     "\n\nDesign a failure-isolating validation plan for a two-node distributed "
     "model-serving rollout. Reason through the tradeoffs and provide at least "
@@ -165,8 +166,24 @@ def evaluate_decode_gate(trials: list[dict], baseline_tps: float | None = None) 
         "absolute_decode_tps": minimum_tps >= MIN_DECODE_TPS,
     }
     if baseline_tps is not None:
-        checks["five_x_vulnerable_baseline"] = minimum_tps >= baseline_tps * 5
-    return {"passed": all(checks.values()), "checks": checks, "minimum_decode_tps": minimum_tps}
+        if baseline_tps < MIN_DECODE_TPS:
+            baseline_mode = "vulnerable"
+            relative_threshold = baseline_tps * 5
+            checks["five_x_vulnerable_baseline"] = minimum_tps >= relative_threshold
+        else:
+            baseline_mode = "healthy"
+            relative_threshold = baseline_tps * HEALTHY_BASELINE_FLOOR_RATIO
+            checks["healthy_baseline_non_regression"] = minimum_tps >= relative_threshold
+    else:
+        baseline_mode = None
+        relative_threshold = None
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "minimum_decode_tps": minimum_tps,
+        "baseline_mode": baseline_mode,
+        "relative_threshold_tps": relative_threshold,
+    }
 
 
 def main() -> int:

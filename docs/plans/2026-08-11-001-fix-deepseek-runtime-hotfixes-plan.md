@@ -58,7 +58,7 @@ Both active ranks still contain the pre-Issue #21 encoder and pre-Issue #22 `nvf
 - AE1. Given identical tool arguments represented once as JSON text and once as a dictionary, when the patched encoder renders them, then the DSML parameter sequence is identical and contains no synthetic `arguments` parameter.
 - AE2. Given a completed first tool call and tool result in history, when the model receives a follow-up request, then it emits a valid second tool call with the requested function name and parseable arguments.
 - AE3. Given `nvfp4_ds_mla`, when the runtime is inspected before vLLM starts, then the optimized cache-path condition includes both `fp8_ds_mla` and `nvfp4_ds_mla`.
-- AE4. Given a matched 600K-or-greater prompt before and after cutover, when decode is measured, then the patched lane reaches at least 10 tok/s and at least five times the vulnerable baseline without OOM or restart.
+- AE4. Given a matched 600K-or-greater prompt before and after cutover, when decode is measured, then the patched lane reaches at least 10 tok/s and, when the measured baseline is below that floor, at least five times the vulnerable baseline. If the controlled pre-patch baseline is already healthy, the patched lane instead retains at least 80% of that baseline without OOM or restart.
 - AE5. Given the completed rollout, when both nodes are inspected, then source revision, image identity, model revision, patch checksums, runtime checksums, and rendered serve arguments match.
 - AE6. Given any failed live gate, when rollback executes, then the previous known-good DeepSeek lane returns worker-first and the existing direct-origin and LiteLLM credentials authenticate successfully.
 
@@ -89,6 +89,10 @@ Both active ranks still contain the pre-Issue #21 encoder and pre-Issue #22 `nvf
 - KTD4. **Make every hotfix fail closed.** Missing files, unknown source anchors, checksum divergence, patch verification failure, and rank mismatch stop startup or rollout. This tightens upstream scripts that currently warn or continue after an unsuccessful patch.
 - KTD5. **Prove behavior at the real boundaries.** Unit tests prove source transformation, compose tests prove installation order, live tool replay proves multi-turn semantics, and matched long-context probes prove kernel-path impact.
 - KTD6. **Keep one PR branch and one live cutover.** Reconcile `upstream/main` on `codex/dual-dgx-deepseek-hermes-smoke`, push reviewed commits to PR #23, and deploy only the exact pushed revision.
+
+### Live-evidence amendment (2026-08-11)
+
+The first cold 600K agentic observation reproduced roughly 1.14 tok/s but stopped after only 23 post-first tokens, so it could not satisfy the planned evidence interval. After the probe forced a long response, added a first-block rollout nonce, and matched Issue #22's `thinking: true` / `reasoning_effort: max` profile, the vulnerable source produced two complete 64-token intervals at 71.55 and 59.09 tok/s. This disproves the assumption that this cluster can always supply a sub-10 tok/s controlled baseline. AE4 therefore keeps the 5x requirement only when the measured baseline is actually vulnerable; otherwise it requires the absolute 10 tok/s floor plus an 80% non-regression floor. The source-level dispatch attestation remains mandatory in both cases.
 
 ### High-Level Technical Design
 
