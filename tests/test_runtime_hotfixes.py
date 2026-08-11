@@ -67,7 +67,10 @@ class RuntimeHotfixTest(unittest.TestCase):
         self.assertEqual(observed, 600_000)
         self.assertTrue(prompt.startswith(" dspark-probe-nonce-rollout-57f75ac"))
         self.assertTrue(prompt.endswith(probe.PROMPT_SUFFIX))
-        self.assertIn("integers 1 through 80", probe.PROMPT_SUFFIX)
+        self.assertIn("at least 12 numbered steps", probe.PROMPT_SUFFIX)
+        self.assertEqual(
+            probe.STREAM_CHAT_TEMPLATE_KWARGS["reasoning_effort"], "max"
+        )
 
     def test_issue21_dict_and_string_arguments_render_equivalently(self):
         hotfix = load_module("issue21", ISSUE21)

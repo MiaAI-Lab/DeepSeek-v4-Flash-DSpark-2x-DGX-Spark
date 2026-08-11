@@ -16,9 +16,16 @@ import urllib.request
 MIN_POST_FIRST_TOKENS = 64
 MIN_DECODE_TPS = 10.0
 PROMPT_SUFFIX = (
-    "\n\nOutput exactly the integers 1 through 80 in ascending order, "
-    "separated by one space. Do not add any other text and do not stop early."
+    "\n\nDesign a failure-isolating validation plan for a two-node distributed "
+    "model-serving rollout. Reason through the tradeoffs and provide at least "
+    "12 numbered steps, each as a complete sentence, followed by a conclusion. "
+    "Do not stop early."
 )
+STREAM_CHAT_TEMPLATE_KWARGS = {
+    "thinking": True,
+    "reasoning_effort": "max",
+    "drop_thinking": False,
+}
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -100,7 +107,7 @@ def stream_trial(base_url: str, key: str, model: str, prompt: str, timeout: floa
         "temperature": 0,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"reasoning_effort": "none", "drop_thinking": False},
+        "chat_template_kwargs": STREAM_CHAT_TEMPLATE_KWARGS,
     }
     request = urllib.request.Request(
         base_url.rstrip("/") + "/chat/completions",
@@ -207,6 +214,7 @@ def main() -> int:
         "baseline_tps": args.baseline_tps,
         "evidence_identity": args.evidence_identity,
         "prompt_nonce": prompt_nonce,
+        "chat_template_kwargs": STREAM_CHAT_TEMPLATE_KWARGS,
         "identical_prompt_sha256": __import__("hashlib").sha256(prompt.encode()).hexdigest(),
         "trials": trials,
         "gate": gate,
