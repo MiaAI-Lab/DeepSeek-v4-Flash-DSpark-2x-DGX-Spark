@@ -631,8 +631,15 @@ ragged `query_start_loc` path for mixed prefill/decode batches, and the early
 proposer, and measured concurrency numbers all build directly on that
 foundation.
 
+**[@u1tra_instinct](https://x.com/u1tra_instinct)** — special thanks for the
+optional abliterated weights path used when `ABLITERATED=1`:
+[drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32).
+
 ### Other contributors
 
+- **[@u1tra_instinct](https://x.com/u1tra_instinct)** — optional abliterated
+  weights:
+  [keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32)
 - **[drowzeys](https://github.com/drowzeys/) / Keys concurrency patch:**
   [Keys-Concurrency-Patch-for-DSpark-DeepSeek-V4-Flash](https://github.com/drowzeys/Keys-Concurrency-Patch-for-DSpark-DeepSeek-V4-Flash)
 - **[tonyd2wild](https://github.com/tonyd2wild/)** — NVFP4 1M recipe lineage,
@@ -791,8 +798,14 @@ Stage-C needs `IMAGE_PYTHON=/opt/env/bin/python`.
 | `0` | Official: [`deepseek-ai/DeepSeek-V4-Flash-0731`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) @ `DSPARK_REVISION` (default **`9e165c30e2704aec5d9d593cce3eebd58bbef1cb`**) |
 | `1` | Abliterated: [`drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32`](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32) (optional `DSPARK_REVISION_ABLITERATED`) |
 
-The abliterated lane is the Keys GA-0731 DSpark build on Hugging Face:
+The abliterated lane uses this Hugging Face checkpoint (do not substitute a
+different abliterated id unless you intentionally override
+`DSPARK_MODEL_ABLITERATED`):
+
 https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32
+
+Special thanks to [@u1tra_instinct](https://x.com/u1tra_instinct) for that
+abliterated weights path.
 
 `start-deepseek-v4-flash-dspark.sh` sets `DSPARK_MODEL` from this flag (do not
 set `DSPARK_MODEL` by hand). Prepare and serve both honor the revision pin
