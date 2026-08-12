@@ -1,0 +1,55 @@
+# Narrow mitigation for vLLM's shared-memory broadcast spin wait.
+#
+# Build example:
+#   docker build \
+#     --build-arg BASE_IMAGE='ghcr.io/anemll/dspark-vllm-gx10:0.1.1@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8' \
+#     -t vllm-dspark-runtime:spin-wait-2ms \
+#     -f Dockerfile.vllm-spin-wait-2ms .
+ARG BASE_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="DSpark vLLM with 2ms SpinCondition wait"
+LABEL org.opencontainers.image.description="Changes only vLLM shm_broadcast.py SpinCondition busy_loop_s default from 1s to 2ms"
+LABEL com.seapy.vllm.spin-wait.busy-loop-seconds="0.002"
+
+RUN python3 - <<'PY'
+from pathlib import Path
+
+path = Path(
+    "/usr/local/lib/python3.12/dist-packages/vllm/distributed/"
+    "device_communicators/shm_broadcast.py"
+)
+old = "busy_loop_s: float = 1,"
+new = "busy_loop_s: float = 0.002,"
+text = path.read_text()
+
+if text.count(old) != 1:
+    raise SystemExit(
+        f"refusing to patch {path}: expected exactly one {old!r}, "
+        f"found {text.count(old)}"
+    )
+if new in text:
+    raise SystemExit(f"refusing to patch {path}: {new!r} already exists")
+
+path.write_text(text.replace(old, new, 1))
+patched = path.read_text()
+if patched.count(new) != 1 or old in patched:
+    raise SystemExit(f"post-patch verification failed for {path}")
+print(f"patched {path}: {old!r} -> {new!r}")
+PY
+
+RUN python3 - <<'PY'
+from pathlib import Path
+
+path = Path(
+    "/usr/local/lib/python3.12/dist-packages/vllm/distributed/"
+    "device_communicators/shm_broadcast.py"
+)
+lines = [
+    line.strip()
+    for line in path.read_text().splitlines()
+    if "busy_loop_s: float" in line
+]
+assert lines == ["busy_loop_s: float = 0.002,"], lines
+print(lines)
+PY
