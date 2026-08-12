@@ -60,6 +60,41 @@ if [ -n "${DSPARK_REVISION:-}" ]; then
 else
   echo "  revision: (default branch tip / unpinned)"
 fi
+
+# Warn when the pinned revision is not in the local HF cache: starting the
+# stack would silently begin a very large download (~155 GB for 0731). This is
+# easy to hit when upgrading a deployment that predates the issue #19 pin, as
+# its cached snapshot is whatever `main` was at install time.
+check_revision_cached() {
+  [ -n "${DSPARK_REVISION:-}" ] || return 0
+
+  hf_home="${HF_HOME:-${DSPARK_HF_CACHE:-$HOME/.cache/huggingface}}"
+  case "$hf_home" in
+    */huggingface) hub_dir="$hf_home/hub" ;;
+    *) hub_dir="$hf_home/hub" ;;
+  esac
+  model_dir="$hub_dir/models--$(printf '%s' "$DSPARK_MODEL" | sed 's|/|--|g')"
+  snapshots_dir="$model_dir/snapshots"
+
+  # No local cache at all: a first-time install is expected to download.
+  [ -d "$snapshots_dir" ] || return 0
+  [ -d "$snapshots_dir/$DSPARK_REVISION" ] && return 0
+
+  cached="$(ls -1 "$snapshots_dir" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+  [ -n "$cached" ] || return 0
+
+  echo ""
+  echo "  [WARN] Pinned revision is NOT in the local HF cache:"
+  echo "           pinned: $DSPARK_REVISION"
+  echo "           cached: $cached"
+  echo "         Starting will download the full checkpoint (~155 GB for 0731)."
+  echo "         To keep using the cached weights, set in $ENV_FILE on BOTH nodes:"
+  echo "           DSPARK_REVISION=${cached%% *}"
+  echo "         To fetch the pinned revision deliberately, run"
+  echo "         ./prepare-dspark-model-cache.sh first."
+  echo ""
+}
+check_revision_cached
 echo "  model: ${DSPARK_MODEL}"
 echo "  served model: ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
 echo "  max model len: ${MAX_MODEL_LEN:-1048576}"
