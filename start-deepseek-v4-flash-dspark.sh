@@ -234,20 +234,18 @@ resolve_rocev2_gid_index() {
   local hex remote
   hex="$(ipv4_to_gid_suffix "$match_ip")" || return 1
   remote=$(
-    cat <<EOF
-hca=$(printf '%q' "$hca")
-hex=$(printf '%q' "$hex")
-for g in /sys/class/infiniband/\$hca/ports/1/gids/*; do
-  [ -e "\$g" ] || continue
-  i=\${g##*/}
-  t=\$(cat /sys/class/infiniband/\$hca/ports/1/gid_attrs/types/\$i 2>/dev/null || true)
-  [ "\$t" = "RoCE v2" ] || continue
-  case \$(cat "\$g" 2>/dev/null) in
-    *ffff:\${hex}) echo "\$i"; exit 0 ;;
-  esac
-done
-exit 1
-EOF
+    printf 'hca=%q\nhex=%q\n' "$hca" "$hex"
+    printf '%s\n' \
+      'for g in /sys/class/infiniband/$hca/ports/1/gids/*; do' \
+      '  [ -e "$g" ] || continue' \
+      '  i=${g##*/}' \
+      '  t=$(cat /sys/class/infiniband/$hca/ports/1/gid_attrs/types/$i 2>/dev/null || true)' \
+      '  [ "$t" = "RoCE v2" ] || continue' \
+      '  case $(cat "$g" 2>/dev/null) in' \
+      '    *ffff:${hex}) echo "$i"; exit 0 ;;' \
+      '  esac' \
+      'done' \
+      'exit 1'
   )
   if [ -z "$ssh_target" ]; then
     bash -c "$remote"
