@@ -565,6 +565,12 @@ if [ -f "$DSPARK_ENCODING_ISSUE21_HOTFIX" ]; then
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ENCODING_ISSUE21_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-encoding-dsv4-issue21.py"
 fi
+DSPARK_ENCODING_ISSUE37_HOTFIX="${DSPARK_ENCODING_ISSUE37_HOTFIX:-$SCRIPT_DIR/patches/hotfix-encoding-dsv4-issue37.py}"
+if [ -f "$DSPARK_ENCODING_ISSUE37_HOTFIX" ]; then
+  echo "Syncing Issue #37 high/max encoder hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_ENCODING_ISSUE37_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-encoding-dsv4-issue37.py"
+fi
 DSPARK_ISSUE27_HOTFIX="${DSPARK_ISSUE27_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py}"
 if [ -f "$DSPARK_ISSUE27_HOTFIX" ]; then
   echo "Syncing Issue #27 partial-prefill hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
