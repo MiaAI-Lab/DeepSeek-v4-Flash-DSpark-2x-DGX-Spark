@@ -34,9 +34,13 @@ def build_prompt(base_url, model, target, nonce):
         text += unit * max(1, (target - count) // 3)
 
 
-def stream_one(base_url, model, prompt):
+def stream_one(base_url, model, prompt, thinking_token_budget=None, max_tokens=None):
     instruction = "\nReturn exactly 128 numbered lowercase English words, then stop."
     body = {"model": model, "messages": [{"role": "user", "content": prompt + instruction}], "stream": True, "stream_options": {"include_usage": True}, "temperature": 0.6, "top_p": 0.95}
+    if thinking_token_budget is not None:
+        body["thinking_token_budget"] = thinking_token_budget
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     request = urllib.request.Request(f"{base_url}/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     started = time.perf_counter()
     first = None
@@ -65,13 +69,16 @@ def stream_one(base_url, model, prompt):
     return {"ttft_s": ttft, "elapsed_s": finished - started, "prompt_tokens": prompt_tokens, "prefill_tok_s": prompt_tokens / max(0.001, ttft), "output_tokens": output_tokens, "output_tok_s": output_tokens / max(0.001, finished - (first or finished))}
 
 
-async def run_case(base_url, model, target_prompt_tokens, concurrency):
+async def run_case(base_url, model, target_prompt_tokens, concurrency, thinking_token_budget=None, max_tokens=None):
     prompts = await asyncio.gather(*[
         asyncio.to_thread(build_prompt, base_url, model, target_prompt_tokens, f"p{target_prompt_tokens}-c{concurrency}-r{index}")
         for index in range(concurrency)
     ])
     started = time.perf_counter()
-    results = await asyncio.gather(*[asyncio.to_thread(stream_one, base_url, model, prompt) for prompt in prompts])
+    results = await asyncio.gather(*[
+        asyncio.to_thread(stream_one, base_url, model, prompt, thinking_token_budget, max_tokens)
+        for prompt in prompts
+    ])
     elapsed = time.perf_counter() - started
     total = sum(item["output_tokens"] for item in results)
     return {"concurrency": concurrency, "elapsed_s": elapsed, "aggregate_tok_s": total / max(0.001, elapsed), "median_ttft_s": statistics.median(item["ttft_s"] for item in results), "median_prefill_tok_s": statistics.median(item["prefill_tok_s"] for item in results), "median_output_tok_s": statistics.median(item["output_tok_s"] for item in results), "requests": results}
@@ -83,6 +90,8 @@ async def main():
     parser.add_argument("--model", default="deepseek-v4-flash-0731")
     parser.add_argument("--prompt-lengths", default="256,2048,8192,32768,131072")
     parser.add_argument("--concurrency", default="1,2,4,6")
+    parser.add_argument("--thinking-token-budget", type=int)
+    parser.add_argument("--max-tokens", type=int)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     path = Path(args.output)
@@ -90,8 +99,17 @@ async def main():
     report = {"model": args.model, "base_url": args.base_url, "cases": []}
     for prompt_length in [int(value) for value in args.prompt_lengths.split(",")]:
         for concurrency in [int(value) for value in args.concurrency.split(",")]:
-            case = await run_case(args.base_url, args.model, prompt_length, concurrency)
+            case = await run_case(
+                args.base_url,
+                args.model,
+                prompt_length,
+                concurrency,
+                args.thinking_token_budget,
+                args.max_tokens,
+            )
             case["target_prompt_tokens"] = prompt_length
+            case["thinking_token_budget"] = args.thinking_token_budget
+            case["max_tokens"] = args.max_tokens
             report["cases"].append(case)
             path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
             print(json.dumps(case, sort_keys=True), flush=True)

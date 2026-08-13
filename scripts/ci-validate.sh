@@ -30,6 +30,7 @@ echo "== python compile (patches + unit scripts) =="
 mapfile -t py_files < <(find patches -name '*.py' -not -path '*/__pycache__/*' | sort)
 py_files+=(
   scripts/test-issue26-swa-min-v2.py
+  scripts/test-issue31-thinking-budget-gpu.py
   scripts/test-encoding-dsv4-issue21.py
   scripts/test-suppress-stops-in-reasoning.py
   scripts/verify-dsv4-027-equality-gate.py
@@ -40,6 +41,8 @@ ok "py_compile ${#py_files[@]} files"
 echo "== unit tests (no GPU) =="
 python3 scripts/test-issue26-swa-min-v2.py -q
 ok "test-issue26-swa-min-v2"
+python3 scripts/test-issue31-thinking-budget-gpu.py -q
+ok "test-issue31-thinking-budget-gpu"
 python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q
@@ -51,11 +54,20 @@ ok "verify-overlay-sources"
 
 echo "== recipe guards (do not re-ship known regressions) =="
 
-# #31/#34 thinking-budget path must stay gone (decode tok/s cliff).
-if compgen -G 'patches/hotfix-dsv4-issue31*' > /dev/null; then
-  bad "thinking-budget patch file present under patches/"
+# The withdrawn #31/#34 CPU-scanning path must stay gone (decode tok/s cliff).
+old_i31=patches/hotfix-dsv4-issue31-v2-thinking-budget.py
+gpu_i31=patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py
+if [ -e "$old_i31" ]; then
+  bad "withdrawn CPU-scanning thinking-budget patch returned: $old_i31"
 else
-  ok "no patches/hotfix-dsv4-issue31*"
+  ok "withdrawn CPU-scanning thinking-budget patch stays absent"
+fi
+if grep -nE '\.cpu\(|\.tolist\(|\.detach\(|all_token_ids|DEFAULT_THINKING_TOKEN_BUDGET' \
+  "$gpu_i31" >/tmp/ci-budget-hotpath-hits.txt 2>/dev/null; then
+  bad "GPU thinking-budget patch contains a forbidden decode-path scan/sync:"
+  cat /tmp/ci-budget-hotpath-hits.txt >&2 || true
+else
+  ok "GPU thinking-budget hot path has no CPU sync or token-buffer scan"
 fi
 
 launch_files=(
@@ -64,12 +76,12 @@ launch_files=(
   stop-deepseek-v4-flash-dspark.sh
   .env.dspark.example
 )
-if grep -nE 'hotfix-dsv4-issue31|ThinkingBudgetState|thinking_budget\.py|DEFAULT_THINKING_TOKEN_BUDGET|DEFAULT_MAX_TOKENS=131072' \
+if grep -nE 'hotfix-dsv4-issue31-v2-thinking-budget\.py|thinking_budget\.py|DEFAULT_THINKING_TOKEN_BUDGET|DEFAULT_MAX_TOKENS=131072' \
   "${launch_files[@]}" >/tmp/ci-budget-hits.txt 2>/dev/null; then
-  bad "thinking-budget still wired into launch/example:"
+  bad "withdrawn thinking-budget implementation still wired into launch/example:"
   cat /tmp/ci-budget-hits.txt >&2 || true
 else
-  ok "launch path does not apply thinking-budget"
+  ok "launch path does not apply withdrawn thinking-budget implementation"
 fi
 
 # #26 v1 continue must not be the applied patch (warm-prefix garble / tool names).
@@ -111,6 +123,12 @@ if grep -q 'hotfix-dsv4-suppress-stops-in-reasoning.py' docker-compose.dspark.ym
 else
   bad "compose missing suppress-stops-in-reasoning"
 fi
+if grep -q 'hotfix-dsv4-issue31-v2-thinking-budget-gpu.py' docker-compose.dspark.yml \
+  && grep -q 'python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py' docker-compose.dspark.yml; then
+  ok "compose applies GPU-resident V2 thinking budget"
+else
+  bad "compose missing GPU-resident V2 thinking budget"
+fi
 if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.dspark.yml; then
   ok "compose restart unless-stopped"
 else
@@ -120,6 +138,7 @@ fi
 # Mounted hotfix files must exist.
 for p in \
   patches/hotfix-encoding-dsv4-issue21.py \
+  patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py \
   patches/hotfix-dsv4-issue26-hybrid-swa-min.py \
   patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py \
   patches/hotfix-nvfp4-ds-mla-issue22.sh \

@@ -85,7 +85,7 @@ logic ships inside the image rather than as a host bind-mount.
 - **Available KV (text-only, this cluster @ util 0.835):** ~**18.08 GiB** → **GPU KV cache size ~2,493,464 tokens** (~2.38× concurrency at 1M; trust the live boot log)
 - `MTP_NUM_TOKENS=5` (checkpoint `dspark_block_size` is 5; k must be ≥ 5)
 - `DEFAULT_THINKING=max` (`off`, `low`, `high`, or `max`; request-level overrides still win)
-- `thinking_token_budget` is **not** supported on this DSpark/V2 image (HTTP 400). Size client `max_tokens` so a long `max` think cannot fill the whole generation (otherwise `content` is null and `finish_reason` is `length`). See [Client `max_tokens`](#client-max_tokens).
+- Explicit `thinking_token_budget` is supported by the recipe's GPU-resident V2 hotfix. Omit the field for the stock fast path; no server-side default is injected. See [Thinking-token budgets](#thinking-token-budgets).
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0` (keep regular CUDA graphs; Anemll auto-enables the slower breakable path when unset)
 - API bind address `0.0.0.0:8888`
 
@@ -886,12 +886,10 @@ still send an explicit request-level override when they require deterministic
 behavior.
 
 > [!IMPORTANT]
-> This DSpark/V2 image **rejects** `thinking_token_budget` (HTTP 400). The
-> #31/#34 sampler hook was withdrawn: it slowed long-context decode and
-> interacted badly with tool loops. Size `max_tokens` yourself. With
-> `DEFAULT_THINKING=max`, a small cap (256, 512, 800) can be consumed
-> entirely inside `<think>` and return `content: null` /
-> `finish_reason: length`. Give the answer room, or set thinking `low`/`off`.
+> The replacement #31 implementation is opt-in per request and keeps its
+> counters, request mapping, boundary enforcement, and accepted-token
+> observation on the GPU. It does not scan or copy the prefix to Python on
+> decode steps, and it does not add a budget when the field is omitted.
 >
 > Client `stop` / `stop[:4]` (lm-eval, many coding agents) is a **second**
 > way to get `content: null`: vLLM matches those strings inside `<think>`.
@@ -899,16 +897,27 @@ behavior.
 > so stops stay dormant until `</think>`. Opt out with
 > `DSPARK_SUPPRESS_STOPS_IN_REASONING=0`.
 
-### Client `max_tokens`
+### Thinking-token budgets
 
 `max_tokens` caps **all** new tokens (reasoning + visible answer + tool
-markup). 0731 at `DEFAULT_THINKING=max` thinks a lot. There is no server-side
-reasoning budget on this recipe.
+markup). `thinking_token_budget` caps only the reasoning portion and forces a
+single `</think>` at the boundary, leaving the rest of `max_tokens` available
+for the visible answer or tool call. A budget of `0` disables reasoning for
+that request. Natural `</think>` remains untouched.
 
-Do **not** send a tiny harness `max_tokens` (256, 512, 800) while leaving
-think at `max` unless you accept blank turns. Inspect `finish_reason` and
-`completion_tokens`: `length` + null `content` means think used the whole
-cap — raise `max_tokens` or lower thinking.
+Send the field explicitly when a hard cap is required. Omitting it retains the
+unmodified V2 sampler fast path and `DEFAULT_THINKING` behavior. Keep
+`max_tokens` comfortably above the thinking budget so the answer has room.
+
+```json
+{
+  "max_tokens": 8192,
+  "thinking_token_budget": 1024,
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "chat_template_kwargs": {"thinking": true, "reasoning_effort": "high"}
+}
+```
 
 A ready-to-copy pi configuration is provided in
 [`pi-models.dspark.example.json`](pi-models.dspark.example.json):

@@ -1,3 +1,11 @@
+## 2026-08-14
+
+### Fixed
+
+- **Fast, hard `thinking_token_budget` for the V2 runner (Issue #31 replacement)**: explicit request budgets now use two small GPU-resident Triton kernels to force exactly the boundary `</think>` token and observe accepted MTP tokens. The hot path performs no per-step device-to-host copy, Python token-list scan, or omit-field default; requests without the field retain the existing sampler path. Natural reasoning termination and tool calls remain intact. The start smoke now exercises the budget so both kernels compile before the endpoint is handed to clients. CPU gates cover patch application/idempotence and forbid the old host-scan patterns; live TP=2 checks covered budgets 0/16/32/64/256, four concurrent requests, and a two-turn tool call.
+
+  Live bounded 65K fresh-prefix comparison on this cluster: no-budget decode **37.2 tok/s** (1,024-token length stop) versus budgeted decode **59.3 tok/s** (256 reasoning + visible answer, 769 total), with fresh prefill **1,693–1,815 tok/s**. Short-context budgeted decode measured **67.2 tok/s**. The withdrawn implementation's ~4.5 tok/s cliff did not recur.
+
 ## 2026-08-13
 
 ### Changed

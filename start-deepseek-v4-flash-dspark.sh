@@ -565,6 +565,12 @@ if [ -f "$DSPARK_ENCODING_ISSUE21_HOTFIX" ]; then
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ENCODING_ISSUE21_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-encoding-dsv4-issue21.py"
 fi
+DSPARK_ISSUE31_GPU_HOTFIX="${DSPARK_ISSUE31_GPU_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py}"
+if [ -f "$DSPARK_ISSUE31_GPU_HOTFIX" ]; then
+  echo "Syncing GPU-resident V2 thinking-budget hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_ISSUE31_GPU_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py"
+fi
 DSPARK_ISSUE27_HOTFIX="${DSPARK_ISSUE27_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py}"
 if [ -f "$DSPARK_ISSUE27_HOTFIX" ]; then
   echo "Syncing Issue #27 partial-prefill hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
@@ -668,11 +674,11 @@ for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
         remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.vl-sidecar.yml logs --tail=80" >&2 || true
       fi
     fi
-    echo "Running minimal OpenAI-compatible chat request..."
+    echo "Running minimal OpenAI-compatible thinking-budget chat request..."
     curl -fsS --max-time 60 "$CHAT_URL" \
       -H "Content-Type: application/json" \
-      -d '{"model":"'"${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"'","messages":[{"role":"user","content":"Reply with OK."}],"temperature":0.0}' >/dev/null
-    echo "Minimal chat request succeeded."
+      -d '{"model":"'"${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"'","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":32,"temperature":0.6,"top_p":0.95,"thinking_token_budget":1,"chat_template_kwargs":{"thinking":true,"reasoning_effort":"low"}}' >/dev/null
+    echo "Minimal thinking-budget chat request succeeded."
     exit 0
   fi
   wait_with_startup_logs

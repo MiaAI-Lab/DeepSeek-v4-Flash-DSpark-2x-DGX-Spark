@@ -33,6 +33,7 @@
             "cacheWrite": 0
           },
           "compat": {
+            "supportsThinkingTokenBudget": true,
             "thinkingFormat": "chat-template",
             "chatTemplateKwargs": {
               "thinking": {
