@@ -47,6 +47,10 @@ services:
       # coordinator hotfix — SWA-min alone still 0/8 at 44K+ x8 because
       # dense SWA tails evict MLA prefix blocks.
       VLLM_PREFIX_CACHE_RETENTION_INTERVAL: "${VLLM_PREFIX_CACHE_RETENTION_INTERVAL:-4096}"
+      # Escape hatch: 1 skips the Issue #26 coordinator hotfix (see Known issue
+      # in CHANGELOG: output corruption observed in a long agentic session with
+      # the hotfix applied). Retention interval above is inert when skipped.
+      DSPARK_SKIP_ISSUE26_HOTFIX: "${DSPARK_SKIP_ISSUE26_HOTFIX:-0}"
       # Pin HF revision (issue #19). Empty → tip of default branch / refs/main.
       DSPARK_REVISION: "${DSPARK_REVISION:-}"
       DSPARK_ENCODING_FILE: "${DSPARK_ENCODING_FILE:-}"
@@ -133,7 +137,7 @@ services:
         if [ -z "$${ENCODING_SOURCE}" ]; then for candidate in /cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731/snapshots/*/encoding/encoding_dsv4.py; do if [ -f "$${candidate}" ]; then ENCODING_SOURCE="$${candidate}"; break; fi; done; fi;
         if [ -z "$${ENCODING_SOURCE}" ] && [ -f /models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py ]; then ENCODING_SOURCE=/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py; fi;
         if [ -n "$${ENCODING_SOURCE}" ] && [ -f "$${ENCODING_SOURCE}" ]; then cp "$${ENCODING_SOURCE}" /usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py; python3 -c 'from pathlib import Path; p=Path("/usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4.py"); s=p.read_text(); old="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            else:\n                reasoning_effort = \"high\""; new="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            elif reasoning_effort == \"high\":\n                reasoning_effort = \"high\"\n            else:\n                reasoning_effort = \"low\""; updated=s.replace(old,new); assert new in updated; p.write_text(updated)'; python3 /opt/hotfix-encoding-dsv4-issue21.py; fi;
-        python3 /opt/hotfix-dsv4-issue27-partial-prefill-concurrency.py; python3 /opt/hotfix-dsv4-issue26-hybrid-swa-min.py; python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget.py; VLLM_QUANTIZATION_ARGS="";
+        python3 /opt/hotfix-dsv4-issue27-partial-prefill-concurrency.py; if [ "$${DSPARK_SKIP_ISSUE26_HOTFIX:-0}" != "1" ]; then python3 /opt/hotfix-dsv4-issue26-hybrid-swa-min.py; else echo "[issue26-hotfix] SKIPPED (DSPARK_SKIP_ISSUE26_HOTFIX=1)"; fi; python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget.py; VLLM_QUANTIZATION_ARGS="";
         if [ "$${ENABLE_VLLM_GB10_PATCH:-0}" = "1" ]; then
           python3 -m pip install -e /opt/vllm-gb10-hybrid-nvfp4 --no-deps;
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";

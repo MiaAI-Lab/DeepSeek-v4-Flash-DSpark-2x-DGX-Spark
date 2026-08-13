@@ -1,5 +1,13 @@
 ## 2026-08-13
 
+### Known issue
+
+- **Output corruption in long agentic sessions with the Issue #26 coordinator hotfix applied**: on a 2x DGX Spark TP=2 deployment at recipe defaults (official 0731, `MTP_NUM_TOKENS=5`, `MAX_NUM_SEQS=6`, `DEFAULT_THINKING=low`), a real agentic-harness session (zcode) produced mid-generation corruption — a short garbage-token run (mixed-script fragments) followed by the model replaying **verbatim earlier-context text** (its own system prompt) as if it were the answer. Server stayed healthy; HTTP 200; no scheduler/proposer warnings; spec-decode acceptance normal. Bisect on the same host: with `patches/hotfix-dsv4-issue26-hybrid-swa-min.py` skipped (coordinator back to stock, everything else unchanged, including #27 and #31), a comparable fresh-session agentic workload ran clean. Suspected mechanism: with the SWA-min constraint relaxed, a prefix-cache hit can be backed by sliding-window KV blocks that were already freed/evicted, so the request resumes on wrong attention state. Not yet root-caused; single-lane and short-context smoke tests do not reproduce it — it needs a long multi-turn agentic session.
+
+### New
+
+- **`DSPARK_SKIP_ISSUE26_HOTFIX=1`** — escape hatch that skips the Issue #26 coordinator hotfix in the compose entrypoint (both nodes; `VLLM_PREFIX_CACHE_RETENTION_INTERVAL` becomes inert). Default `0` (hotfix applies as before). Costs the 32K+ x8 warm prefix-cache restoration from #26; use it if you hit the corruption above. Resolved-profile output of `start-deepseek-v4-flash-dspark.sh` now reports the #26 hotfix status either way.
+
 ### Fixed
 
 - **Blank turns on stock OpenAI clients ([Issue #34](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/34))**: #31 only applied `thinking_token_budget` when the request sent the field. pi / OMP / VS Code custom EP cannot, so `DEFAULT_THINKING=max` still returned `content: null`. Recipe now applies omit-field defaults: `DEFAULT_THINKING_TOKEN_BUDGET=32768` and `DEFAULT_MAX_TOKENS=131072` (request wins; empty/`0` restores the old path). Generous on purpose — this model thinks a lot; 32k think + 128k total leaves ~100k for the answer. A client that still sends `max_tokens: 256` can blank; the server does not raise an explicit cap.

@@ -466,6 +466,11 @@ print_resolved_profile() {
   else
     echo "  Issue #22 hotfix: not found"
   fi
+  if [ "${DSPARK_SKIP_ISSUE26_HOTFIX:-0}" = "1" ]; then
+    echo "  Issue #26 hotfix: SKIPPED (DSPARK_SKIP_ISSUE26_HOTFIX=1; VLLM_PREFIX_CACHE_RETENTION_INTERVAL inert)"
+  else
+    echo "  Issue #26 hotfix: will apply on start (DSPARK_SKIP_ISSUE26_HOTFIX=1 to skip)"
+  fi
   if [ "${DSPARK_SKIP_HOTFIX:-0}" = "1" ]; then
     echo "  DSV4 perf hotfixes (#50312/#50004/#49486/#48407/#48957/#50298/#44993-grammar): SKIPPED (DSPARK_SKIP_HOTFIX=1)"
   else
@@ -618,6 +623,9 @@ SIDECAR_COMPOSE_FILE="${SIDECAR_COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.vl-side
 # when present.  Opt-outs:
 #   DSPARK_SKIP_HOTFIX=1          skip the v0.27 perf backports only
 #   DSPARK_SKIP_ISSUE22_HOTFIX=1  also skip Issue #22 (fully clean baseline)
+#   DSPARK_SKIP_ISSUE26_HOTFIX=1  skip the Issue #26 coordinator hotfix
+#                                 (consumed by the compose entrypoint; see
+#                                 Known issue in CHANGELOG)
 DSV4_HOTFIX_FILES=()
 if [ "${DSPARK_SKIP_ISSUE22_HOTFIX:-0}" != "1" ]; then
   DSV4_HOTFIX_FILES+=("hotfix-nvfp4-ds-mla-issue22.sh")
