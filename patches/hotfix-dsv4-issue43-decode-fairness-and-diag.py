@@ -72,14 +72,21 @@ if MARK in src:
 
 # --- 0. import os (module-level diag gate) -----------------------------------
 A0_OLD = "import itertools\nimport time\n"
-assert A0_OLD in src, "issue43: import anchor not found; refusing to patch"
-src = src.replace(
-    A0_OLD,
-    A0_OLD
-    + "# [issue43-hotfix] os import for DSPARK_ISSUE43_SCHED_DIAG gate\n"
-    + "import os\n",
-    1,
-)
+A0_WITH_OS = "import itertools\nimport os\nimport time\n"
+if A0_OLD in src:
+    src = src.replace(
+        A0_OLD,
+        A0_OLD
+        + "# [issue43-hotfix] os import for DSPARK_ISSUE43_SCHED_DIAG gate\n"
+        + "import os\n",
+        1,
+    )
+else:
+    # The adaptive issue #27 revision already imports os for its environment
+    # threshold. Reuse it instead of failing or adding a duplicate import.
+    assert A0_WITH_OS in src, (
+        "issue43: import anchor not found; refusing to patch"
+    )
 
 # --- 1. module-level diag gate constant --------------------------------------
 A1_OLD = "logger = init_logger(__name__)\n"

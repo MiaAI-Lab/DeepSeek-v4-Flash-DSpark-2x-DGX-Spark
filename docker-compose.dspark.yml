@@ -115,6 +115,9 @@ services:
       # Checkpoint dspark_block_size is 5; k<5 truncates draft blocks (silent on 0.25.2 image).
       MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-5}"
       DEFAULT_THINKING: "${DEFAULT_THINKING:-low}"
+      # Large chunks when prefill-only, bounded chunks while a reply decodes.
+      # Must be a multiple of the scheduler block size.
+      DSPARK_DECODE_ACTIVE_PREFILL_THRESHOLD: "${DSPARK_DECODE_ACTIVE_PREFILL_THRESHOLD:-1024}"
       DSPARK_SKIP_HOTFIX: "${DSPARK_SKIP_HOTFIX:-0}"
       DSPARK_SKIP_ISSUE22_HOTFIX: "${DSPARK_SKIP_ISSUE22_HOTFIX:-0}"
       DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX: "${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}"

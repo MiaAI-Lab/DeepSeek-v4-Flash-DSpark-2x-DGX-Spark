@@ -32,7 +32,14 @@ def apply_hotfix_to_copy(src_path, hotfix_path):
     marker = 'Path("/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py")'
     txt = txt.replace(marker, f'Path({str(src_path)!r})')
     ns = {}
-    exec(compile(txt, str(hotfix_path), "exec"), ns)
+    # Local issue #27 revisions accept an optional target path for focused
+    # tests, while upstream #43 still hardcodes P. Support both interfaces.
+    old_argv = sys.argv
+    try:
+        sys.argv = [str(hotfix_path), str(src_path)]
+        exec(compile(txt, str(hotfix_path), "exec"), ns)
+    finally:
+        sys.argv = old_argv
 
 
 def main():

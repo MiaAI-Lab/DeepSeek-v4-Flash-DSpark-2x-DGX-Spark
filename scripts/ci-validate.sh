@@ -30,6 +30,7 @@ echo "== python compile (patches + unit scripts) =="
 mapfile -t py_files < <(find patches -name '*.py' -not -path '*/__pycache__/*' | sort)
 py_files+=(
   scripts/test-issue26-swa-min-v2.py
+  scripts/test-issue27-adaptive-prefill.py
   scripts/test-encoding-dsv4-issue21.py
   scripts/test-suppress-stops-in-reasoning.py
   scripts/verify-dsv4-027-equality-gate.py
@@ -40,6 +41,8 @@ ok "py_compile ${#py_files[@]} files"
 echo "== unit tests (no GPU) =="
 python3 scripts/test-issue26-swa-min-v2.py -q
 ok "test-issue26-swa-min-v2"
+python3 scripts/test-issue27-adaptive-prefill.py -q
+ok "test-issue27-adaptive-prefill"
 python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q
