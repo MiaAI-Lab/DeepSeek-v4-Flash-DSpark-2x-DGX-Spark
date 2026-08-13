@@ -104,6 +104,13 @@ services:
       # Checkpoint dspark_block_size is 5; k<5 truncates draft blocks (silent on 0.25.2 image).
       MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-5}"
       DEFAULT_THINKING: "${DEFAULT_THINKING:-low}"
+      # Server-side fallback for thinking_token_budget, applied only when the
+      # request omits it. Empty keeps the current request-only behaviour.
+      # Set the same value on both nodes. The OpenAI SDK can pass the field via
+      # extra_body, but many agent harnesses never expose it, leaving a
+      # DEFAULT_THINKING=max deployment exposed to reasoning that fills
+      # max_tokens and returns content: null.
+      DEFAULT_THINKING_TOKEN_BUDGET: "${DEFAULT_THINKING_TOKEN_BUDGET:-}"
 
     command:
       - bash

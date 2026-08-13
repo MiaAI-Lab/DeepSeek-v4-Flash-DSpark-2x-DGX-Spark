@@ -1,5 +1,13 @@
 ## 2026-08-13
 
+### Added
+
+- **Server-side default for `thinking_token_budget`**: the [Issue #31](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/31) hotfix bounds reasoning only when the request carries the field, and most OpenAI-compatible agent harnesses have no way to set it — so a `DEFAULT_THINKING=max` deployment stays exposed to the empty-`content` case.
+
+  **Change:** `DEFAULT_THINKING_TOKEN_BUDGET` supplies the value when the request omits it. Unset (the default) preserves the request-only behaviour exactly; a request can still opt out with a negative budget. Set the same value on both nodes.
+
+  Live (TP=2, `reasoning_effort=max`, `temperature=0`, `max_tokens=12000`, client sending **no** budget field): before `finish_reason: length`, 12,000 tokens, ~50k chars of reasoning, `content: null`; after (`DEFAULT_THINKING_TOKEN_BUDGET=4000`) `finish_reason: stop`, ~5.1k tokens, ~17k chars of reasoning, **non-null `content`** (~4.9k chars).
+
 ### Fixed
 
 - **`thinking_token_budget` rejected on DSpark / V2 ([Issue #31](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/31))**: with `DEFAULT_THINKING=max`, a reply that hits `max_tokens` while still inside `<think>` returns `content: null` and `finish_reason: length`. Stock Anemll `0.1.1` rejects `thinking_token_budget` with HTTP 400 (`not yet supported by the V2 model runner`); `VLLM_USE_V2_MODEL_RUNNER=0` cannot be used because DSpark exists only on V2.

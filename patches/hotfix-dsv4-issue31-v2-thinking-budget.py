@@ -12,8 +12,10 @@ This patch:
      next sampled token(s) to the reasoning-end sequence (</think>).
   3. Threads ReasoningConfig into the V2 Sampler so start/end ids are known.
 
-No-op when the request does not set thinking_token_budget. DSpark rejection
-sampling still runs; forcing is applied to processed logits before top-k.
+When the request omits thinking_token_budget, DEFAULT_THINKING_TOKEN_BUDGET
+supplies a server-side fallback; unset (the default) keeps the request-only
+behaviour. DSpark rejection sampling still runs; forcing is applied to
+processed logits before top-k.
 
 Idempotent. Patches files under
 /usr/local/lib/python3.12/dist-packages/vllm/
@@ -29,10 +31,37 @@ THINKING_BUDGET_PY = r'''# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
 
 from vllm.sampling_params import SamplingParams
+
+
+def _default_budget() -> int | None:
+    """Server-side fallback for clients that cannot send the field.
+
+    The OpenAI SDK can pass thinking_token_budget via extra_body, but many
+    agent harnesses and most chat UIs never expose it, so a request-only knob
+    leaves those deployments unprotected.
+    Empty, unparseable, or <= 0 means no default, i.e. previous behaviour.
+
+    A request can still opt out explicitly with a negative budget, which
+    apply() already treats as unlimited. JSON null is indistinguishable from
+    an omitted field and therefore takes the default.
+    """
+    raw = os.environ.get("DEFAULT_THINKING_TOKEN_BUDGET", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+DEFAULT_BUDGET = _default_budget()
 
 
 def _last_subseq(seq: list[int], pat: list[int]) -> int:
@@ -61,6 +90,8 @@ class ThinkingBudgetState:
 
     def add_request(self, req_idx: int, sampling_params: SamplingParams) -> None:
         b = getattr(sampling_params, "thinking_token_budget", None)
+        if b is None:
+            b = DEFAULT_BUDGET
         self.budget[req_idx] = -1 if b is None else int(b)
 
     def apply(
