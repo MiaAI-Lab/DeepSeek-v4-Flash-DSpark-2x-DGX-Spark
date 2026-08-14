@@ -577,6 +577,12 @@ if [ -f "$DSPARK_ISSUE55_HOTFIX" ]; then
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ISSUE55_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue55-tool-truncation.py"
 fi
+DSPARK_RESPONSES_STORE_HOTFIX="${DSPARK_RESPONSES_STORE_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-responses-store.py}"
+if [ -f "$DSPARK_RESPONSES_STORE_HOTFIX" ]; then
+  echo "Syncing bounded Responses store hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_RESPONSES_STORE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-responses-store.py"
+fi
 DSPARK_ISSUE27_HOTFIX="${DSPARK_ISSUE27_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py}"
 if [ -f "$DSPARK_ISSUE27_HOTFIX" ]; then
   echo "Syncing Issue #27 partial-prefill hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
