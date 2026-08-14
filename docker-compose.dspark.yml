@@ -22,6 +22,10 @@ services:
 
     volumes:
       - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      # Local model served directly (bypass HF hub cache): each node binds its
+      # own on-disk model copy at a fixed container path chosen by
+      # DSPARK_MODEL. Set LOCAL_MODEL_DIR to the parent dir of the model.
+      - ${LOCAL_MODEL_DIR:-${HOME}/Model}/SuperDeepseek-V4-MQ:/models/SuperDeepseek-V4-MQ
       # Optional Stage-C overlay: host proposer only when path exists on the
       # Anemll layout (vLLM ships DSpark under v1/worker/gpu/spec_decode).
       # GB10 hybrid plugin tree for ENABLE_VLLM_GB10_PATCH=1 only.

@@ -1,0 +1,8 @@
+# Native .venv rollback commands (pre-migration capture 2026-08-13)
+# Head (spark-8012, user mattw):
+vllm serve /home/mattw/Model/SuperDeepseek-V4-MQ --served-model-name SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX --tensor-parallel-size 2 --nnodes 2 --node-rank 0 --master-addr 192.168.100.1 --master-port 25001 --max-model-len 1048576 --kv-cache-dtype nvfp4_ds_mla --moe-backend flashinfer_b12x --enable-prefix-caching --async-scheduling --enable-chunked-prefill --max-num-seqs 6 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.835 --enable-auto-tool-choice --tool-call-parser deepseek_v4 --speculative-config '{"method":"dspark","num_speculative_tokens":1,"draft_sample_method":"greedy"}' --host 0.0.0.0 --port 8888
+#   venv: /home/mattw/vllm-dspark/.venv/bin/vllm
+
+# Worker (spark-137f, user admin):
+vllm serve /home/admin/Model/SuperDeepseek-V4-MQ --tensor-parallel-size 2 --nnodes 2 --node-rank 1 --master-addr 192.168.100.1 --master-port 25001 --max-model-len 1048576 --kv-cache-dtype nvfp4_ds_mla --moe-backend flashinfer_b12x --enable-prefix-caching --async-scheduling --enable-chunked-prefill --max-num-seqs 6 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.835 --speculative-config '{"method":"dspark","num_speculative_tokens":1,"draft_sample_method":"greedy"}' --headless
+#   venv: /home/admin/vllm-dspark/.venv/bin/vllm
