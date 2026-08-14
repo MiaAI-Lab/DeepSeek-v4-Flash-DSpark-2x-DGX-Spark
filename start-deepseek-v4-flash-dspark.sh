@@ -137,7 +137,22 @@ case "$DEFAULT_THINKING" in
     exit 2
     ;;
 esac
-export VLLM_HOST VLLM_PORT PORT DEFAULT_THINKING
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-nvfp4_ds_mla}"
+case "$KV_CACHE_DTYPE" in
+  nvfp4_ds_mla|fp8|fp8_ds_mla) ;;
+  *)
+    echo "KV_CACHE_DTYPE must be nvfp4_ds_mla, fp8, or fp8_ds_mla (got: $KV_CACHE_DTYPE)" >&2
+    exit 2
+    ;;
+esac
+ENABLE_DSPARK_SPECULATIVE="${ENABLE_DSPARK_SPECULATIVE:-1}"
+ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
+case "$ENABLE_DSPARK_SPECULATIVE:$ENFORCE_EAGER" in
+  0:0|0:1|1:0|1:1) ;;
+  *) echo "ENABLE_DSPARK_SPECULATIVE and ENFORCE_EAGER must be 0 or 1." >&2; exit 2 ;;
+esac
+export VLLM_HOST VLLM_PORT PORT DEFAULT_THINKING KV_CACHE_DTYPE
+export ENABLE_DSPARK_SPECULATIVE ENFORCE_EAGER
 
 # A wildcard is valid for binding but not a useful health-check destination.
 API_HOST="${API_HOST:-$VLLM_HOST}"
@@ -353,6 +368,9 @@ compose_base() {
     VLLM_PORT="$VLLM_PORT" \
     VLLM_HOST_IP="$VLLM_HOST_IP" \
     GPU_MEMORY_UTILIZATION="$GPU_MEMORY_UTILIZATION" \
+    KV_CACHE_DTYPE="$KV_CACHE_DTYPE" \
+    ENABLE_DSPARK_SPECULATIVE="$ENABLE_DSPARK_SPECULATIVE" \
+    ENFORCE_EAGER="$ENFORCE_EAGER" \
     DSPARK_MODEL="$DSPARK_MODEL" \
     DSPARK_REVISION="${DSPARK_REVISION:-}" \
     ENABLE_VLLM_GB10_PATCH="$ENABLE_VLLM_GB10_PATCH" \
@@ -424,7 +442,14 @@ print_resolved_profile() {
   echo "  max num seqs: ${MAX_NUM_SEQS:-12}"
   echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
   echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.80} (text default ${GPU_MEMORY_UTILIZATION_TEXT:-0.835} / vision default ${GPU_MEMORY_UTILIZATION_VISION:-0.80})"
-  echo "  mtp speculative tokens: ${MTP_NUM_TOKENS:-5} (dspark_block_size min is 5)"
+  echo "  KV cache dtype: $KV_CACHE_DTYPE (fp8 maps to DeepSeek fp8_ds_mla on GB10)"
+  echo "  speculative decoding: $ENABLE_DSPARK_SPECULATIVE"
+  echo "  enforce eager: $ENFORCE_EAGER"
+  if [ "$ENABLE_DSPARK_SPECULATIVE" = "1" ]; then
+    echo "  mtp speculative tokens: ${MTP_NUM_TOKENS:-5} (dspark_block_size min is 5)"
+  else
+    echo "  mtp speculative tokens: inactive"
+  fi
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"
   echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))"
   echo "  API bind: $VLLM_HOST:$VLLM_PORT"
@@ -476,7 +501,7 @@ validate_compose() {
   echo "Validating head compose config..."
   compose_base 0 "" config --quiet
   echo "Validating worker compose config..."
-  remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml config --quiet"
+  remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' KV_CACHE_DTYPE='$KV_CACHE_DTYPE' ENABLE_DSPARK_SPECULATIVE='$ENABLE_DSPARK_SPECULATIVE' ENFORCE_EAGER='$ENFORCE_EAGER' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml config --quiet"
 }
 
 need_cmd docker
@@ -614,7 +639,7 @@ fi
 validate_compose
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."
-remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
+remote_compose "NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' KV_CACHE_DTYPE='$KV_CACHE_DTYPE' ENABLE_DSPARK_SPECULATIVE='$ENABLE_DSPARK_SPECULATIVE' ENFORCE_EAGER='$ENFORCE_EAGER' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml up -d"
 
 echo "Starting DSpark head..."
 compose_base 0 "" up -d

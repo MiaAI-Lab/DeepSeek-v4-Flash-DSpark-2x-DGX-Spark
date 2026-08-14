@@ -160,7 +160,10 @@ services:
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";
           VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
         fi;
-        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}";
+        SPECULATIVE_ARGS="";
+        if [ "${ENABLE_DSPARK_SPECULATIVE:-1}" = "1" ]; then SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}"; SPECULATIVE_ARGS="--speculative-config $$SPECULATIVE_CONFIG"; fi;
+        EXECUTION_ARGS="";
+        if [ "${ENFORCE_EAGER:-0}" = "1" ]; then EXECUTION_ARGS="--enforce-eager"; fi;
         case "$${DEFAULT_THINKING:-low}" in
           off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":false}' ;;
           low) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"low"}' ;;
@@ -179,7 +182,7 @@ services:
         $${VLLM_QUANTIZATION_ARGS}
         --tensor-parallel-size 2
         --pipeline-parallel-size 1
-        --kv-cache-dtype nvfp4_ds_mla
+        --kv-cache-dtype ${KV_CACHE_DTYPE:-nvfp4_ds_mla}
         --block-size 256
         --max-model-len ${MAX_MODEL_LEN:-1048576}
         --max-num-seqs ${MAX_NUM_SEQS:-6}
@@ -191,7 +194,8 @@ services:
         --enable-prompt-tokens-details
         --async-scheduling
         --enable-chunked-prefill
-        --speculative-config "$${SPECULATIVE_CONFIG}"
+        $${SPECULATIVE_ARGS}
+        $${EXECUTION_ARGS}
         --tokenizer-mode deepseek_v4
         --distributed-executor-backend mp
         --moe-backend flashinfer_b12x
