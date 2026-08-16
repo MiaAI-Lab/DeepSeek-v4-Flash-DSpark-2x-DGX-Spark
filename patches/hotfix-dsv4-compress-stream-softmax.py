@@ -16,10 +16,12 @@ accuracy change): `m_run`/`l_run`/`acc` are updated per tile and the final
 `compressed_kv = acc / l_run` recovers the same result. Overlap layers stay
 single-tile (EFF_TILE = N_GATHER when OVERLAP).
 
-MEASURED (this repo's 2x DGX Spark, TP=2, DSV4-Flash-0731, on top of
-#51967 + #49283): prefill 8K +2.2% and 32K +2.6% vs baseline; decode C1
-+1.9%; sanity (tool/reasoning/chat) unchanged. Long-context prefill is where
-the register-spill saving shows.
+MEASURED (this repo's 2x DGX Spark, TP=2, DSV4-Flash-0731, re-tested
+2026-08-17, thinking=max + MTP-5 + nvfp4_ds_mla): on top of #51967+#49283,
+decode C1 (256-token prompt, 128-token output) 49.7 -> 52.0 tok/s (+4.6%);
+full stack vs baseline 46.3 -> 52.0 tok/s (+12.2%, Welch p=0.002). 32K/128K
+cold prefill within measurement noise; sanity (tool/reasoning/chat)
+unchanged in this run.
 
 Usage (idempotent — re-running skips already-applied hunks):
   docker cp hotfix-dsv4-compress-stream-softmax.py <container>:/tmp/ && \
