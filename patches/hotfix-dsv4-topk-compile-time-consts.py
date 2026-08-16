@@ -16,9 +16,13 @@ drop the dynamic bounds checks, shrinking per-invocation instruction count.
 This kernel runs on every prefill step's global top-k pass, so the saving
 compounds on long prompts.
 
-MEASURED (this repo's 2x DGX Spark, TP=2, DSV4-Flash-0731): decode C1 +2.8%
-vs baseline; prefill within measurement noise. Kernel is numerically
-identical (constexpr promotion only — no math change).
+MEASURED (this repo's 2x DGX Spark, TP=2, DSV4-Flash-0731, re-tested
+2026-08-17, thinking=max + MTP-5 + nvfp4_ds_mla): decode C1 (256-token
+prompt, 128-token output) +3.3% vs baseline (47.8 vs 46.3 tok/s, single
+patch); as part of the full #51967+#49283+#49160 stack, decode C1 +12.2%
+(52.0 vs 46.3 tok/s, Welch p=0.002, n=16+16). 32K/128K cold prefill within
+measurement noise. Kernel is numerically identical (constexpr promotion only
+— no math change).
 
 Usage (idempotent — re-running skips already-applied hunks):
   docker cp hotfix-dsv4-topk-compile-time-consts.py <container>:/tmp/ && \
