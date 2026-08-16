@@ -17,9 +17,11 @@ widths (`Q_BLOCK = next_pow2(q_size)`, `KV_BLOCK = next_pow2(kv_size)`),
 so narrow Q rows no longer pay for KV-wide reductions. fp32 math is
 unchanged; the kernel is numerically identical.
 
-MEASURED (this repo's 2x DGX Spark, TP=2, DSV4-Flash-0731): 32K prefill
-+2.2% vs baseline; decode flat; no regressions in the 2K/8K prefill or C4
-decode lanes.
+MEASURED (this repo's 2x DGX Spark, TP=2, DSV4-Flash-0731, re-tested
+2026-08-17, thinking=max + MTP-5 + nvfp4_ds_mla): on top of #51967, decode C1
+(256-token prompt, 128-token output) 47.8 -> 49.7 tok/s (+4.0%); as part of
+the full #51967+#49283+#49160 stack, decode C1 46.3 -> 52.0 tok/s (+12.2%,
+Welch p=0.002). 32K/128K cold prefill within measurement noise.
 
 Usage (idempotent — re-running skips already-applied hunks):
   docker cp hotfix-dsv4-qk-rmsnorm-split-blocks.py <container>:/tmp/ && \
