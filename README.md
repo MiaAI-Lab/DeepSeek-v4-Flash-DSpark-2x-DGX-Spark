@@ -470,6 +470,23 @@ This is the **Stage C padded NVFP4** path (584-byte sparse-MLA envelope via
 Optional GB10 hybrid plugin: `ENABLE_VLLM_GB10_PATCH=1 ./start-…`
 (`--quantization modelopt_gb10_hybrid`). Default off.
 
+### Optional stateful Responses API
+
+The pinned vLLM build exposes `/v1/responses`, but ignores stored state by
+default and its native in-memory stores do not evict. To enable stateful
+`previous_response_id` continuation with bounded process-local storage:
+
+```env
+VLLM_ENABLE_RESPONSES_API_STORE=1
+DSPARK_RESPONSES_STORE_MAX_ENTRIES=256
+```
+
+The bundled exact-source backport evicts the oldest terminal responses and
+their matching rendered-message/event state; `previous_response_id` reuse
+refreshes that response's recency. Queued, in-progress, and foreground
+streaming requests are protected. State is process-local and is lost on
+restart; leave the feature disabled when no client needs continuation.
+
 CI on every push ([`.github/workflows/validate.yml`](.github/workflows/validate.yml))
 is **CPU-only** (`scripts/ci-validate.sh`). Live tok/s still needs the 2× Spark pair.
 

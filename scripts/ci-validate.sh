@@ -32,6 +32,7 @@ py_files+=(
   scripts/test-issue26-swa-min-v2.py
   scripts/test-issue31-thinking-budget-gpu.py
   scripts/test-issue55-tool-truncation.py
+  scripts/test-responses-store-hotfix.py
   scripts/test-encoding-dsv4-issue21.py
   scripts/test-suppress-stops-in-reasoning.py
   scripts/verify-dsv4-027-equality-gate.py
@@ -46,6 +47,8 @@ python3 scripts/test-issue31-thinking-budget-gpu.py -q
 ok "test-issue31-thinking-budget-gpu"
 python3 scripts/test-issue55-tool-truncation.py -q
 ok "test-issue55-tool-truncation"
+python3 scripts/test-responses-store-hotfix.py -q
+ok "test-responses-store-hotfix"
 python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q
@@ -138,6 +141,12 @@ if grep -q 'hotfix-dsv4-issue55-tool-truncation.py' docker-compose.dspark.yml \
 else
   bad "compose missing issue #55 tool-call truncation safety"
 fi
+if grep -q 'hotfix-dsv4-responses-store.py' docker-compose.dspark.yml \
+  && grep -q 'python3 /opt/hotfix-dsv4-responses-store.py' docker-compose.dspark.yml; then
+  ok "compose applies bounded Responses store backport"
+else
+  bad "compose missing bounded Responses store backport"
+fi
 if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.dspark.yml; then
   ok "compose restart unless-stopped"
 else
@@ -156,6 +165,7 @@ for p in \
   patches/hotfix-encoding-dsv4-issue21.py \
   patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py \
   patches/hotfix-dsv4-issue55-tool-truncation.py \
+  patches/hotfix-dsv4-responses-store.py \
   patches/hotfix-dsv4-issue26-hybrid-swa-min.py \
   patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py \
   patches/hotfix-nvfp4-ds-mla-issue22.sh \
