@@ -201,3 +201,37 @@ docker exec <container> bash /path/to/hotfix-nvfp4-ds-mla-issue22.sh
 | file | change |
 |---|---|
 | `v1/attention/backends/mla/flashmla_sparse.py` | `use_fp8_cache` check: include `nvfp4_ds_mla` |
+
+---
+
+## GB10 vLLM IPC spin-wait (CPU load / SoC heat)
+
+### Symptom
+On a single-die GB10 package (DGX Spark / ASUS Ascent GX10), 3–4 **performance
+cores** spin at max clock while idle, driving SoC temperature toward the forced
+shutdown threshold (104.8°C; user-reported shutdowns at ~87°C). With this recipe
+(TP=2, two nodes) the whole load stays well under the target but the wasteful
+spin is present on every rank.
+
+### Root cause
+vLLM's cross-process IPC receive path uses `SpinCondition` which spins
+(`sched_yield`) for `busy_loop_s` seconds (default **1s**) before sleeping on a
+notify socket. Decode messages always arrive < 1s apart, so the sleep path never
+engages and 3–4 P-cores spin indefinitely at max clock — wasting ~333% CPU and
+producing real heat on a shared-die package. This is **upstream vLLM main**, not
+this recipe's bug. (Single-GPU / `world_size=1` uses the uni executor and never
+forms this wait path — not applicable there.)
+
+### Fix
+Change the default grace window from 1s to 2ms so the existing (already-written)
+sleep path actually engages; the writer's notify socket wakes it in tens of µs.
+Wait policy only — model outputs, throughput and first-token latency are
+unchanged (measured by nacyot's "vllm-spin-wait-gb10" write-up: vLLM CPU 333%→89%,
+SoC −11°C, decode tok/s and GPU util identical).
+
+### Hotfix
+`patches/hotfix-gb10-spin-wait.sh` — standalone, idempotent, verifies the patch.
+Edits `vllm/distributed/device_communicators/shm_broadcast.py`
+`busy_loop_s: float = 1` → `0.002`. Synced to both workers and applied in the
+compose entrypoint before `exec vllm`, at every boot (no image rebuild needed).
+Opt out with `DSPARK_SKIP_SPIN_WAIT_HOTFIX=1`.
