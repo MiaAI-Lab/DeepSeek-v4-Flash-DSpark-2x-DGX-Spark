@@ -635,6 +635,16 @@ if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ASSISTANT_FINAL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-assistant-final-continuation.py"
 fi
+# Upstream vLLM #49283 backport. Both ranks run their own container and the
+# Q/KV latent is TP-replicated (fused_wqa_wkv is built with disable_tp=True),
+# so a head-only copy would leave the ranks computing ulp-divergent values the
+# moment DSPARK_ENABLE_QK_RMSNORM_SPLIT=1. Syncing never applies the patch.
+DSPARK_QK_RMSNORM_SPLIT_HOTFIX="${DSPARK_QK_RMSNORM_SPLIT_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-qk-rmsnorm-split-blocks.py}"
+if [ -f "$DSPARK_QK_RMSNORM_SPLIT_HOTFIX" ]; then
+  echo "Syncing QK RMSNorm split-blocks hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_QK_RMSNORM_SPLIT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-qk-rmsnorm-split-blocks.py"
+fi
 if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
   echo "Syncing GB10 vLLM patch to ${WORKER_HOST}:${WORKER_DIR}/vllm_patch_gb10"
   tar -C "$VLLM_GB10_PATCH_DIR" \

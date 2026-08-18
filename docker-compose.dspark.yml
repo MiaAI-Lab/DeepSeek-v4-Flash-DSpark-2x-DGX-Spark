@@ -45,6 +45,11 @@ services:
       # header, or the model generates from a dead state (empty turns /
       # hallucinated DSML markup loop). Upstream issue #52, PR #53.
       - ${DSPARK_ASSISTANT_FINAL_HOTFIX:-./patches/hotfix-dsv4-assistant-final-continuation.py}:/opt/hotfix-dsv4-assistant-final-continuation.py:ro
+      # Upstream vLLM #49283 backport: per-task Q/KV RMSNorm Triton block
+      # widths. Mounted on both ranks; invoked only behind the exactly-1 gate
+      # below, because the anchors are proven against upstream 8688a06 and not
+      # against this image.
+      - ${DSPARK_QK_RMSNORM_SPLIT_HOTFIX:-./patches/hotfix-dsv4-qk-rmsnorm-split-blocks.py}:/opt/hotfix-dsv4-qk-rmsnorm-split-blocks.py:ro
       - ${DSPARK_PATCHES_DIR:-./patches}:/opt/dspark-patches:ro
       - ${DSPARK_TMP_HOST:-${HOME}/.cache/dspark-tmp}:/tmp
 
@@ -134,6 +139,11 @@ services:
       # empty no-op turn loop). 0 (default) = stock renderer, patch not
       # invoked; 1 = apply at boot and fail the container on any patch error.
       DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "${DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX:-0}"
+      # Upstream vLLM #49283 backport (split Q/KV RMSNorm blocks). 0 (default)
+      # = stock kernel, patch not invoked; 1 = apply at boot on this rank and
+      # fail the container on any patch error. Must be set identically on both
+      # ranks: the Q/KV latent is TP-replicated (disable_tp=True).
+      DSPARK_ENABLE_QK_RMSNORM_SPLIT: "${DSPARK_ENABLE_QK_RMSNORM_SPLIT:-0}"
       DSPARK_SKIP_SPIN_WAIT_HOTFIX: "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}"
       # 1 = keep client stop strings dormant inside <think> (default).
       # 0 = stock vLLM (stops can fire mid-reason). Also honors
@@ -169,6 +179,7 @@ services:
         if [ "$${DSPARK_SKIP_HOTFIX:-0}" != "1" ]; then for _hf in hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-adaptive-topk-50004.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh; do if [ -f /opt/dspark-patches/$${_hf} ]; then bash /opt/dspark-patches/$${_hf} || true; fi; done; fi;
         python3 /opt/hotfix-dsv4-issue27-partial-prefill-concurrency.py; python3 /opt/hotfix-dsv4-issue43-decode-fairness-and-diag.py; python3 /opt/hotfix-dsv4-issue26-hybrid-swa-min.py; if [ "$${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}" != "1" ]; then python3 /opt/hotfix-dsv4-suppress-stops-in-reasoning.py; fi; VLLM_QUANTIZATION_ARGS="";
         if [ "$${DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-assistant-final-continuation.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_QK_RMSNORM_SPLIT:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-qk-rmsnorm-split-blocks.py || exit 1; fi;
         if [ "$${ENABLE_VLLM_GB10_PATCH:-0}" = "1" ]; then
           python3 -m pip install -e /opt/vllm-gb10-hybrid-nvfp4 --no-deps;
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";

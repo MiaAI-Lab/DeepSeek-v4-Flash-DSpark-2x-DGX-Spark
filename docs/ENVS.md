@@ -71,6 +71,7 @@ PY
 | `DSPARK_SUPPRESS_STOPS_IN_REASONING` | `1` (default): after the detokenizer hotfix, client `stop` stays dormant until `</think>`. `0` restores stock matching. Also accepts Tony's `VLLM_SUPPRESS_STOPS_IN_REASONING` via compose interpolation (not added as a compose `VLLM_*` key, so Anemll does not warn). |
 | `DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX` | `1` skips applying `patches/hotfix-dsv4-suppress-stops-in-reasoning.py` |
 | `DSPARK_SKIP_SPIN_WAIT_HOTFIX` | `1` skips `patches/hotfix-gb10-spin-wait.sh` (issue #79: `busy_loop_s` 1s→2ms) |
+| `DSPARK_ENABLE_QK_RMSNORM_SPLIT` | Exactly `1` applies `patches/hotfix-dsv4-qk-rmsnorm-split-blocks.py` (upstream vLLM #49283: per-task Q/KV RMSNorm block widths) at container boot, fail-closed via `\|\| exit 1`. Anything else (default `0`) leaves the stock kernel and never invokes the patcher. Set it in `.env.dspark`, which is scp'd to the worker, so both ranks agree — the Q/KV latent is TP-replicated. No end-to-end effect is claimed; see `docs/vllm-027-new-patches.md`. |
 
 ### B. Stage-C / overlay-registered only (warn + no-op on Anemll 0.1.1)
 

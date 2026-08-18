@@ -37,6 +37,7 @@ py_files+=(
   scripts/test-suppress-stops-in-reasoning.py
   scripts/test-assistant-final-continuation.py
   scripts/test-ruler-lite-pad.py
+  scripts/test-qk-rmsnorm-split-blocks.py
   scripts/ruler-lite.py
   scripts/verify-dsv4-027-equality-gate.py
 )
@@ -60,6 +61,8 @@ python3 scripts/test-assistant-final-continuation.py -q
 ok "test-assistant-final-continuation"
 python3 scripts/test-ruler-lite-pad.py -q
 ok "test-ruler-lite-pad"
+python3 scripts/test-qk-rmsnorm-split-blocks.py -q
+ok "test-qk-rmsnorm-split-blocks"
 python3 scripts/verify-dsv4-027-equality-gate.py
 ok "verify-dsv4-027-equality-gate"
 bash scripts/verify-overlay-sources.sh
@@ -156,6 +159,21 @@ if grep -Fq 'DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "${DSPARK_ENABLE_ASSISTANT_FI
 else
   bad "compose must invoke assistant-final hotfix only when DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX=1, with || exit 1"
 fi
+# QK RMSNorm split blocks (upstream vLLM #49283): default OFF (stock kernel);
+# ON must be an exactly-1 gate with a fail-closed invocation, and the patcher
+# must reach rank 1 or a gated-ON boot would run asymmetric kernels.
+if grep -Fq 'DSPARK_ENABLE_QK_RMSNORM_SPLIT: "${DSPARK_ENABLE_QK_RMSNORM_SPLIT:-0}"' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${DSPARK_ENABLE_QK_RMSNORM_SPLIT:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-qk-rmsnorm-split-blocks.py || exit 1; fi;' docker-compose.dspark.yml; then
+  ok "compose gates QK RMSNorm split-blocks hotfix behind =1, fail-closed"
+else
+  bad "compose must invoke QK RMSNorm split-blocks hotfix only when DSPARK_ENABLE_QK_RMSNORM_SPLIT=1, with || exit 1"
+fi
+if grep -Fq 'scp "$DSPARK_QK_RMSNORM_SPLIT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-qk-rmsnorm-split-blocks.py"' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq 'DSPARK_ENABLE_QK_RMSNORM_SPLIT=0' .env.dspark.example; then
+  ok "QK RMSNorm split-blocks hotfix syncs to rank 1 and documents default OFF"
+else
+  bad "QK RMSNorm split-blocks hotfix must scp to the worker rank and default to 0 in .env.dspark.example"
+fi
 if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.dspark.yml; then
   ok "compose restart unless-stopped"
 else
@@ -179,7 +197,8 @@ for p in \
   patches/hotfix-nvfp4-ds-mla-issue22.sh \
   patches/hotfix-gb10-spin-wait.sh \
   patches/hotfix-dsv4-suppress-stops-in-reasoning.py \
-  patches/hotfix-dsv4-assistant-final-continuation.py
+  patches/hotfix-dsv4-assistant-final-continuation.py \
+  patches/hotfix-dsv4-qk-rmsnorm-split-blocks.py
 do
   if [ -f "$p" ]; then
     ok "present $p"
