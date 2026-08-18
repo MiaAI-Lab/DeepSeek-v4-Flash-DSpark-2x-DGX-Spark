@@ -68,6 +68,9 @@ PY
 | `NCCL_*` / `TP_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME` | Fabric |
 | `HF_*` / `TRANSFORMERS_OFFLINE` | Hub cache behavior |
 | `MTP_NUM_TOKENS` | Consumed by compose command line (not a vLLM env registry key) |
+| `KV_CACHE_DTYPE` | Compose-interpolated argv only (`--kv-cache-dtype`), default `nvfp4_ds_mla`; also accepts `fp8_ds_mla` and `fp8`. All use the same 584 B/token DSV4 sparse-MLA record, so the KV token pool is dtype-independent at equal `GPU_MEMORY_UTILIZATION` (Issue #22). |
+| `ENABLE_DSPARK_SPECULATIVE` | Compose-interpolated gate, default `1`. `0` drops `--speculative-config` and sizes `--max-cudagraph-capture-size` as `max_num_seqs * 1`. |
+| `ENFORCE_EAGER` | Compose-interpolated gate, default `0`. `1` adds `--enforce-eager` and drops `--max-cudagraph-capture-size` (no graphs are captured). |
 | `DSPARK_SUPPRESS_STOPS_IN_REASONING` | `1` (default): after the detokenizer hotfix, client `stop` stays dormant until `</think>`. `0` restores stock matching. Also accepts Tony's `VLLM_SUPPRESS_STOPS_IN_REASONING` via compose interpolation (not added as a compose `VLLM_*` key, so Anemll does not warn). |
 | `DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX` | `1` skips applying `patches/hotfix-dsv4-suppress-stops-in-reasoning.py` |
 | `DSPARK_SKIP_SPIN_WAIT_HOTFIX` | `1` skips `patches/hotfix-gb10-spin-wait.sh` (issue #79: `busy_loop_s` 1s→2ms) |
@@ -126,7 +129,7 @@ docker compose --env-file .env.dspark \
 
 Keep the slim set in `.env.dspark.example` + `docker-compose.dspark.yml`:
 
-- Serve profile: `MTP_NUM_TOKENS=5`, capture `max_num_seqs * (k+1)`, `GPU_MEMORY_UTILIZATION≈0.80`
+- Serve profile: `MTP_NUM_TOKENS=5`, capture `max_num_seqs * (k+1)` with speculation on (`max_num_seqs * 1` when `ENABLE_DSPARK_SPECULATIVE=0`, no capture flag when `ENFORCE_EAGER=1`), `GPU_MEMORY_UTILIZATION≈0.80`
 - `VLLM_USE_BREAKABLE_CUDAGRAPH=0` (explicit opt-out; omission auto-enables the slower breakable path on DS4)
 - `VLLM_USE_B12X_MOE=1`
 - `CUTE_DSL_ARCH=sm_121a` (GB10 CuTeDSL target; prevents slower JIT fallbacks)

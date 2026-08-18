@@ -205,7 +205,10 @@ needs a generous `max_tokens` or a budget or thinking won't end. See
 | `LONG_PREFILL_TOKEN_THRESHOLD` | `1024` | Issue **#27** chunk cap. `0` lets one prefill eat the whole batch (decode starves). |
 | `GPU_MEMORY_UTILIZATION_TEXT` | `0.835` | Used when `ENABLE_VL_SIDECAR=0`. Larger = bigger KV pool. |
 | `GPU_MEMORY_UTILIZATION_VISION` | `0.80` | Used when VL is on. |
-| `MTP_NUM_TOKENS` | `5` | DSpark draft depth. Must be ≥ 5. Capture size = `seqs * (k+1)`. |
+| `MTP_NUM_TOKENS` | `5` | DSpark draft depth. Must be ≥ 5. Capture size = `seqs * (k+1)` while speculation is on. |
+| `KV_CACHE_DTYPE` | `nvfp4_ds_mla` | MLA latent layout: `nvfp4_ds_mla`, `fp8_ds_mla`, or `fp8`. Same 584 B/token record either way, so the KV token pool does not change. |
+| `ENABLE_DSPARK_SPECULATIVE` | `1` | `0` drops `--speculative-config` and sizes capture as `seqs * 1` (decode query length 1). |
+| `ENFORCE_EAGER` | `0` | `1` adds `--enforce-eager` and drops `--max-cudagraph-capture-size` (deterministic, slower). |
 | `VLLM_USE_BREAKABLE_CUDAGRAPH` | `0` | **Keep 0.** Unset enables Anemll’s slower breakable graphs. |
 | `VLLM_PREFIX_CACHE_RETENTION_INTERVAL` | `4096` | Issue **#26** SWA prefix-cache spacing. Leave unless you are debugging warm-cache hits. |
 
@@ -458,10 +461,12 @@ to **0.80** and shrinks the 0731 KV pool.
 ## Runtime flags (default compose)
 
 - `/usr/local/bin/vllm serve` · TP=2 · `mp` · `nnodes 2`
-- `--kv-cache-dtype nvfp4_ds_mla` · `--block-size 256`
+- `--kv-cache-dtype nvfp4_ds_mla` (override with `KV_CACHE_DTYPE`) · `--block-size 256`
 - `--max-model-len 1048576` · `--max-num-seqs 6` · `--max-num-batched-tokens 8192`
 - `--long-prefill-token-threshold 1024` · `--enable-chunked-prefill` · `--async-scheduling`
-- `--max-cudagraph-capture-size` = `MAX_NUM_SEQS * (MTP_NUM_TOKENS + 1)` → 36 at 6×5
+- `--max-cudagraph-capture-size` = `MAX_NUM_SEQS * decode_query_len` → 36 at 6×5,
+  where `decode_query_len` is `MTP_NUM_TOKENS + 1` with speculation on and `1`
+  with `ENABLE_DSPARK_SPECULATIVE=0`. Dropped entirely under `ENFORCE_EAGER=1`.
 - `--moe-backend flashinfer_b12x` · `--generation-config vllm`
 - DSpark: `{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}`
 

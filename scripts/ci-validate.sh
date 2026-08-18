@@ -37,6 +37,7 @@ py_files+=(
   scripts/test-suppress-stops-in-reasoning.py
   scripts/test-assistant-final-continuation.py
   scripts/test-ruler-lite-pad.py
+  scripts/test-kv-profile-switches.py
   scripts/ruler-lite.py
   scripts/verify-dsv4-027-equality-gate.py
 )
@@ -60,6 +61,8 @@ python3 scripts/test-assistant-final-continuation.py -q
 ok "test-assistant-final-continuation"
 python3 scripts/test-ruler-lite-pad.py -q
 ok "test-ruler-lite-pad"
+python3 scripts/test-kv-profile-switches.py -q
+ok "test-kv-profile-switches"
 python3 scripts/verify-dsv4-027-equality-gate.py
 ok "verify-dsv4-027-equality-gate"
 bash scripts/verify-overlay-sources.sh
@@ -155,6 +158,42 @@ if grep -Fq 'DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "${DSPARK_ENABLE_ASSISTANT_FI
   ok "compose gates assistant-final hotfix behind =1, fail-closed"
 else
   bad "compose must invoke assistant-final hotfix only when DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX=1, with || exit 1"
+fi
+# KV / execution profile switches (PR #63): each ON arm must be an exactly-1
+# gate, and --max-cudagraph-capture-size must follow the decode query length
+# (1 + num_speculative_tokens) instead of MTP whenever speculation is off, and
+# must disappear entirely under --enforce-eager, where nothing is captured.
+if grep -Fq 'if [ "${ENABLE_DSPARK_SPECULATIVE:-1}" = "1" ]; then' docker-compose.dspark.yml \
+  && grep -Fq 'DECODE_QUERY_LEN=$$(( $${MTP_NUM_TOKENS:-5} + 1 ));' docker-compose.dspark.yml \
+  && grep -Fq 'CUDAGRAPH_ARGS="--max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * $${DECODE_QUERY_LEN} ))";' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "${ENFORCE_EAGER:-0}" = "1" ]; then EXECUTION_ARGS="--enforce-eager"; CUDAGRAPH_ARGS=""; fi;' docker-compose.dspark.yml \
+  && grep -Fq -- '--kv-cache-dtype ${KV_CACHE_DTYPE:-nvfp4_ds_mla}' docker-compose.dspark.yml; then
+  ok "compose gates KV dtype / speculation / eager, capture size from DECODE_QUERY_LEN"
+else
+  bad "compose must keep the three profile gates exactly-1 and size --max-cudagraph-capture-size from DECODE_QUERY_LEN"
+fi
+if [ "$(grep -c -- '--max-cudagraph-capture-size' docker-compose.dspark.yml)" = "1" ]; then
+  ok "compose renders --max-cudagraph-capture-size only via CUDAGRAPH_ARGS"
+else
+  bad "compose must not render an ungated --max-cudagraph-capture-size"
+fi
+# Fail-closed whitelist + 0/1 enumeration, mirrored by the config validator so
+# the two never disagree about one env file.
+if grep -Fq '  nvfp4_ds_mla|fp8|fp8_ds_mla) ;;' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq '  nvfp4_ds_mla|fp8|fp8_ds_mla) ;;' validate-dspark-config.sh \
+  && grep -Fq '  0:0|0:1|1:0|1:1) ;;' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq '  0:0|0:1|1:0|1:1) ;;' validate-dspark-config.sh; then
+  ok "start + validator share the KV dtype whitelist and the 0/1 enumeration"
+else
+  bad "start and validate-dspark-config.sh must apply the same KV_CACHE_DTYPE whitelist and 0/1 gates"
+fi
+# The 584-byte record is identical for both dtypes (Issue #22), so the withdrawn
+# pool/precision rationale must not come back into operator-facing files.
+if grep -qE '~2x the latent bytes|largest KV token pool|smaller token pool' \
+  .env.dspark.example start-deepseek-v4-flash-dspark.sh docker-compose.dspark.yml; then
+  bad "withdrawn KV memory claim reintroduced (584-byte layout is dtype-independent, CHANGELOG Issue #22)"
+else
+  ok "no withdrawn KV memory/precision claim in operator-facing files"
 fi
 if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.dspark.yml; then
   ok "compose restart unless-stopped"

@@ -44,6 +44,25 @@ else
 fi
 export DSPARK_MODEL DSPARK_REVISION
 
+# Mirror start-deepseek-v4-flash-dspark.sh exactly: same whitelist, same 0/1
+# gates, so this validator and the start script can never disagree about one
+# env file (otherwise: "config OK" here, `exit 2` there).
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-nvfp4_ds_mla}"
+case "$KV_CACHE_DTYPE" in
+  nvfp4_ds_mla|fp8|fp8_ds_mla) ;;
+  *)
+    echo "KV_CACHE_DTYPE must be nvfp4_ds_mla, fp8, or fp8_ds_mla (got: $KV_CACHE_DTYPE)" >&2
+    exit 2
+    ;;
+esac
+ENABLE_DSPARK_SPECULATIVE="${ENABLE_DSPARK_SPECULATIVE:-1}"
+ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
+case "$ENABLE_DSPARK_SPECULATIVE:$ENFORCE_EAGER" in
+  0:0|0:1|1:0|1:1) ;;
+  *) echo "ENABLE_DSPARK_SPECULATIVE and ENFORCE_EAGER must be 0 or 1." >&2; exit 2 ;;
+esac
+export KV_CACHE_DTYPE ENABLE_DSPARK_SPECULATIVE ENFORCE_EAGER
+
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
 : "${MASTER_PORT:?MASTER_PORT must be set in $ENV_FILE}"
@@ -101,8 +120,20 @@ echo "  max model len: ${MAX_MODEL_LEN:-1048576}"
 echo "  max num seqs: ${MAX_NUM_SEQS:-6}"
 echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
 echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION} (text ${GPU_MEMORY_UTILIZATION_TEXT:-0.835} / vision ${GPU_MEMORY_UTILIZATION_VISION:-0.80})"
-echo "  spec tokens (MTP_NUM_TOKENS): ${MTP_NUM_TOKENS:-5} with draft_sample_method=probabilistic (min 5 = dspark_block_size)"
-echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) )) (max_num_seqs * (mtp + 1))"
+echo "  KV cache dtype: ${KV_CACHE_DTYPE} (both layouts share the same 584B/token DSV4 record, so the KV pool is dtype-independent)"
+echo "  speculative decoding: ${ENABLE_DSPARK_SPECULATIVE} / enforce eager: ${ENFORCE_EAGER}"
+if [ "$ENABLE_DSPARK_SPECULATIVE" = "1" ]; then
+  echo "  spec tokens (MTP_NUM_TOKENS): ${MTP_NUM_TOKENS:-5} with draft_sample_method=probabilistic (min 5 = dspark_block_size)"
+else
+  echo "  spec tokens (MTP_NUM_TOKENS): inactive (ENABLE_DSPARK_SPECULATIVE=0)"
+fi
+if [ "$ENFORCE_EAGER" = "1" ]; then
+  echo "  cudagraph capture size: none (--enforce-eager; no graphs are captured)"
+elif [ "$ENABLE_DSPARK_SPECULATIVE" = "1" ]; then
+  echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) )) (max_num_seqs * (mtp + 1))"
+else
+  echo "  cudagraph capture size: ${MAX_NUM_SEQS:-6} (max_num_seqs * 1; speculation off)"
+fi
 echo "  breakable cudagraph: ${VLLM_USE_BREAKABLE_CUDAGRAPH:-0}"
 echo "  dspark slot clamp: ${DSPARK_SLOT_CLAMP:-1}"
 echo "  sampling override: none (no --override-generation-config; --generation-config vllm only)"
@@ -116,4 +147,4 @@ env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   DSPARK_MODEL="$DSPARK_MODEL" \
   DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DSPARK_REVISION'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--enforce-eager|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DSPARK_REVISION'

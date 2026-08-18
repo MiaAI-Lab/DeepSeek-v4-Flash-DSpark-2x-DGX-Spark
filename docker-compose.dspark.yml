@@ -175,9 +175,11 @@ services:
           VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
         fi;
         SPECULATIVE_ARGS="";
-        if [ "${ENABLE_DSPARK_SPECULATIVE:-1}" = "1" ]; then SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}"; SPECULATIVE_ARGS="--speculative-config $$SPECULATIVE_CONFIG"; fi;
+        DECODE_QUERY_LEN=1;
+        if [ "${ENABLE_DSPARK_SPECULATIVE:-1}" = "1" ]; then SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}"; SPECULATIVE_ARGS="--speculative-config $$SPECULATIVE_CONFIG"; DECODE_QUERY_LEN=$$(( $${MTP_NUM_TOKENS:-5} + 1 )); fi;
+        CUDAGRAPH_ARGS="--max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * $${DECODE_QUERY_LEN} ))";
         EXECUTION_ARGS="";
-        if [ "${ENFORCE_EAGER:-0}" = "1" ]; then EXECUTION_ARGS="--enforce-eager"; fi;
+        if [ "${ENFORCE_EAGER:-0}" = "1" ]; then EXECUTION_ARGS="--enforce-eager"; CUDAGRAPH_ARGS=""; fi;
         case "$${DEFAULT_THINKING:-low}" in
           off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":false}' ;;
           low) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"low"}' ;;
@@ -202,7 +204,7 @@ services:
         --max-num-seqs ${MAX_NUM_SEQS:-6}
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
         --long-prefill-token-threshold ${LONG_PREFILL_TOKEN_THRESHOLD:-1024}
-        --max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))
+        $${CUDAGRAPH_ARGS}
         --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
         --enable-prefix-caching
         --enable-prompt-tokens-details

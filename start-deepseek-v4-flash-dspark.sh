@@ -446,7 +446,7 @@ print_resolved_profile() {
   echo "  max num seqs: ${MAX_NUM_SEQS:-12}"
   echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
   echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.80} (text default ${GPU_MEMORY_UTILIZATION_TEXT:-0.835} / vision default ${GPU_MEMORY_UTILIZATION_VISION:-0.80})"
-  echo "  KV cache dtype: $KV_CACHE_DTYPE (fp8 maps to DeepSeek fp8_ds_mla on GB10)"
+  echo "  KV cache dtype: $KV_CACHE_DTYPE (both layouts share the same 584B/token DSV4 record, so the KV pool is dtype-independent)"
   echo "  speculative decoding: $ENABLE_DSPARK_SPECULATIVE"
   echo "  enforce eager: $ENFORCE_EAGER"
   if [ "$ENABLE_DSPARK_SPECULATIVE" = "1" ]; then
@@ -455,7 +455,13 @@ print_resolved_profile() {
     echo "  mtp speculative tokens: inactive"
   fi
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"
-  echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))"
+  if [ "$ENFORCE_EAGER" = "1" ]; then
+    echo "  cudagraph capture size: none (--enforce-eager; no graphs are captured)"
+  elif [ "$ENABLE_DSPARK_SPECULATIVE" = "1" ]; then
+    echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) )) (max_num_seqs * (mtp + 1))"
+  else
+    echo "  cudagraph capture size: ${MAX_NUM_SEQS:-6} (max_num_seqs * 1; speculation off)"
+  fi
   echo "  API bind: $VLLM_HOST:$VLLM_PORT"
   echo "  API probe: $API_URL"
   echo "  head fabric IP: $VLLM_HOST_IP"
