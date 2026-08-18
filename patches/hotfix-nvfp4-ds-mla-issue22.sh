@@ -9,24 +9,55 @@
 #   docker exec <container> bash /path/to/hotfix-nvfp4-ds-mla-issue22.sh
 #   # Then restart the vLLM process inside the container.
 #
+#   docker exec <container> bash /path/to/hotfix-nvfp4-ds-mla-issue22.sh --status
+#   # Report patch state only; makes no changes.
+#
 # Safe to re-run (idempotent — skips already-applied patches).
 set -euo pipefail
 
 VLLM_ROOT="${VLLM_ROOT:-/usr/local/lib/python3.12/dist-packages/vllm}"
+ACTION="${1:-}"
 
 if [ ! -d "$VLLM_ROOT" ]; then
   echo "ERROR: vLLM not found at $VLLM_ROOT" >&2
   exit 1
 fi
 
-echo "=== Hotfix: nvfp4_ds_mla long-context decode (Issue #22) ==="
-echo "vLLM root: $VLLM_ROOT"
-
-python3 <<'PYEOF'
+# Report patch state without touching the tree, in the same
+# "<label> : APPLIED|NOT APPLIED" form the other hotfixes here use, so tooling
+# can compare status text across ranks.
+status() {
+  python3 - "$VLLM_ROOT" <<'PY'
 import sys
 from pathlib import Path
 
-root = Path("/usr/local/lib/python3.12/dist-packages/vllm")
+root = Path(sys.argv[1])
+target = root / "v1" / "attention" / "backends" / "mla" / "flashmla_sparse.py"
+text = target.read_text() if target.exists() else ""
+
+
+def chk(label, cond):
+    print(f"{label:44} :", "APPLIED" if cond else "NOT APPLIED")
+
+
+chk("nvfp4_ds_mla routed to fast FP8 path",
+    'self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")' in text)
+PY
+  exit 0
+}
+
+if [ "$ACTION" = "--status" ]; then
+  status
+fi
+
+echo "=== Hotfix: nvfp4_ds_mla long-context decode (Issue #22) ==="
+echo "vLLM root: $VLLM_ROOT"
+
+python3 <<PYEOF
+import sys
+from pathlib import Path
+
+root = Path("$VLLM_ROOT")
 applied = 0
 skipped = 0
 errors = []
@@ -83,13 +114,4 @@ PYEOF
 
 echo ""
 echo "=== Verification ==="
-python3 <<'PYEOF'
-p = __import__("pathlib").Path("/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/flashmla_sparse.py")
-text = p.read_text()
-if 'self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")' in text:
-    print("[OK] nvfp4_ds_mla routed to fast FP8 kernel path")
-elif 'self.kv_cache_dtype == "fp8_ds_mla"' in text:
-    print("[FAIL] Still using slow BF16 path for nvfp4_ds_mla")
-else:
-    print("[WARN] Could not verify patch state")
-PYEOF
+bash "$0" --status

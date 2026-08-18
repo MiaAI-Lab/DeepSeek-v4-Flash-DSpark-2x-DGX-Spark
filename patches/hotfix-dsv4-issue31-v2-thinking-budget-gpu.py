@@ -27,8 +27,34 @@ import sys
 from pathlib import Path
 
 DEFAULT_VLLM = Path("/usr/local/lib/python3.12/dist-packages/vllm")
-VLLM = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_VLLM
 MARK = "# [issue31-gpu-hotfix] V2 thinking_token_budget"
+
+
+def _issue31_status() -> None:
+    root = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_VLLM
+    checks = (
+        ("thinking_budget_gpu.py", root / "v1/worker/gpu/sample/thinking_budget_gpu.py", False),
+        ("input_processor.py", root / "v1/engine/input_processor.py", True),
+        ("config/vllm.py", root / "config/vllm.py", True),
+        ("sampler.py", root / "v1/worker/gpu/sample/sampler.py", True),
+        ("model_runner.py", root / "v1/worker/gpu/model_runner.py", True),
+    )
+    for label, p, needs_mark in checks:
+        if not p.is_file():
+            print(f"{'issue31 ' + label:44} :", "NOT APPLIED")
+            continue
+        if needs_mark:
+            applied = MARK in p.read_text(encoding="utf-8")
+        else:
+            applied = True  # written verbatim by the hotfix; existence is the signal
+        print(f"{'issue31 ' + label:44} :", "APPLIED" if applied else "NOT APPLIED")
+    raise SystemExit(0)
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "--status":
+    _issue31_status()
+
+VLLM = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_VLLM
 
 THINKING_BUDGET_PY = r'''# SPDX-License-Identifier: Apache-2.0
 # [issue31-gpu-hotfix] V2 thinking_token_budget (DSpark)
