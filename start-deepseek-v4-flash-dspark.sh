@@ -150,6 +150,10 @@ if [[ "$URL_HOST" == *:* && "$URL_HOST" != \[*\] ]]; then
 fi
 API_URL="${API_URL:-http://$URL_HOST:$VLLM_PORT/v1/models}"
 CHAT_URL="${CHAT_URL:-http://$URL_HOST:$VLLM_PORT/v1/chat/completions}"
+AUTH_HEADER_ARGS=()
+if [ -n "${VLLM_API_KEY:-}" ]; then
+  AUTH_HEADER_ARGS=(-H "Authorization: Bearer $VLLM_API_KEY")
+fi
 
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
@@ -459,6 +463,11 @@ print_resolved_profile() {
   else
     echo "  DSV4 perf hotfixes (#50312/#50004/#49486/#48407/#48957/#50298/#44993-grammar): will apply on start"
   fi
+  if [ "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" = "1" ]; then
+    echo "  GB10 shm spin-wait hotfix (#79): SKIPPED (DSPARK_SKIP_SPIN_WAIT_HOTFIX=1)"
+  else
+    echo "  GB10 shm spin-wait hotfix (#79): will apply on start (busy_loop_s 1s -> 2ms)"
+  fi
   if [ "${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}" = "1" ]; then
     echo "  Suppress stops in <think>: SKIPPED (DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX=1)"
   elif [ "${DSPARK_SUPPRESS_STOPS_IN_REASONING:-${VLLM_SUPPRESS_STOPS_IN_REASONING:-1}}" = "0" ]; then
@@ -517,9 +526,14 @@ ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
   exit 1
 }
 
+already_running_hint() {
+  echo "This is not a failed start: dockerd likely restored ranks after a reboot (compose restart: unless-stopped). The cluster may already be serving. Run ./stop-deepseek-v4-flash-dspark.sh only if you want a cold start. Supervisors: treat exit 3 as already-up (systemd SuccessExitStatus=3)." >&2
+}
+
 if docker ps --format '{{.Names}}' | grep -qx "${PROJECT_NAME}-vllm-dspark-1"; then
   echo "DSpark head container already exists for project $PROJECT_NAME. Stop it first or use PROJECT_NAME=..." >&2
-  exit 1
+  already_running_hint
+  exit 3
 fi
 
 if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n +2 | grep -q .; then
@@ -527,7 +541,13 @@ if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n 
   exit 1
 fi
 
-ssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME.' >&2; exit 1; fi"
+if ssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME (head is not up — likely a stale rank after a head-only reboot). Stop it first.' >&2; exit 1; fi"; then
+  :
+else
+  worker_rc=$?
+  echo "Cannot start: worker check on $WORKER_HOST failed (ssh exit $worker_rc)." >&2
+  exit "$worker_rc"
+fi
 
 cd "$SCRIPT_DIR"
 resolve_nccl_gid_indexes
@@ -550,6 +570,12 @@ if [ -f "$DSPARK_HOTFIX_FILE" ]; then
   echo "Syncing Issue #22 hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_HOTFIX_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-nvfp4-ds-mla-issue22.sh"
+fi
+DSPARK_SPIN_WAIT_HOTFIX="${DSPARK_SPIN_WAIT_HOTFIX:-$SCRIPT_DIR/patches/hotfix-gb10-spin-wait.sh}"
+if [ -f "$DSPARK_SPIN_WAIT_HOTFIX" ]; then
+  echo "Syncing GB10 shm spin-wait hotfix (#79) to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_SPIN_WAIT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-gb10-spin-wait.sh"
 fi
 # DSV4 v0.27 .sh hotfixes — entrypoint applies them before exec vllm (issue #38).
 for _hf_sync in hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-adaptive-topk-50004.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh; do
@@ -603,6 +629,12 @@ if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
   ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-suppress-stops-in-reasoning.py; fi"
   scp "$DSPARK_SUPPRESS_STOPS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py"
 fi
+DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-assistant-final-continuation.py}"
+if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
+  echo "Syncing assistant-final continuation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_ASSISTANT_FINAL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-assistant-final-continuation.py"
+fi
 if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
   echo "Syncing GB10 vLLM patch to ${WORKER_HOST}:${WORKER_DIR}/vllm_patch_gb10"
   tar -C "$VLLM_GB10_PATCH_DIR" \
@@ -630,12 +662,15 @@ fi
 if [ "${DSPARK_SKIP_ISSUE22_HOTFIX:-0}" = "1" ]; then
   echo "Entrypoint will skip Issue #22 hotfix (DSPARK_SKIP_ISSUE22_HOTFIX=1)."
 fi
+if [ "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" = "1" ]; then
+  echo "Entrypoint will skip GB10 shm spin-wait hotfix (DSPARK_SKIP_SPIN_WAIT_HOTFIX=1)."
+fi
 echo "Issue #22 / v0.27 .sh hotfixes run in the compose entrypoint before vllm (no mid-boot stop)."
 
 echo "Waiting for DSpark vLLM API..."
 print_initial_startup_logs
 for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
-  if curl -fsS --max-time 5 "$API_URL" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "${AUTH_HEADER_ARGS[@]}" "$API_URL" >/dev/null 2>&1; then
     echo "DeepSeek V4 Flash DSpark is running: $API_URL"
     compose_base 0 "" ps
     remote_compose "docker compose -p '$PROJECT_NAME' --env-file .env.dspark -f docker-compose.dspark.yml ps"
@@ -681,7 +716,7 @@ for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
       fi
     fi
     echo "Running minimal OpenAI-compatible thinking-budget chat request..."
-    curl -fsS --max-time 60 "$CHAT_URL" \
+    curl -fsS --max-time 60 "${AUTH_HEADER_ARGS[@]}" "$CHAT_URL" \
       -H "Content-Type: application/json" \
       -d '{"model":"'"${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"'","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":32,"temperature":0.6,"top_p":0.95,"thinking_token_budget":1,"chat_template_kwargs":{"thinking":true,"reasoning_effort":"low"}}' >/dev/null
     echo "Minimal thinking-budget chat request succeeded."

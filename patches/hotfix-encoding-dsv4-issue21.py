@@ -54,6 +54,14 @@ def patch_file(path: Path) -> str:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == "--status":
+        target = Path(argv[2]) if len(argv) > 2 else DEFAULT_TARGET
+        if not target.is_file():
+            print("issue21 encoder dict-args fix  : NOT APPLIED (encoder file missing)")
+            return 0
+        _, st = patch_text(target.read_text(encoding="utf-8"))
+        print("issue21 encoder dict-args fix  :", "APPLIED" if st != "missing" else "NOT APPLIED")
+        return 0
     target = Path(argv[1]) if len(argv) > 1 else DEFAULT_TARGET
     if not target.is_file():
         print(f"[FAIL] encoding file not found: {target}", file=sys.stderr)
