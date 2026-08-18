@@ -201,3 +201,68 @@ docker exec <container> bash /path/to/hotfix-nvfp4-ds-mla-issue22.sh
 | file | change |
 |---|---|
 | `v1/attention/backends/mla/flashmla_sparse.py` | `use_fp8_cache` check: include `nvfp4_ds_mla` |
+
+---
+
+## Issue #52 — trailing assistant turn closes with EOS (no-op loop)
+
+### Symptom
+An agent harness gets stuck emitting empty turns: 1-2 generated tokens with
+`finish_reason: "stop"`, no tool call, fragments of hallucinated markup
+(`<result observation="no-op"></content>`, stray `</parameter>`). During a live
+incident 6 of 37 requests generated ≤10 tokens, all `stop`, zero `length`.
+
+### Root cause
+`render_message()` (HF checkpoint `encoding/encoding_dsv4.py`, installed as
+`vllm/tokenizers/deepseek_v4_encoding.py`) appends the generation header only
+when the trailing message is `user` or `developer`. A request whose `messages`
+ends with an **assistant** message is closed with EOS and gets no header, so
+the prompt ends on a bare EOS and the model generates from a dead state.
+Self-sustaining: the harness records the empty turn, so the next request is
+also assistant-final.
+
+### Fix
+Widen the separate generation-header transition condition to also match only
+the final assistant message
+(`patches/hotfix-dsv4-assistant-final-continuation.py`). The checkpoint encoder
+has no `add_generation_prompt` input; the patch preserves the closed assistant
+turn, then appends a fresh generation header. Reopening the turn with `wo_eos`
+was measured worse (1-token empty generation on a complete turn) and is not
+used. Runs after the entrypoint copies the encoder into place.
+
+### Flag (default OFF = stock)
+| value | behavior |
+|---|---|
+| `0` / unset / anything ≠ `1` | stock renderer; patcher mounted/synced to the worker but **never invoked** |
+| `1` | patcher runs at container boot, chained with `\|\| exit 1` |
+
+Fail-closed when ON: missing encoder file, missing anchor, or a failed
+post-write self-check (patched module must import and render a
+trailing-assistant transcript with a generation header) → nonzero exit, boot
+aborts; a failed self-check **restores the original file bytes** first. An
+already-patched encoder is re-validated (idempotent), never double-patched.
+
+### Evidence status
+Render/no-regression evidence is from prior head `f08cd6c`. The measured
+positive-path evidence is a causal one-prompt A/B via `/v1/completions`:
+trailing turn left open → 183 tokens, coherent continuation; closed with EOS →
+400 tokens of raw `<|DSML|tool_calls>` markup emitted as text. **No rescue
+claim**: the live no-op-loop defect did not reproduce in that session, so no
+measured stuck-harness recovery exists.
+
+A first gated-ON boot on `d4b31daf` failed closed before serving because a
+review-requested guard named the nonexistent checkpoint variable
+`add_generation_prompt`; the original encoder bytes were restored. Corrected
+code commit `0864014` then passed serialized live proof on both ranks. OFF:
+effective flag `0`, no patch marker, and the assistant-final render ended on
+EOS. ON: effective flag `1`, both ranks logged `patched and verified`, and the
+same 98 stock token IDs were preserved with exactly
+`<|Assistant|><think>` appended. A live continuation completed with
+`alpha beta`. Re-running the patcher on both ranks reported
+`already applied and verified`. A deliberate anchor-drift boot exited `1` on
+both ranks, entered restart/failure state, and never served the API.
+
+### Test
+```bash
+python3 scripts/test-assistant-final-continuation.py
+```

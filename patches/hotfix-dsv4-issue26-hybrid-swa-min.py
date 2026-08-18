@@ -20,6 +20,7 @@ entrypoint before ``exec vllm serve``.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 P = Path(
@@ -28,6 +29,16 @@ P = Path(
 
 MARK_V2 = "# [issue26-hotfix-v2] SWA may shrink the common hit (#36)"
 MARK_V1 = "# [issue26-hotfix] SWA groups must not shrink the hybrid common hit"
+
+if len(sys.argv) > 1 and sys.argv[1] == "--status":
+    status_src = P.read_text(encoding="utf-8") if P.is_file() else ""
+    if MARK_V2 in status_src:
+        print("issue26 hybrid-SWA-min v2         : APPLIED")
+    elif MARK_V1 in status_src:
+        print("issue26 hybrid-SWA-min v2         : NOT APPLIED (v1 inject present)")
+    else:
+        print("issue26 hybrid-SWA-min v2         : NOT APPLIED")
+    raise SystemExit(0)
 
 STOCK = (
     "                _new_hit_length = len(hit_blocks[0]) * spec.block_size\n"

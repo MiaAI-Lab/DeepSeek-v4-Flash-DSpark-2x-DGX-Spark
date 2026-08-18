@@ -1,3 +1,26 @@
+## 2026-08-19
+
+### Fixed
+
+- **RULER-lite never reached its advertised context lengths ([Issue #81](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/81))**: `pad_to_length` appended one haystack sentence per loop with `guard < 200`, so every cell capped at ~4.8k tokens while still exiting 0. It now bulk-pads and `run_case` fails if `/tokenize` is under 97% of the target.
+
+## 2026-08-18
+
+### Changed
+
+- **Issue #52 / PR #53: assistant-final continuation hotfix is now opt-in (`DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX`, default `0` = stock)** (`patches/hotfix-dsv4-assistant-final-continuation.py`): a request whose `messages` array ends with an assistant message renders with a bare EOS and no generation header, so the model generates from a dead state — the reported agent-harness loop of empty no-op turns with hallucinated DSML markup fragments. At the previous PR head the compose entrypoint already ran this patcher unconditionally inside the encoder-copy chain; this change restores **default stock rendering** (patch file stays mounted/synced to the worker but is never invoked) and moves invocation behind an exactly-`1` gate in `docker-compose.dspark.yml`, chained with `|| exit 1` so an ON boot fails rather than serving an unpatched or unverified encoder. The patcher itself is now fail-closed: missing encoder file (prerequisite), missing anchor, or a failed post-write self-check (patched module must import and render a trailing-assistant transcript with a generation header) all exit nonzero, any failed self-check **restores the original file bytes**, and an already-patched encoder is re-validated instead of rewritten (idempotent). Documented in `.env.dspark.example` and `docs/PATCHES.md`; CPU gates in `scripts/test-assistant-final-continuation.py` use the checkpoint's real encoder signature and separate render/transition control flow, proving stock bytes plus one appended header for assistant-final input, byte identity for every non-assistant-final shape, idempotence, fail-closed/restore, and static OFF-default compose/start wiring. They are wired into `scripts/ci-validate.sh`.
+
+  Evidence status, stated exactly: render and no-regression evidence is from prior head `f08cd6c` — a causal one-prompt A/B via `/v1/completions` where the trailing turn left open produced 183 tokens with a coherent continuation versus 400 tokens of raw `<|DSML|tool_calls>` markup when closed with EOS, plus the `wo_eos` comparison showing reopening a *complete* turn yields a 1-token empty generation. **No rescue claim**: the live no-op-turn defect did not reproduce in that session, so there is no measured stuck-harness recovery. A first gated-ON boot on `d4b31daf` failed closed before serving because a review-requested guard named the nonexistent checkpoint variable `add_generation_prompt`; the original encoder bytes were restored. Corrected code commit `0864014` passed serialized live OFF/ON proof on both ranks: OFF had effective flag `0`, no patch marker, and a stock EOS render; ON had effective flag `1`, both ranks patched and verified, preserved all 98 stock token IDs, appended exactly `<|Assistant|><think>`, and completed a live continuation with `alpha beta`. Re-running on both ranks verified idempotence. A deliberate anchor-drift boot failed with exit `1` on both ranks and never served the API.
+### Fixed
+
+- **vLLM shm spin-wait wasting Grace P-cores on TP=2 ([Issue #79](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/79))**: `patches/hotfix-gb10-spin-wait.sh` flips `SpinCondition.busy_loop_s` from `1` to `0.002` in-image before `exec vllm`. Decode IPC always lands inside the old 1s window, so `sched_yield` never fell through to sleep. Opt out with `DSPARK_SKIP_SPIN_WAIT_HOTFIX=1`. Not gated by `DSPARK_SKIP_HOTFIX`. Same one-line change as PRs #71/#74.
+
+## 2026-08-17
+
+### Fixed
+
+- **Start script vs `unless-stopped` after reboot ([Issue #72](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/72))**: dockerd restores both ranks, then `./start-…` used to `exit 1` on the existing-container guard — the same code as a real failure, which turns a systemd `Restart=on-failure` unit into a retry storm against a serving cluster. If the **head** container is already up, start now **exits 3** with a hint that this is expected after reboot; real failures stay `1`. A leftover **worker** with head down still exits 1 (stale rank after a head-only reboot — rebuild, do not treat as success). Supervisors: `SuccessExitStatus=3` + `RemainAfterExit=yes`, or `DSPARK_RESTART_POLICY=no`. Documented next to `DSPARK_RESTART_POLICY` in `docs/ENVS.md` / `.env.dspark.example`. This is not an adopt/attach path and does not claim the TP group is healthy.
+
 ## 2026-08-14
 
 ### Fixed

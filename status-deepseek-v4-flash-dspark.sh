@@ -6,8 +6,9 @@ ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
 COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.dspark.yml}"
 PROJECT_NAME="${PROJECT_NAME:-deepseek-v4-flash}"
 LEGACY_PROJECT_NAME="${LEGACY_PROJECT_NAME:-$(basename "$SCRIPT_DIR" | tr '[:upper:]' '[:lower:]')}"
-API_URL="${API_URL:-http://127.0.0.1:8888/v1/models}"
+API_URL="${API_URL:-}"
 PORT="${PORT:-8888}"
+AUTH_HEADER_ARGS=()
 
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -15,6 +16,18 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
   set +a
 fi
+
+if [ -n "${VLLM_API_KEY:-}" ]; then
+  AUTH_HEADER_ARGS=(-H "Authorization: Bearer $VLLM_API_KEY")
+fi
+
+# Default the endpoint from the configured bind address. vLLM binds exactly
+# VLLM_HOST (README API note: HEAD_NODE_IP), so 127.0.0.1 is wrong for a
+# LAN-IP bind. A wildcard bind is probed on loopback. An explicit API_URL
+# from the environment still wins.
+_dspark_host="${VLLM_HOST:-127.0.0.1}"
+case "$_dspark_host" in 0.0.0.0|::|"") _dspark_host=127.0.0.1 ;; esac
+API_URL="${API_URL:-http://${_dspark_host}:${VLLM_PORT:-8888}/v1/models}"
 
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE or environment}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
@@ -51,5 +64,5 @@ echo "== port/API =="
 if command -v ss >/dev/null 2>&1; then
   ss -ltn "( sport = :$PORT )" || true
 fi
-curl -fsS --max-time 5 "$API_URL" || true
+curl -fsS --max-time 5 "${AUTH_HEADER_ARGS[@]}" "$API_URL" || true
 echo

@@ -23,6 +23,22 @@ WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
 WORKER_HF_CACHE="${WORKER_HF_CACHE:-${HF_CACHE:-}}"
 WORKER_VLLM_HOST_IP="${WORKER_VLLM_HOST_IP:-}"
 
+# A stop that cannot reach the worker must not report success: a powered-down
+# worker resurrects its stale rank (compose restart: unless-stopped) the next
+# time it boots, and nothing here will have stopped it. Mirror start's ssh
+# hardening (BatchMode/ConnectTimeout) so stop never hangs on a prompt either.
+STOP_FAILURES=0
+stop_warn() {
+  echo "WARN: $*" >&2
+  STOP_FAILURES=$((STOP_FAILURES + 1))
+}
+if ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "true" >/dev/null 2>&1; then
+  WORKER_REACHABLE=1
+else
+  WORKER_REACHABLE=0
+  echo "WARN: cannot reach worker ${WORKER_HOST}; its ranks will NOT be stopped." >&2
+fi
+
 local_project_has_resources() {
   local project="$1"
   {
@@ -51,8 +67,8 @@ EOF
 )
   if [ "$where" = "local" ]; then
     bash -c "$cmd" || true
-  else
-    ssh "$WORKER_HOST" "$cmd" || true
+  elif [ "${WORKER_REACHABLE:-1}" = "1" ]; then
+    ssh "$WORKER_HOST" "$cmd" || stop_warn "force-remove on ${WORKER_HOST} failed"
   fi
 }
 
@@ -78,6 +94,10 @@ stop_vl_sidecar_head() {
 
 stop_vl_sidecar_worker() {
   local project="$1"
+  if [ "${WORKER_REACHABLE:-1}" != "1" ]; then
+    stop_warn "worker ${WORKER_HOST} unreachable: VL sidecar worker rank not stopped"
+    return 0
+  fi
   # Text-only: still sweep if a zombie VL exists; otherwise skip SSH noise.
   local worker_has_vl=0
   if ssh "$WORKER_HOST" "docker ps -aq --filter 'name=${project}-vl-sidecar' 2>/dev/null | grep -q ."; then
@@ -104,7 +124,7 @@ stop_vl_sidecar_worker() {
     fi
     ids=\$(docker ps -aq --filter 'name=${project}-vl-sidecar' 2>/dev/null || true)
     if [ -n \"\$ids\" ]; then docker rm -f \$ids >/dev/null 2>&1 || true; fi
-  " || true
+  " || stop_warn "VL sidecar worker stop failed on ${WORKER_HOST}"
 }
 
 stop_main_head() {
@@ -122,6 +142,10 @@ stop_main_head() {
 
 stop_main_worker() {
   local project="$1"
+  if [ "${WORKER_REACHABLE:-1}" != "1" ]; then
+    stop_warn "worker ${WORKER_HOST} unreachable: main DSpark worker rank not stopped"
+    return 0
+  fi
   ssh "$WORKER_HOST" "
     cd '$WORKER_DIR' || exit 1
     if {
@@ -140,7 +164,7 @@ stop_main_worker() {
     else
       echo 'No DSpark 0731 worker resources for project $project on $WORKER_HOST; skipping.'
     fi
-  " || true
+  " || stop_warn "main DSpark worker stop failed on ${WORKER_HOST}"
 }
 
 stop_project() {
@@ -161,6 +185,11 @@ stop_project() {
 stop_project "$PROJECT_NAME"
 if [ "$LEGACY_PROJECT_NAME" != "$PROJECT_NAME" ]; then
   stop_project "$LEGACY_PROJECT_NAME"
+fi
+
+if [ "$STOP_FAILURES" -gt 0 ]; then
+  echo "WARN: $STOP_FAILURES remote stop step(s) failed on ${WORKER_HOST}; the worker may still be serving a stale rank (restart: unless-stopped restores it on reboot). Re-run ./stop-deepseek-v4-flash-dspark.sh once the worker is reachable." >&2
+  exit 1
 fi
 
 if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then

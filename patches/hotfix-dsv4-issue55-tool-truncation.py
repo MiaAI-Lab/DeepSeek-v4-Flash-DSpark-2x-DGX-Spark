@@ -147,6 +147,12 @@ def _patch_file(path: Path, old: str, new: str, what: str) -> str:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--status":
+        root = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_VLLM
+        p = root / SERVING
+        applied = p.is_file() and MARK in p.read_text(encoding="utf-8")
+        print("issue55 tool-call truncation    :", "APPLIED" if applied else "NOT APPLIED")
+        return 0
     vllm_root = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_VLLM
     path = vllm_root / SERVING
     if not path.is_file():
