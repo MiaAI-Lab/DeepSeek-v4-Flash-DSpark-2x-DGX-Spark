@@ -125,6 +125,7 @@ services:
       DSPARK_SKIP_HOTFIX: "${DSPARK_SKIP_HOTFIX:-0}"
       DSPARK_SKIP_ISSUE22_HOTFIX: "${DSPARK_SKIP_ISSUE22_HOTFIX:-0}"
       DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX: "${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}"
+      DSPARK_SKIP_SPIN_WAIT_HOTFIX: "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}"
       # 1 = keep client stop strings dormant inside <think> (default).
       # 0 = stock vLLM (stops can fire mid-reason). Also honors
       # VLLM_SUPPRESS_STOPS_IN_REASONING if that is set in .env.

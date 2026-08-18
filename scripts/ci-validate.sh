@@ -126,6 +126,12 @@ if grep -q 'hotfix-dsv4-suppress-stops-in-reasoning.py' docker-compose.dspark.ym
 else
   bad "compose missing suppress-stops-in-reasoning"
 fi
+if grep -Fq 'DSPARK_SKIP_SPIN_WAIT_HOTFIX: "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}"' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" != "1" ]' docker-compose.dspark.yml; then
+  ok "compose passes and honors spin-wait hotfix opt-out"
+else
+  bad "compose spin-wait hotfix opt-out is not wired"
+fi
 if grep -q 'hotfix-dsv4-issue31-v2-thinking-budget-gpu.py' docker-compose.dspark.yml \
   && grep -q 'python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py' docker-compose.dspark.yml; then
   ok "compose applies GPU-resident V2 thinking budget"
