@@ -37,6 +37,7 @@ py_files+=(
   scripts/test-suppress-stops-in-reasoning.py
   scripts/test-assistant-final-continuation.py
   scripts/test-ruler-lite-pad.py
+  scripts/test-topk-constexpr-patchapply.py
   scripts/ruler-lite.py
   scripts/verify-dsv4-027-equality-gate.py
 )
@@ -60,6 +61,8 @@ python3 scripts/test-assistant-final-continuation.py -q
 ok "test-assistant-final-continuation"
 python3 scripts/test-ruler-lite-pad.py -q
 ok "test-ruler-lite-pad"
+python3 scripts/test-topk-constexpr-patchapply.py -q
+ok "test-topk-constexpr-patchapply"
 python3 scripts/verify-dsv4-027-equality-gate.py
 ok "verify-dsv4-027-equality-gate"
 bash scripts/verify-overlay-sources.sh
@@ -156,6 +159,24 @@ if grep -Fq 'DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "${DSPARK_ENABLE_ASSISTANT_FI
 else
   bad "compose must invoke assistant-final hotfix only when DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX=1, with || exit 1"
 fi
+# Upstream #51967 top-k constexpr backport: default OFF (stock kernel); ON must
+# be an exactly-1 gate with a fail-closed invocation, and the file must be
+# mounted or the gate cannot resolve it.
+if grep -Fq 'DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX: "${DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX:-0}"' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-topk-compile-time-consts.py || exit 1; fi;' docker-compose.dspark.yml \
+  && grep -Fq '${DSPARK_TOPK_CONSTEXPR_HOTFIX:-./patches/hotfix-dsv4-topk-compile-time-consts.py}:/opt/hotfix-dsv4-topk-compile-time-consts.py:ro' docker-compose.dspark.yml; then
+  ok "compose mounts + gates topk-constexpr hotfix behind =1, fail-closed"
+else
+  bad "compose must mount the topk-constexpr hotfix and invoke it only when DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX=1, with || exit 1"
+fi
+# Rank 1 runs its own container from its own copy: without this scp the gate
+# would patch rank 0 only.
+if grep -Fq 'scp "$DSPARK_TOPK_CONSTEXPR_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-topk-compile-time-consts.py"' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq 'DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX=0' .env.dspark.example; then
+  ok "topk-constexpr hotfix syncs to rank 1 and documents default OFF"
+else
+  bad "start script must scp the topk-constexpr hotfix to the worker; .env.dspark.example must document DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX=0"
+fi
 if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.dspark.yml; then
   ok "compose restart unless-stopped"
 else
@@ -179,7 +200,8 @@ for p in \
   patches/hotfix-nvfp4-ds-mla-issue22.sh \
   patches/hotfix-gb10-spin-wait.sh \
   patches/hotfix-dsv4-suppress-stops-in-reasoning.py \
-  patches/hotfix-dsv4-assistant-final-continuation.py
+  patches/hotfix-dsv4-assistant-final-continuation.py \
+  patches/hotfix-dsv4-topk-compile-time-consts.py
 do
   if [ -f "$p" ]; then
     ok "present $p"

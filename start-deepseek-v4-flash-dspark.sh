@@ -635,6 +635,12 @@ if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ASSISTANT_FINAL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-assistant-final-continuation.py"
 fi
+DSPARK_TOPK_CONSTEXPR_HOTFIX="${DSPARK_TOPK_CONSTEXPR_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-topk-compile-time-consts.py}"
+if [ -f "$DSPARK_TOPK_CONSTEXPR_HOTFIX" ]; then
+  echo "Syncing #51967 topk-constexpr hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_TOPK_CONSTEXPR_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-topk-compile-time-consts.py"
+fi
 if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
   echo "Syncing GB10 vLLM patch to ${WORKER_HOST}:${WORKER_DIR}/vllm_patch_gb10"
   tar -C "$VLLM_GB10_PATCH_DIR" \

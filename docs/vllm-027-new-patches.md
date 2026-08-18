@@ -12,10 +12,15 @@ upstream vLLM v0.27.0 onto the Anemll dspark-vllm-gx10 0.1.1 image
 | `hotfix-dsv4-adaptive-topk-50004.sh` | #50004 | 1.0% E2E: adaptive C128A topk width | **live** |
 | `hotfix-dsv4-skip-empty-c128-48957.sh` | #48957 | ~2x kernel: skip C128 compressor launch when no request crosses a 128-token boundary | **script verified, not yet applied**; fires only when cudagraph mode ≠ FULL |
 | `hotfix-dsv4-flashmla-workspace-50298.sh` | #50298 | 1.88x kernel: workspace reuse for combined topk+SWA indices on the FlashMLA prefill path | **script verified, not yet applied** |
+| `hotfix-dsv4-topk-compile-time-consts.py` | #51967 | promotes 5 args of `_compute_global_topk_indices_and_lens_kernel` (`global_topk_indices_stride`, `topk_indices_stride`, `topk`, `block_table_stride`, `block_size`) to `tl.constexpr`; annotation-only, numerically identical | **wired, default OFF** behind `DSPARK_ENABLE_TOPK_CONSTEXPR_HOTFIX=1` (exactly `1`, fail-closed `\|\| exit 1`); **unmeasured on this fork** — upstream measured +0.50% output throughput / −0.98% TPOT at TP=8 |
 
-All four are idempotent, apply on both nodes (each runs its own container),
-and never restart the server themselves. Each supports `--before` / `--after`
-(host-side KV-budget + prompt-histogram validation) and `--status`.
+The `.sh` backports above are idempotent, apply on both nodes (each runs its
+own container), and never restart the server themselves. Each supports
+`--before` / `--after` (host-side KV-budget + prompt-histogram validation) and
+`--status`. The `.py` backport (#51967) is idempotent and applies on both
+nodes through the compose entrypoint once its gate is `1`; it supports
+`--status` (read-only probe) and honours `VLLM_ROOT`, but has no
+`--before`/`--after` host-side capture because it changes no KV budget.
 
 ---
 
