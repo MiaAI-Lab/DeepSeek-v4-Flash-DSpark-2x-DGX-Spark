@@ -67,6 +67,9 @@ services:
       # (scheduled prefill/decode tokens per request + zero-token decode
       # skips) when set to 1. Off by default (zero overhead).
       DSPARK_ISSUE43_SCHED_DIAG: "${DSPARK_ISSUE43_SCHED_DIAG:-0}"
+      # In-flight partial-prefill cap for the #27 hotfix (1-3, default 2).
+      # Do NOT pass --max-num-partial-prefills (Anemll 0.1.1 rejects it).
+      DSPARK_MAX_INFLIGHT_PREFILLS: "${DSPARK_MAX_INFLIGHT_PREFILLS:-2}"
       # Pin HF revision (issue #19). Empty → tip of default branch / refs/main.
       DSPARK_REVISION: "${DSPARK_REVISION:-}"
       DSPARK_ENCODING_FILE: "${DSPARK_ENCODING_FILE:-}"

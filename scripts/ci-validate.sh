@@ -63,6 +63,8 @@ python3 scripts/test-ruler-lite-pad.py -q
 ok "test-ruler-lite-pad"
 python3 scripts/test-kv-profile-switches.py -q
 ok "test-kv-profile-switches"
+python3 tests/test_issue27_inflight_cap.py -q
+ok "test_issue27_inflight_cap"
 python3 scripts/verify-dsv4-027-equality-gate.py
 ok "verify-dsv4-027-equality-gate"
 bash scripts/verify-overlay-sources.sh
