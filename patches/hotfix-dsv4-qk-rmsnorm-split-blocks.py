@@ -73,9 +73,13 @@ container per node, and `fused_wqa_wkv` is built with `disable_tp=True`, so
 this latent is TP-replicated and one-rank application would leave the ranks
 computing ulp-divergent values.
 
-The supported path is the compose entrypoint, default OFF:
+Enable the patch in `.env.dspark` so the same value reaches both ranks; default OFF:
 
-    DSPARK_ENABLE_QK_RMSNORM_SPLIT=1 ./start-deepseek-v4-flash-dspark.sh
+    DSPARK_ENABLE_QK_RMSNORM_SPLIT=1
+
+Then start the pair normally:
+
+    ./start-deepseek-v4-flash-dspark.sh
 
 `start-deepseek-v4-flash-dspark.sh` scp's this file to the worker, and
 `docker-compose.dspark.yml` invokes it on each rank only when the flag is
