@@ -15,7 +15,10 @@ grows with prompt length. (Issue #27.)
 
 Fix: at the top of the waiting-admission loop, break (don't admit a new
 prefill request) once the number of in-flight partial prefills has reached
-``max_num_partial_prefills``. ``self._inflight_prefills`` is maintained by
+the cap. The cap is ``DSPARK_MAX_INFLIGHT_PREFILLS`` (1-3, default 2 via
+compose) because this image rejects ``--max-num-partial-prefills``; if that
+env is unset/0 the hotfix falls back to ``SchedulerConfig.max_num_partial_prefills``
+(stock 1). ``self._inflight_prefills`` is maintained by
 ``_update_after_schedule`` (populated for requests still needing more prefill
 chunks, discarded when they finish prefilling), so it correctly reflects the
 currently-prefilling set. This restores the documented concurrency cap of 1
@@ -62,10 +65,18 @@ INJECT = ANCHOR + (
     "                # them get num_new_tokens==0 and are skipped (continue, not preempt)\n"
     "                # -> zero-preemption decode starvation (issue #27). _inflight_prefills\n"
     "                # is the set of running requests still needing prefill chunks.\n"
+    "                # DSPARK_MAX_INFLIGHT_PREFILLS (1-3) overrides the config field\n"
+    "                # because this image rejects --max-num-partial-prefills.\n"
+    "                _pp_cap = int((__import__('os').environ.get(\n"
+    "                    'DSPARK_MAX_INFLIGHT_PREFILLS') or '0') or 0)\n"
+    "                if _pp_cap <= 0:\n"
+    "                    _pp_cap = self.scheduler_config.max_num_partial_prefills\n"
+    "                if _pp_cap > 3:\n"
+    "                    _pp_cap = 3\n"
     "                if (\n"
-    "                    self.scheduler_config.max_num_partial_prefills > 0\n"
+    "                    _pp_cap > 0\n"
     "                    and len(self._inflight_prefills)\n"
-    "                    >= self.scheduler_config.max_num_partial_prefills\n"
+    "                    >= _pp_cap\n"
     "                ):\n"
     "                    break\n"
 )
