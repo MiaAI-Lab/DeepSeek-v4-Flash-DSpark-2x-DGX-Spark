@@ -75,6 +75,7 @@ def ack_response(turn: int, *, content: str | None = None,
 class FakeClient:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.render_requests: list[dict[str, Any]] = []
 
     def json(self, method: str, path: str,
              body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -93,6 +94,21 @@ class FakeClient:
             return "<think>checked</think>\n\n<｜DSML｜tool_calls>...</｜DSML｜tool_calls>"
         return f"<think>checked</think>ACK {len(self.requests)}"
 
+    def render_chat(self, model: str, messages: list[dict[str, Any]],
+                    tools: list[dict[str, Any]],
+                    chat_template_kwargs: dict[str, Any]) -> tuple[str, int]:
+        if model != "test-model":
+            raise AssertionError(model)
+        self.render_requests.append({
+            "messages": json.loads(json.dumps(messages)),
+            "tools": tools,
+            "chat_template_kwargs": chat_template_kwargs,
+        })
+        rendered_reasoning = "\n".join(
+            message["reasoning"] for message in messages
+            if isinstance(message.get("reasoning"), str))
+        return rendered_reasoning, len(messages)
+
 
 class ExpectedActionTests(unittest.TestCase):
     def test_first_ten_action_signatures_are_unique(self) -> None:
@@ -104,6 +120,16 @@ class ExpectedActionTests(unittest.TestCase):
         self.assertIn("Call read_ticket exactly once", issue82.user_prompt(1))
         self.assertIn("Do not call a tool", issue82.user_prompt(2))
         self.assertIn("Reply exactly ACK 2", issue82.user_prompt(2))
+
+    def test_canary_cli_options_parse(self) -> None:
+        args = issue82.parse_args([
+            "--temperature", "0.7",
+            "--top-p", "0.9",
+            "--thinking-token-budget", "2048",
+        ])
+        self.assertEqual(args.temperature, 0.7)
+        self.assertEqual(args.top_p, 0.9)
+        self.assertEqual(args.thinking_token_budget, 2048)
 
 
 class ResponseClassificationTests(unittest.TestCase):
@@ -223,6 +249,10 @@ class TrajectoryTests(unittest.TestCase):
             for record in result["turn_records"]))
         self.assertEqual(len(result["turn_records"][0]["request"]["messages"]), 2)
         self.assertEqual(len(result["turn_records"][1]["request"]["messages"]), 5)
+        self.assertFalse(result["rendered_reasoning_proof"]["reasoning_present"])
+        self.assertEqual(
+            result["rendered_reasoning_proof"]["history_mode"], "drop")
+        self.assertEqual(len(client.render_requests), 1)
 
     def test_raw_output_and_parser_mismatch_fails(self) -> None:
         class MissingDSMLClient(FakeClient):
@@ -239,7 +269,7 @@ class TrajectoryTests(unittest.TestCase):
 
     def test_agent_shape_replays_reasoning_without_deprecated_alias(self) -> None:
         client = FakeClient()
-        issue82.run_trajectory(
+        result = issue82.run_trajectory(
             client, "test-model", turns=4, max_tokens=1024, seed=82_000,
             replay_reasoning=True, seed_turns=0, context_records=0)
         assistants = [message for message in client.requests[-1]["messages"]
@@ -249,6 +279,9 @@ class TrajectoryTests(unittest.TestCase):
                             for message in assistants))
         self.assertTrue(all("reasoning_content" not in message
                             for message in assistants))
+        self.assertTrue(result["rendered_reasoning_proof"]["reasoning_present"])
+        self.assertEqual(
+            result["rendered_reasoning_proof"]["history_mode"], "replay")
 
     def test_reasoning_content_response_alias_is_replayed(self) -> None:
         class ReasoningContentClient(FakeClient):
@@ -270,6 +303,9 @@ class TrajectoryTests(unittest.TestCase):
                             for message in assistants))
         self.assertTrue(all("reasoning_content" not in message
                             for message in assistants))
+        self.assertEqual(
+            result["rendered_reasoning_proof"]["response_field"],
+            "reasoning_content")
 
     def test_seeded_history_does_not_mask_vacuous_live_replay(self) -> None:
         class NoReasoningClient(FakeClient):
@@ -279,11 +315,63 @@ class TrajectoryTests(unittest.TestCase):
                 response["choices"][0]["message"].pop("reasoning", None)
                 return response
 
-        with self.assertRaisesRegex(RuntimeError, "replay was vacuous"):
-            issue82.run_trajectory(
-                NoReasoningClient(), "test-model", turns=2,
-                max_tokens=1024, seed=82_000, replay_reasoning=True,
-                seed_turns=2, context_records=0)
+        result = issue82.run_trajectory(
+            NoReasoningClient(), "test-model", turns=2,
+            max_tokens=1024, seed=82_000, replay_reasoning=True,
+            seed_turns=2, context_records=0)
+        self.assertFalse(result["summary"]["passed"])
+        self.assertTrue(any("replay was vacuous" in error
+                            for error in result["summary"]["errors"]))
+        self.assertEqual(len(result["turn_records"]), 2)
+
+    def test_rendered_prompt_must_match_history_mode(self) -> None:
+        class DroppedByRendererClient(FakeClient):
+            def render_chat(
+                    self, model: str, messages: list[dict[str, Any]],
+                    tools: list[dict[str, Any]],
+                    chat_template_kwargs: dict[str, Any]) -> tuple[str, int]:
+                return "", len(messages)
+
+        result = issue82.run_trajectory(
+            DroppedByRendererClient(), "test-model", turns=2,
+            max_tokens=1024, seed=82_000, replay_reasoning=True,
+            seed_turns=0, context_records=0)
+        self.assertFalse(result["summary"]["passed"])
+        self.assertTrue(any("rendered prompt verification expected" in error
+                            for error in result["summary"]["errors"]))
+
+    def test_missing_token_ids_are_retained_as_partial_evidence(self) -> None:
+        class MissingTokenIdsClient(FakeClient):
+            def json(self, method: str, path: str,
+                     body: dict[str, Any] | None = None) -> dict[str, Any]:
+                response = super().json(method, path, body)
+                response["choices"][0].pop("token_ids")
+                return response
+
+        result = issue82.run_trajectory(
+            MissingTokenIdsClient(), "test-model", turns=2,
+            max_tokens=1024, seed=82_000, replay_reasoning=False,
+            seed_turns=0, context_records=0)
+        self.assertFalse(result["summary"]["passed"])
+        self.assertEqual(len(result["turn_records"]), 1)
+        record = result["turn_records"][0]
+        self.assertIsNone(record["raw_output"])
+        self.assertIsNotNone(record["response"])
+        self.assertTrue(any("integer token_ids" in error
+                            for error in record["errors"]))
+
+    def test_sampling_and_budget_options_reach_request(self) -> None:
+        client = FakeClient()
+        issue82.run_trajectory(
+            client, "test-model", turns=2, max_tokens=1024, seed=82_000,
+            replay_reasoning=False, seed_turns=0, context_records=0,
+            thinking_token_budget=2048, temperature=0.7, top_p=0.9)
+        self.assertTrue(all(request["thinking_token_budget"] == 2048
+                            for request in client.requests))
+        self.assertTrue(all(request["temperature"] == 0.7
+                            for request in client.requests))
+        self.assertTrue(all(request["top_p"] == 0.9
+                            for request in client.requests))
 
 
 if __name__ == "__main__":

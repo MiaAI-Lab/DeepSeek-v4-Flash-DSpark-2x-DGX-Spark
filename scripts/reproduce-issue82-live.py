@@ -7,9 +7,10 @@ official ``assistant.tool_calls``/``tool`` messages accumulate.  This verifier
 therefore grows one real conversation across alternating action and
 acknowledgement turns.  Tool execution is simulated and has no side effects.
 
-The JSON artifact contains the complete synthetic requests and raw API
-responses.  Do not adapt this script to private prompts without first adding a
-redaction boundary.
+The JSON artifact contains complete synthetic requests, raw responses,
+pre-parser output, and one server-rendered reasoning-history proof per run.
+Malformed responses remain as partial failing records.  Do not adapt this
+script to private prompts without first adding a redaction boundary.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -359,6 +361,25 @@ class Client:
             raise RuntimeError("/detokenize response has no prompt string")
         return prompt
 
+    def render_chat(self, model: str, messages: list[dict[str, Any]],
+                    tools: list[dict[str, Any]],
+                    chat_template_kwargs: dict[str, Any]) -> tuple[str, int]:
+        value = self._json_url(
+            "POST", self.server_url + "/tokenize", {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                "chat_template_kwargs": chat_template_kwargs,
+            })
+        tokens = value.get("tokens")
+        count = value.get("count")
+        if (not isinstance(tokens, list)
+                or any(type(token_id) is not int for token_id in tokens)):
+            raise RuntimeError("/tokenize response has no integer tokens")
+        if type(count) is not int or count != len(tokens):
+            raise RuntimeError("/tokenize count does not match returned tokens")
+        return self.detokenize(model, tokens), count
+
 
 def tool_result(turn: int, call: dict[str, Any]) -> str:
     return (
@@ -427,52 +448,132 @@ def seed_history(seed_turns: int, context_records: int,
 
 def run_trajectory(client: Client, model: str, turns: int,
                    max_tokens: int, seed: int, replay_reasoning: bool,
-                   seed_turns: int, context_records: int) -> dict[str, Any]:
+                   seed_turns: int, context_records: int,
+                   thinking_token_budget: int | None = None,
+                   temperature: float = 0.0, top_p: float = 1.0) -> dict[str, Any]:
     messages = seed_history(seed_turns, context_records, replay_reasoning)
     seeded_message_count = len(messages)
     replayed_reasoning_messages = 0
     live_reasoning_messages = 0
+    pending_render_reasoning: str | None = None
+    pending_reasoning_source: str | None = None
+    rendered_reasoning_proof: dict[str, Any] | None = None
     records: list[dict[str, Any]] = []
     for step in range(1, turns + 1):
         turn = seed_turns + step
-
         messages.append({"role": "user", "content": user_prompt(turn)})
         if replay_reasoning:
             replayed_reasoning_messages = live_reasoning_messages
+        chat_template_kwargs = {
+            "thinking": True,
+            "reasoning_effort": "low",
+        }
         body = {
             "model": model,
             "messages": list(messages),
             "tools": TOOLS,
             "tool_choice": "auto",
-            "temperature": 0,
-            "top_p": 1,
+            "temperature": temperature,
+            "top_p": top_p,
             "seed": seed,
             "max_tokens": max_tokens,
-            "chat_template_kwargs": {
-                "thinking": True,
-                "reasoning_effort": "low",
-            },
+            "chat_template_kwargs": chat_template_kwargs,
             "return_token_ids": True,
         }
+        if thinking_token_budget is not None:
+            body["thinking_token_budget"] = thinking_token_budget
+
+        request_errors: list[str] = []
+        turn_render_proof: dict[str, Any] | None = None
+        if rendered_reasoning_proof is None and pending_render_reasoning is not None:
+            try:
+                rendered_prompt, rendered_token_count = client.render_chat(
+                    model, body["messages"], TOOLS, chat_template_kwargs)
+                reasoning_present = pending_render_reasoning in rendered_prompt
+                turn_render_proof = {
+                    "turn": turn,
+                    "history_mode": "replay" if replay_reasoning else "drop",
+                    "response_field": pending_reasoning_source,
+                    "reasoning_sha256": hashlib.sha256(
+                        pending_render_reasoning.encode()).hexdigest(),
+                    "reasoning_present": reasoning_present,
+                    "rendered_prompt_sha256": hashlib.sha256(
+                        rendered_prompt.encode()).hexdigest(),
+                    "rendered_prompt_tokens": rendered_token_count,
+                }
+                rendered_reasoning_proof = turn_render_proof
+                if reasoning_present != replay_reasoning:
+                    expectation = "present" if replay_reasoning else "absent"
+                    request_errors.append(
+                        "rendered prompt verification expected prior live "
+                        f"reasoning to be {expectation}")
+            except Exception as error:
+                detail = f"{type(error).__name__}: {error}"
+                turn_render_proof = {
+                    "turn": turn,
+                    "history_mode": "replay" if replay_reasoning else "drop",
+                    "response_field": pending_reasoning_source,
+                    "reasoning_sha256": hashlib.sha256(
+                        pending_render_reasoning.encode()).hexdigest(),
+                    "error": detail,
+                }
+                rendered_reasoning_proof = turn_render_proof
+                request_errors.append(
+                    f"rendered prompt verification failed: {detail}")
+
         started = time.monotonic()
-        response = client.json("POST", "/chat/completions", body)
+        try:
+            response = client.json("POST", "/chat/completions", body)
+        except Exception as error:
+            elapsed = time.monotonic() - started
+            detail = f"{type(error).__name__}: {error}"
+            records.append({
+                "turn": turn,
+                "ok": False,
+                "errors": [*request_errors, f"chat request failed: {detail}"],
+                "reasoning_lines": [],
+                "tool_signatures": [],
+                "parsed_calls": [],
+                "finish_reason": None,
+                "elapsed_seconds": round(elapsed, 6),
+                "request_sha256": sha256_json(body),
+                "response_sha256": None,
+                "raw_output": None,
+                "raw_output_sha256": None,
+                "rendered_reasoning_proof": turn_render_proof,
+                "request": body,
+                "response": None,
+            })
+            break
+
         elapsed = time.monotonic() - started
         verdict = classify_response(turn, response)
+        verdict["errors"].extend(request_errors)
         choices = response.get("choices")
         choice = choices[0] if isinstance(choices, list) and len(choices) == 1 else None
         token_ids = choice.get("token_ids") if isinstance(choice, dict) else None
+        raw_output: str | None = None
         if (not isinstance(token_ids, list)
                 or any(type(token_id) is not int for token_id in token_ids)):
-            raise RuntimeError("response did not include integer token_ids")
-        raw_output = client.detokenize(model, token_ids)
-        raw_has_dsml = bool(DSML_RE.search(raw_output))
-        parsed_has_call = bool(verdict.get("parsed_calls"))
-        if raw_has_dsml and not parsed_has_call:
             verdict["errors"].append(
-                "pre-parser output contains DSML but parser produced no tool call")
-        if parsed_has_call and not raw_has_dsml:
-            verdict["errors"].append(
-                "parser produced a tool call without DSML in pre-parser output")
+                "response did not include integer token_ids")
+        else:
+            try:
+                raw_output = client.detokenize(model, token_ids)
+            except Exception as error:
+                verdict["errors"].append(
+                    "output detokenization failed: "
+                    f"{type(error).__name__}: {error}")
+
+        if raw_output is not None:
+            raw_has_dsml = bool(DSML_RE.search(raw_output))
+            parsed_has_call = bool(verdict.get("parsed_calls"))
+            if raw_has_dsml and not parsed_has_call:
+                verdict["errors"].append(
+                    "pre-parser output contains DSML but parser produced no tool call")
+            if parsed_has_call and not raw_has_dsml:
+                verdict["errors"].append(
+                    "parser produced a tool call without DSML in pre-parser output")
         verdict["ok"] = not verdict["errors"]
         record = {
             **verdict,
@@ -480,13 +581,17 @@ def run_trajectory(client: Client, model: str, turns: int,
             "request_sha256": sha256_json(body),
             "response_sha256": sha256_json(response),
             "raw_output": raw_output,
-            "raw_output_sha256": hashlib.sha256(raw_output.encode()).hexdigest(),
+            "raw_output_sha256": (
+                hashlib.sha256(raw_output.encode()).hexdigest()
+                if raw_output is not None else None),
+            "rendered_reasoning_proof": turn_render_proof,
             "request": body,
             "response": response,
         }
         records.append(record)
+        if raw_output is None:
+            break
 
-        choice = response.get("choices", [{}])[0]
         assistant = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(assistant, dict):
             break
@@ -494,9 +599,11 @@ def run_trajectory(client: Client, model: str, turns: int,
             key: assistant[key] for key in ("role", "content", "tool_calls")
             if key in assistant and assistant[key] is not None
         }
-        if replay_reasoning:
-            reasoning, _source_key = reasoning_field(assistant)
-            if reasoning is not None:
+        reasoning, reasoning_source = reasoning_field(assistant)
+        if reasoning is not None:
+            pending_render_reasoning = reasoning
+            pending_reasoning_source = reasoning_source
+            if replay_reasoning:
                 # vLLM accepts the canonical input key `reasoning`; map the
                 # deprecated response alias instead of silently dropping it.
                 history_message["reasoning"] = reasoning
@@ -504,27 +611,29 @@ def run_trajectory(client: Client, model: str, turns: int,
         history_message.setdefault("role", "assistant")
         messages.append(history_message)
         calls = verdict.get("parsed_calls") or []
-        if calls:
-            for call in calls:
-                raw_call = call["raw"]
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": raw_call.get("id"),
-                    "name": call["name"],
-                    "content": tool_result(turn, call),
-                })
+        for call in calls:
+            raw_call = call["raw"]
+            messages.append({
+                "role": "tool",
+                "tool_call_id": raw_call.get("id"),
+                "name": call["name"],
+                "content": tool_result(turn, call),
+            })
 
+    summary = summarize_turns(records)
     if replay_reasoning and replayed_reasoning_messages == 0:
-        raise RuntimeError(
-            "--history-reasoning=replay was vacuous: no non-empty reasoning "
-            "or reasoning_content field reached a subsequent request")
+        summary["errors"].append(
+            "--history-reasoning=replay was vacuous: no model-produced "
+            "reasoning reached a subsequent request")
+        summary["passed"] = False
 
     return {
-        "summary": summarize_turns(records),
+        "summary": summary,
         "turn_records": records,
         "final_message_count": len(messages),
         "seeded_message_count": seeded_message_count,
         "replayed_reasoning_messages": replayed_reasoning_messages,
+        "rendered_reasoning_proof": rendered_reasoning_proof,
     }
 
 
@@ -537,6 +646,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--seed", type=int, default=82_000)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument(
+        "--thinking-token-budget", type=int,
+        help="optional request budget; omitted by default for the baseline arm")
     parser.add_argument("--seed-turns", type=int, default=16,
                         help="synthetic live-history turns before measured turns")
     parser.add_argument("--context-records", type=int, default=0,
@@ -558,6 +672,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--seed-turns must be a non-negative even number")
     if args.context_records < 0:
         parser.error("--context-records must be non-negative")
+    if not math.isfinite(args.temperature) or args.temperature < 0:
+        parser.error("--temperature must be finite and non-negative")
+    if not math.isfinite(args.top_p) or not 0 < args.top_p <= 1:
+        parser.error("--top-p must be finite and in (0, 1]")
+    if args.thinking_token_budget is not None and args.thinking_token_budget < 0:
+        parser.error("--thinking-token-budget must be non-negative")
     return args
 
 
@@ -579,7 +699,9 @@ def main(argv: list[str] | None = None) -> int:
             "seed": args.seed,
             "thinking": True,
             "reasoning_effort": "low",
-            "thinking_token_budget": None,
+            "thinking_token_budget": args.thinking_token_budget,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
             "history_reasoning": args.history_reasoning,
             "seed_turns": args.seed_turns,
             "context_records": args.context_records,
@@ -594,7 +716,9 @@ def main(argv: list[str] | None = None) -> int:
         result = run_trajectory(
             client, model, args.turns, args.max_tokens, args.seed + run_index,
             replay_reasoning=args.history_reasoning == "replay",
-            seed_turns=args.seed_turns, context_records=args.context_records)
+            seed_turns=args.seed_turns, context_records=args.context_records,
+            thinking_token_budget=args.thinking_token_budget,
+            temperature=args.temperature, top_p=args.top_p)
         result["run"] = run_index + 1
         artifact["runs"].append(result)
         summary = result["summary"]

@@ -41,7 +41,7 @@ benchmarks, and MiaAI-Lab's own `scripts/stability-quick.py` + `scripts/benchmar
 | 3. RULER-lite quality | `ruler-lite.py` | S/MK-NIAH retrieval, variable tracking (multi-hop), common-words aggregation at 8k→262k | Beyond shallow NIAH: tests real long-context reasoning, not just recall (RULER's core finding: NIAH-perfect models fail tracing/aggregation at depth) |
 | 4. Tool calling | `tool-battery.py` | Single/complex/parallel/multi-turn calls + issue55 truncation | The agent-serving path; issue55 = truncated calls must report `finish=length`, never broken tool JSON |
 | 5. Deep-context tools | `deepctx-tool-battery.py` | Same battery at 32k/131k+ | Tool calls at depth (the Hermes/agent case) |
-| 6. Tool-history trajectory | `reproduce-issue82-live.py` | Evolving official tool history, prior reasoning replay, raw pre-parser output, and run-wide repetition | Issue #82 is trajectory-dependent; isolated replay and per-response-only checks miss it |
+| 6. Tool-history trajectory | `reproduce-issue82-live.py` | Evolving official tool history, server-rendered reasoning replay proof, raw pre-parser output, and run-wide repetition | Issue #82 is trajectory-dependent; isolated replay and per-response-only checks miss it |
 | 7. Garble | `context-garble-sweep.py` | Cold-prefill prompt/schema/secret echo at depth | The classic DS4 failure mode; only visible cold |
 
 ## Expected values (this recipe, 2x DGX Spark, Anemll 0.1.1; baseline verified 2026-08-16, tool-history row measured 2026-08-22)
@@ -54,5 +54,10 @@ benchmarks, and MiaAI-Lab's own `scripts/stability-quick.py` + `scripts/benchmar
   no-tool acknowledgements; maximum identical reasoning line and normalized tool
   call both ≤3 (threshold from the Issue #82 healthy control; recipe runs measured 1)
 - Garble: CLEAN at every length up to the 1M ceiling
+
+Phase 6 defaults to the deterministic, no-budget baseline (`temperature=0`,
+`top_p=1`, budget omitted). Use `--thinking-token-budget 2048` for the captured
+Pi budget arm. A sampled-trajectory canary must set nonzero `--temperature`
+and its chosen `--top-p` explicitly; no sampled values are claimed as canonical.
 
 If a phase regresses, fix the recipe, not the test.
