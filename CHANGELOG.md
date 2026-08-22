@@ -1,5 +1,9 @@
 ## 2026-08-22
 
+### Added
+
+- **Live multi-turn tool-history verifier for [Issue #82](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/82)**: `scripts/reproduce-issue82-live.py` grows an actual OpenAI-format conversation through alternating tool and voluntary-stop turns instead of replaying one frozen request. It can seed the reported 41-message pre-loop shape, replay or drop prior assistant reasoning as an A/B, add unique synthetic long-context evidence, and retain raw pre-parser output by detokenizing returned output token IDs. The gate rejects stale/invalid calls, DSML or false-system leakage, length exhaustion, `count=<n>` markers, and cross-turn reasoning/call repetition above the public healthy maximum of three. Artifacts contain full synthetic requests and responses only; no tool executes and no private prompt is required. This is diagnostic coverage, not a claim that the trajectory-dependent upstream failure is fixed.
+
 ### Changed
 
 - **Default-on Python source hotfixes now fail closed before `vllm serve` ([Issue #107](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/107))**: the encoding copy/reasoning-map rewrite and Issue #21, #55, #27, #43, #26, and suppress-stops patchers were separated by bare semicolons, so a missing file, anchor drift, assertion, or self-check failure could be masked by a later successful command and startup continued with stale runtime code. Every enabled step now propagates failure explicitly with `|| exit 1`, and Issue #21 anchor drift plus a missing suppress-stops target now return nonzero; the existing missing-encoding warning and all enable/skip switches retain their prior behavior. CPU failure injection covers every step, ordering, optional Issue #31, and the suppress-stops skip path.
