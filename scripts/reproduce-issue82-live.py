@@ -381,9 +381,9 @@ class Client:
         return self.detokenize(model, tokens), count
 
 
-def tool_result(turn: int, call: dict[str, Any]) -> str:
+def tool_result(turn: int, action_signature: str) -> str:
     return (
-        f"SIMULATED_TOOL_RESULT turn={turn} action={call['signature']} "
+        f"SIMULATED_TOOL_RESULT turn={turn} action={action_signature} "
         "status=completed; no external action executed. Do not repeat this exact call."
     )
 
@@ -415,7 +415,6 @@ def seed_history(seed_turns: int, context_records: int,
             call_id = f"seed-call-{turn}"
             assistant: dict[str, Any] = {
                 "role": "assistant",
-                "content": None,
                 "tool_calls": [{
                     "id": call_id,
                     "type": "function",
@@ -432,11 +431,7 @@ def seed_history(seed_turns: int, context_records: int,
                 "role": "tool",
                 "tool_call_id": call_id,
                 "name": action.name,
-                "content": (
-                    f"SIMULATED_TOOL_RESULT turn={turn} "
-                    f"action={action.signature} status=completed; "
-                    "no external action executed. Do not repeat this exact call."
-                ),
+                "content": tool_result(turn, action.signature),
             })
         else:
             assistant = {"role": "assistant", "content": f"ACK {turn}"}
@@ -566,6 +561,8 @@ def run_trajectory(client: Client, model: str, turns: int,
                     f"{type(error).__name__}: {error}")
 
         if raw_output is not None:
+            # Deliberately conservative: even discussing DSML markup in a
+            # no-tool response is retained as a diagnostic failure.
             raw_has_dsml = bool(DSML_RE.search(raw_output))
             parsed_has_call = bool(verdict.get("parsed_calls"))
             if raw_has_dsml and not parsed_has_call:
@@ -617,7 +614,7 @@ def run_trajectory(client: Client, model: str, turns: int,
                 "role": "tool",
                 "tool_call_id": raw_call.get("id"),
                 "name": call["name"],
-                "content": tool_result(turn, call),
+                "content": tool_result(turn, call["signature"]),
             })
 
     summary = summarize_turns(records)
