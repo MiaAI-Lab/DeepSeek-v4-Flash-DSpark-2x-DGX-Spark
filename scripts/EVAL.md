@@ -50,7 +50,7 @@ benchmarks, and MiaAI-Lab's own `scripts/stability-quick.py` + `scripts/benchmar
 - Acceptance: **~68-75%** overall, pos0 ~0.93 → pos4 ~0.33 (normal DSpark collapse)
 - RULER-lite: retrieval 100%, tracing/aggregation pass at all tested lengths
 - Tool battery: 7/7 + deep-context 8/8; issue55 truncation always `finish=length`
-- Tool-history trajectory: 10/10 requested calls and 10/10 voluntary stops;
+- Tool-history trajectory: 10/10 required calls and 10/10 required no-tool acknowledgements;
   maximum identical reasoning line and normalized tool call both ≤3
 - Garble: CLEAN at every length up to the 1M ceiling
 

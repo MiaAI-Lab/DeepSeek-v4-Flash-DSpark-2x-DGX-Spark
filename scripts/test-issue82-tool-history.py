@@ -172,7 +172,7 @@ class CrossTurnScoringTests(unittest.TestCase):
 
 
 class TrajectoryTests(unittest.TestCase):
-    def test_seed_history_matches_public_preloop_shape(self) -> None:
+    def test_synthetic_seed_history_is_well_formed(self) -> None:
         replayed = issue82.seed_history(
             seed_turns=16, context_records=3, replay_reasoning=True)
         dropped = issue82.seed_history(
