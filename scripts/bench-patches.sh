@@ -5,11 +5,13 @@
 #   bash scripts/bench-patches.sh [--quick|--full]
 #
 # What it tests:
-#   #49486: Short-context TTFT (≤2048 tokens) — should be faster
+#   #49486 (+#52492 capture guard): Short-context TTFT (≤2048 tokens) — should be faster
 #   #50312: KV budget — should be UNCHANGED (compute-only saving)
-#   #50004: Decode throughput — should be same or better
 #   #48407: Dormant — no effect expected
 #   issue-22: Long-context decode — should not regress
+#
+# Note: #50004 (adaptive C128A topk width) was removed from the chain — upstream
+# vLLM reverted it in #51318 (capture/replay row-stride corruption).
 #
 # Outputs:
 #   results/patch-bench-<timestamp>.txt
@@ -110,7 +112,7 @@ if [ "$MODE" = "--full" ]; then
   run_ttft 8192  "prompt=8192"
 fi
 
-# ── 3. Decode stability (#50312 / #50004) ──────────────────────────────────
+# ── 3. Decode stability (#50312) ───────────────────────────────────────────
 separator "3. DECODE STABILITY (5-turn generate, check for errors)"
 for i in 1 2 3 4 5; do
   local_start=$(date +%s%3N)
@@ -151,9 +153,8 @@ separator "SUMMARY"
 log "Results saved to: $OUT"
 log ""
 log "Patch-specific expectations:"
-log "  #49486: Short-context TTFT should be ≤ pre-patch (indexer skip)"
+log "  #49486: Short-context TTFT should be ≤ pre-patch (indexer skip; #52492 guard keeps captured graphs on the scored path)"
 log "  #50312: KV budget UNCHANGED (conditional buffer, no KV impact)"
-log "  #50004: Decode throughput same or better (adaptive topk width)"
 log "  #48407: No effect (dormant — dense_mha_metadata_layer_name=\"\")"
 log "  issue-22: Long-context decode should not regress"
 log ""

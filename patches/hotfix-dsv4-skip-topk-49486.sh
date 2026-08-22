@@ -2,8 +2,9 @@
 # hotfix-dsv4-skip-topk-49486.sh — Skip indexer topk/router on short contexts (DSV4 Flash)
 #
 # Backport of upstream vLLM PR #49486 ("skip indexer topk/router when every
-# candidate is selected") applied to the Anemll dspark-vllm-gx10 0.1.1 image
-# (vLLM 0.25.2.dev0+g752a3a504.d20260714).
+# candidate is selected") plus its follow-up correctness guard from PR #52492
+# ("keep indexer scoring in breakable graphs"), applied to the Anemll
+# dspark-vllm-gx10 0.1.1 image (vLLM 0.25.2.dev0+g752a3a504.d20260714).
 #
 # WHAT IT FIXES: the Lightning-Indexer (C4) normally runs
 #   wq_b projection -> RoPE -> MXFP4/FP8 quant -> QK logits -> top-k -> indices
@@ -22,8 +23,17 @@
 #   - Indexer metadata at attn_metadata[self.k_cache.prefix] is a
 #     DeepseekV32IndexerMetadata, so the fast path uses upstream verbatim:
 #     num_tokens = num_decode_tokens + num_prefill_tokens.
-#   - No CUDA-graph guard (faithful to upstream): max_seq_len is a
-#     per-captured-batch constant, so the branch is stable inside a capture.
+#   - CUDA-graph capture guard (upstream vLLM PR #52492): the shortcut is
+#     never taken while a CUDA stream is capturing. An earlier revision of
+#     this port assumed "max_seq_len is a per-captured-batch constant, so the
+#     branch is stable inside a capture" — upstream showed that assumption
+#     wrong: a graph captured against short dummy metadata bakes the shortcut
+#     in, then replays it for longer cached prefixes (>2048 tokens), where C4
+#     layers must score >topk candidates but the captured path just selects
+#     candidates 0..topk-1. Symptom class: intermittent wrong-context
+#     attention / degenerate output under prefix caching + CUDA graphs
+#     (see vllm-project/vllm#52492 and the NVIDIA forum report on 2x DGX
+#     Spark intermittent token corruption). Eager steps keep the skip.
 #
 # Usage:
 #   docker cp hotfix-dsv4-skip-topk-49486.sh <container>:/tmp/ && \
@@ -188,6 +198,7 @@ def check(name, cond):
 check("import tl, triton", "from vllm.triton_utils import tl, triton" in t)
 check("_fill_short_context_topk_indices kernel", "@triton.jit\ndef _fill_short_context_topk_indices" in t)
 check("[PORT #49486] early return", "[PORT #49486]" in t and "_fill_short_context_topk_indices[(num_tokens,)](" in t)
+check("[PORT #52492] capture guard", "and not torch.cuda.is_current_stream_capturing()" in t)
 sys.exit(0 if ok else 1)
 PY
   exit $?
@@ -304,6 +315,9 @@ def _resolve_dsv4_kv_cache_dtype(""",
 # ---- attention.py: short-context early return in DeepseekV4Indexer.forward ---
 # Uses upstream verbatim: indexer metadata at self.k_cache.prefix is a
 # DeepseekV32IndexerMetadata (num_decode_tokens + num_prefill_tokens).
+# The capture guard is upstream #52492 verbatim: taking the shortcut during
+# CUDA graph capture bakes it into the graph, which then replays for longer
+# cached prefixes and selects candidates 0..topk-1 instead of scoring them.
 patch(
     "models/deepseek_v4/attention.py",
     """    ) -> torch.Tensor:
@@ -317,10 +331,16 @@ patch(
         # would be selected (max_seq_len/ratio <= topk), the wq_b -> RoPE -> quant
         # -> QK logits -> top-k pipeline is a no-op: the result is all candidates.
         # Fill the buffer directly (bit-identical output; still build the K cache).
+        # [PORT #52492] Never take the shortcut while a CUDA stream is capturing:
+        # a graph captured with the shortcut baked in replays it against longer
+        # cached prefixes and returns candidates 0..topk-1 unscored.
         attn_metadata = get_forward_context().attn_metadata
         if isinstance(attn_metadata, dict):
             indexer_metadata = cast(Any, attn_metadata[self.k_cache.prefix])
-            if indexer_metadata.max_seq_len // self.compress_ratio <= self.topk_tokens:
+            if (
+                indexer_metadata.max_seq_len // self.compress_ratio <= self.topk_tokens
+                and not torch.cuda.is_current_stream_capturing()
+            ):
                 # candidates num smaller than topk, every candidate is selected
                 # but we still need to build k cache
                 compressor(compressed_kv_score, positions, rotary_emb)

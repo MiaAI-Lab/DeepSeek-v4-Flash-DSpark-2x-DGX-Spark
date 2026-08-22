@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""CPU behavioral tests for the whole-script transaction in the seven DSV4
-shell hotfixes and the fail-closed shell-hotfix wiring in docker-compose.dspark.yml.
+"""CPU behavioral tests for the whole-script transaction in the DSV4 shell
+hotfix chain and the fail-closed shell-hotfix wiring in docker-compose.dspark.yml.
 
 Fixtures are synthetic vLLM trees built from the exact anchors embedded in each
 script (parsed out of the unquoted PYEOF patch heredoc). Every assertion is
@@ -28,9 +28,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PATCHES = ROOT / "patches"
 COMPOSE = ROOT / "docker-compose.dspark.yml"
 
-SEVEN = [
+# The DSV4 perf-hotfix chain, in compose invocation order. #50004 (adaptive
+# C128A topk width) was removed from the chain: upstream vLLM reverted it in
+# PR #51318 because the packed row stride diverges between CUDA graph capture
+# and replay, corrupting sparse-attention slot ids for rows >= 1.
+CHAIN = [
     "hotfix-dsv4-mtp-buffer-50312.sh",
-    "hotfix-dsv4-adaptive-topk-50004.sh",
     "hotfix-dsv4-skip-topk-49486.sh",
     "hotfix-dsv4-dense-prefill-indexer-48407.sh",
     "hotfix-dsv4-skip-empty-c128-48957.sh",
@@ -39,7 +42,7 @@ SEVEN = [
 ]
 
 # Compose invocation order: issue22 + spin-wait first, then the DSV4 loop.
-FULL_ORDER = ["hotfix-nvfp4-ds-mla-issue22.sh", "hotfix-gb10-spin-wait.sh"] + SEVEN
+FULL_ORDER = ["hotfix-nvfp4-ds-mla-issue22.sh", "hotfix-gb10-spin-wait.sh"] + CHAIN
 
 SKIP_VARS = (
     "DSPARK_SKIP_HOTFIX",
@@ -67,14 +70,6 @@ INVENTORY = {
          "b6c3f0087322cbe6b99d120ad9d9500ce032d92e8c9e9e4f3b4e9d310694841f",
          "8da97a0130198c5c2fe6238ee31ea59b0b47b36500cbef994fc27ea22fc89855"),
     ],
-    "hotfix-dsv4-adaptive-topk-50004.sh": [
-        ("models/deepseek_v4/sparse_mla.py", "sparse_mla.py: adaptive active_topk_width from cm.max_seq_len", 1,
-         "e037a32b90e52269d46aea5a270c1972915c5b1d702ce05a7405e8bc4639a522",
-         "8f8a48e30431207c3dd12dc5841ed8983d68346319024192ac759f28b2fb98bc"),
-        ("models/deepseek_v4/sparse_mla.py", "sparse_mla.py: packed views + kernel stride = active width", 1,
-         "189e442669b37acd42fb0e06f7d956311445cd76c564607db7fedc404f9cab19",
-         "1c0824f16c8e65b23ed00ef696701b169397deb6e2db7767812f2f7707d68da9"),
-    ],
     "hotfix-dsv4-skip-topk-49486.sh": [
         ("models/deepseek_v4/attention.py", "attention.py: import tl, triton (upstream #49486)", 1,
          "68f76f8373bf48b339c5a48c2afbc113ce1fa9db3f14d901f44019cf2f1e15c6",
@@ -84,7 +79,7 @@ INVENTORY = {
          "1249c66030483c1275978189d4f17eceb678963f0c440bbec6937dd84529e335"),
         ("models/deepseek_v4/attention.py", "attention.py: short-context early return (upstream #49486)", 1,
          "898b7b950f9ddc78e823e08edc9ecaa7be11ab6bf3b2a73c15a8eac65f8f182a",
-         "b3c302e73431f38ac786436fa9809954da772a351fea811ef662fdf535bc5e4d"),
+         "b3bbeccfc040c8b9c6144de89802b3605c4dc2bacf029188884a7aafbd7be8a4"),
     ],
     "hotfix-dsv4-dense-prefill-indexer-48407.sh": [
         ("model_executor/layers/sparse_attn_indexer.py", "sparse_attn_indexer.py: import CUDAGraphMode", 1,
@@ -402,8 +397,8 @@ class TransactionTests(unittest.TestCase):
         # digests are frozen literals above, so any edit to a hunk body —
         # not just its removal or retargeting — fails this guard even though
         # fixtures and oracles are derived from the same parse.
-        self.assertEqual(sorted(INVENTORY), sorted(SEVEN))
-        for script in SEVEN:
+        self.assertEqual(sorted(INVENTORY), sorted(CHAIN))
+        for script in CHAIN:
             with self.subTest(script=script):
                 parsed = [
                     (
@@ -459,8 +454,8 @@ class TransactionTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_all_seven_clean_apply_byte_exact_mode_kept(self):
-        for script in SEVEN:
+    def test_all_chain_clean_apply_byte_exact_mode_kept(self):
+        for script in CHAIN:
             with self.subTest(script=script):
                 files, expected = build_tree([script])
                 root = make_root(files, mode=0o640)
@@ -479,7 +474,7 @@ class TransactionTests(unittest.TestCase):
                     shutil.rmtree(root)
 
     def test_idempotent_rerun_makes_no_changes(self):
-        for script in SEVEN:
+        for script in CHAIN:
             with self.subTest(script=script):
                 files, _ = build_tree([script])
                 root = make_root(files)
@@ -499,7 +494,7 @@ class TransactionTests(unittest.TestCase):
         # Every hunk position, including the final anchor: a validation failure
         # anywhere must exit nonzero with EVERY target byte-identical.
         cases = 0
-        for script in SEVEN:
+        for script in CHAIN:
             hs = hunks(script)
             for k in range(len(hs)):
                 with self.subTest(script=script, hunk=k, label=hs[k].label):
@@ -519,7 +514,7 @@ class TransactionTests(unittest.TestCase):
         self.assertGreater(cases, 0)
 
     def test_final_anchor_replacement_is_byte_exact(self):
-        for script in SEVEN:
+        for script in CHAIN:
             with self.subTest(script=script):
                 last = hunks(script)[-1]
                 files, _ = build_tree([script])
@@ -555,7 +550,6 @@ class TransactionTests(unittest.TestCase):
         # bytes AND permission bits restored exactly.
         cases = [
             ("hotfix-dsv4-mtp-buffer-50312.sh", "2"),
-            ("hotfix-dsv4-adaptive-topk-50004.sh", "1"),
             ("hotfix-dsv4-skip-topk-49486.sh", "1"),
             ("hotfix-dsv4-dense-prefill-indexer-48407.sh", "3"),
             ("hotfix-dsv4-skip-empty-c128-48957.sh", "1"),
@@ -736,17 +730,17 @@ class TransactionTests(unittest.TestCase):
         )
 
     def test_normal_caller_order_shared_tree_converges(self):
-        # Compose applies all seven sequentially over one live tree; the shared
+        # Compose applies the whole chain sequentially over one live tree; the shared
         # fixture must converge byte-exactly and then be fully idempotent.
-        files, expected = build_tree(SEVEN)
+        files, expected = build_tree(CHAIN)
         root = make_root(files)
         try:
-            for script in SEVEN:
+            for script in CHAIN:
                 r = run_hotfix(script, root)
                 self.assertEqual(r.returncode, 0, f"{script}: {r.stdout}{r.stderr}")
             for rel, want in expected.items():
                 self.assertEqual((root / rel).read_bytes(), want, rel)
-            for script in SEVEN:
+            for script in CHAIN:
                 r = run_hotfix(script, root)
                 self.assertEqual(r.returncode, 0, f"{script}: {r.stdout}{r.stderr}")
                 self.assertIn("already applied", r.stdout)
@@ -813,7 +807,7 @@ class ComposeFailClosedWiring(unittest.TestCase):
 
     def test_each_skip_switch_skips_only_its_group(self):
         for var, excluded in (
-            ("DSPARK_SKIP_HOTFIX", tuple(SEVEN)),
+            ("DSPARK_SKIP_HOTFIX", tuple(CHAIN)),
             ("DSPARK_SKIP_ISSUE22_HOTFIX", ("hotfix-nvfp4-ds-mla-issue22.sh",)),
             ("DSPARK_SKIP_SPIN_WAIT_HOTFIX", ("hotfix-gb10-spin-wait.sh",)),
         ):
@@ -834,7 +828,7 @@ class ComposeFailClosedWiring(unittest.TestCase):
         self.assertFalse(reached)
         self.assertEqual(inv, ["hotfix-nvfp4-ds-mla-issue22.sh"])
         proc, inv, reached = self.run_block(
-            env_extra={"DSPARK_SKIP_HOTFIX": "1"}, remove=tuple(SEVEN)
+            env_extra={"DSPARK_SKIP_HOTFIX": "1"}, remove=tuple(CHAIN)
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertTrue(reached)
