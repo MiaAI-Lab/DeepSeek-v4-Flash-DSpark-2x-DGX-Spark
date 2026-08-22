@@ -254,4 +254,13 @@ if [ "$fail" -ne 0 ]; then
   echo "CI validate FAILED" >&2
   exit 1
 fi
+
+# Healthcheck present and worker-gated (rank 1 is headless; must not false-unhealthy)
+if grep -q "healthcheck:" docker-compose.dspark.yml \
+  && grep -qF 'if [ -n \"$$HEADLESS\" ]' docker-compose.dspark.yml; then
+  ok "compose healthcheck present and HEADLESS-gated"
+else
+  bad "compose healthcheck missing or not HEADLESS-gated"
+fi
+
 echo "CI validate passed (CPU recipe gates only)."

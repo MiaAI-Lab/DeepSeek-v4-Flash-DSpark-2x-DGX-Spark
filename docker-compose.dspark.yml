@@ -11,6 +11,18 @@ services:
     restart: ${DSPARK_RESTART_POLICY:-unless-stopped}
     stop_grace_period: ${DSPARK_STOP_GRACE:-10s}
 
+    # Only rank 0 serves HTTP; the worker runs HEADLESS with no :8888 listener.
+    # Gate on $HEADLESS so the worker is not marked unhealthy forever. $$HEADLESS
+    # (double) is evaluated in the container at runtime; ${VLLM_PORT:-8888} is
+    # resolved by Compose. start_period covers cold model load (~6 min measured;
+    # raise it if your storage is slower).
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${VLLM_PORT:-8888}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 480s
+
     ulimits:
       memlock: -1
       stack: 67108864
