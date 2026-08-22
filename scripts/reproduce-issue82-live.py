@@ -163,6 +163,14 @@ def user_prompt(turn: int) -> str:
     )
 
 
+def reasoning_field(message: dict[str, Any]) -> tuple[str | None, str | None]:
+    for key in ("reasoning", "reasoning_content"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value, key
+    return None, None
+
+
 def normalize_reasoning_lines(reasoning: str) -> list[str]:
     normalized: list[str] = []
     for raw in reasoning.splitlines():
@@ -215,7 +223,7 @@ def classify_response(turn: int, response: dict[str, Any]) -> dict[str, Any]:
                 "reasoning_lines": [], "tool_signatures": []}
 
     content = message.get("content") or ""
-    reasoning = message.get("reasoning") or message.get("reasoning_content") or ""
+    reasoning = reasoning_field(message)[0] or ""
     if not isinstance(content, str):
         content = str(content)
     if not isinstance(reasoning, str):
@@ -422,12 +430,18 @@ def run_trajectory(client: Client, model: str, turns: int,
                    seed_turns: int, context_records: int) -> dict[str, Any]:
     messages = seed_history(seed_turns, context_records, replay_reasoning)
     seeded_message_count = len(messages)
+    replayed_reasoning_messages = 0
     records: list[dict[str, Any]] = []
     for step in range(1, turns + 1):
         turn = seed_turns + step
 
 
         messages.append({"role": "user", "content": user_prompt(turn)})
+        if replay_reasoning:
+            replayed_reasoning_messages = sum(
+                reasoning_field(message)[0] is not None
+                for message in messages
+                if message.get("role") == "assistant")
         body = {
             "model": model,
             "messages": messages,
@@ -479,13 +493,16 @@ def run_trajectory(client: Client, model: str, turns: int,
         assistant = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(assistant, dict):
             break
-        history_keys = ["role", "content", "tool_calls"]
-        if replay_reasoning:
-            history_keys.append("reasoning")
         history_message = {
-            key: assistant[key] for key in history_keys
+            key: assistant[key] for key in ("role", "content", "tool_calls")
             if key in assistant and assistant[key] is not None
         }
+        if replay_reasoning:
+            reasoning, _source_key = reasoning_field(assistant)
+            if reasoning is not None:
+                # vLLM accepts the canonical input key `reasoning`; map the
+                # deprecated response alias instead of silently dropping it.
+                history_message["reasoning"] = reasoning
         history_message.setdefault("role", "assistant")
         messages.append(history_message)
         calls = verdict.get("parsed_calls") or []
@@ -499,11 +516,17 @@ def run_trajectory(client: Client, model: str, turns: int,
                     "content": tool_result(turn, call),
                 })
 
+    if replay_reasoning and replayed_reasoning_messages == 0:
+        raise RuntimeError(
+            "--history-reasoning=replay was vacuous: no non-empty reasoning "
+            "or reasoning_content field reached a subsequent request")
+
     return {
         "summary": summarize_turns(records),
         "turn_records": records,
         "final_message_count": len(messages),
         "seeded_message_count": seeded_message_count,
+        "replayed_reasoning_messages": replayed_reasoning_messages,
     }
 
 

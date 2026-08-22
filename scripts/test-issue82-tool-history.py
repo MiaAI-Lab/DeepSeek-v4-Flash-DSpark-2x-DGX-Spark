@@ -245,6 +245,41 @@ class TrajectoryTests(unittest.TestCase):
         self.assertTrue(all("reasoning_content" not in message
                             for message in assistants))
 
+    def test_reasoning_content_response_alias_is_replayed(self) -> None:
+        class ReasoningContentClient(FakeClient):
+            def json(self, method: str, path: str,
+                     body: dict[str, Any] | None = None) -> dict[str, Any]:
+                response = super().json(method, path, body)
+                message = response["choices"][0]["message"]
+                message["reasoning_content"] = message.pop("reasoning")
+                return response
+
+        client = ReasoningContentClient()
+        result = issue82.run_trajectory(
+            client, "test-model", turns=4, max_tokens=1024, seed=82_000,
+            replay_reasoning=True, seed_turns=0, context_records=0)
+        self.assertGreater(result["replayed_reasoning_messages"], 0)
+        assistants = [message for message in client.requests[-1]["messages"]
+                      if message["role"] == "assistant"]
+        self.assertTrue(all(isinstance(message.get("reasoning"), str)
+                            for message in assistants))
+        self.assertTrue(all("reasoning_content" not in message
+                            for message in assistants))
+
+    def test_vacuous_reasoning_replay_fails_loudly(self) -> None:
+        class NoReasoningClient(FakeClient):
+            def json(self, method: str, path: str,
+                     body: dict[str, Any] | None = None) -> dict[str, Any]:
+                response = super().json(method, path, body)
+                response["choices"][0]["message"].pop("reasoning", None)
+                return response
+
+        with self.assertRaisesRegex(RuntimeError, "replay was vacuous"):
+            issue82.run_trajectory(
+                NoReasoningClient(), "test-model", turns=2,
+                max_tokens=1024, seed=82_000, replay_reasoning=True,
+                seed_turns=0, context_records=0)
+
 
 if __name__ == "__main__":
     unittest.main()
