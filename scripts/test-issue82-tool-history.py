@@ -258,7 +258,7 @@ class TrajectoryTests(unittest.TestCase):
         result = issue82.run_trajectory(
             client, "test-model", turns=4, max_tokens=1024, seed=82_000,
             replay_reasoning=True, seed_turns=0, context_records=0)
-        self.assertGreater(result["replayed_reasoning_messages"], 0)
+        self.assertEqual(result["replayed_reasoning_messages"], 3)
         assistants = [message for message in client.requests[-1]["messages"]
                       if message["role"] == "assistant"]
         self.assertTrue(all(isinstance(message.get("reasoning"), str)
@@ -266,7 +266,7 @@ class TrajectoryTests(unittest.TestCase):
         self.assertTrue(all("reasoning_content" not in message
                             for message in assistants))
 
-    def test_vacuous_reasoning_replay_fails_loudly(self) -> None:
+    def test_seeded_history_does_not_mask_vacuous_live_replay(self) -> None:
         class NoReasoningClient(FakeClient):
             def json(self, method: str, path: str,
                      body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -278,7 +278,7 @@ class TrajectoryTests(unittest.TestCase):
             issue82.run_trajectory(
                 NoReasoningClient(), "test-model", turns=2,
                 max_tokens=1024, seed=82_000, replay_reasoning=True,
-                seed_turns=0, context_records=0)
+                seed_turns=2, context_records=0)
 
 
 if __name__ == "__main__":

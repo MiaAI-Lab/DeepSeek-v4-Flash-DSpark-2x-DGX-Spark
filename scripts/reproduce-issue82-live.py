@@ -431,6 +431,7 @@ def run_trajectory(client: Client, model: str, turns: int,
     messages = seed_history(seed_turns, context_records, replay_reasoning)
     seeded_message_count = len(messages)
     replayed_reasoning_messages = 0
+    live_reasoning_messages = 0
     records: list[dict[str, Any]] = []
     for step in range(1, turns + 1):
         turn = seed_turns + step
@@ -438,10 +439,7 @@ def run_trajectory(client: Client, model: str, turns: int,
 
         messages.append({"role": "user", "content": user_prompt(turn)})
         if replay_reasoning:
-            replayed_reasoning_messages = sum(
-                reasoning_field(message)[0] is not None
-                for message in messages
-                if message.get("role") == "assistant")
+            replayed_reasoning_messages = live_reasoning_messages
         body = {
             "model": model,
             "messages": messages,
@@ -503,6 +501,7 @@ def run_trajectory(client: Client, model: str, turns: int,
                 # vLLM accepts the canonical input key `reasoning`; map the
                 # deprecated response alias instead of silently dropping it.
                 history_message["reasoning"] = reasoning
+                live_reasoning_messages += 1
         history_message.setdefault("role", "assistant")
         messages.append(history_message)
         calls = verdict.get("parsed_calls") or []
