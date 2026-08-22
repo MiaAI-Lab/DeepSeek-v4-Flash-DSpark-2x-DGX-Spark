@@ -218,6 +218,11 @@ class TrajectoryTests(unittest.TestCase):
                             for record in result["turn_records"]))
         self.assertTrue(all(len(record["raw_output_sha256"]) == 64
                             for record in result["turn_records"]))
+        self.assertTrue(all(
+            issue82.sha256_json(record["request"]) == record["request_sha256"]
+            for record in result["turn_records"]))
+        self.assertEqual(len(result["turn_records"][0]["request"]["messages"]), 2)
+        self.assertEqual(len(result["turn_records"][1]["request"]["messages"]), 5)
 
     def test_raw_output_and_parser_mismatch_fails(self) -> None:
         class MissingDSMLClient(FakeClient):

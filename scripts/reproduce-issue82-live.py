@@ -285,8 +285,8 @@ def summarize_turns(turns: list[dict[str, Any]]) -> dict[str, Any]:
               for turn in turns for error in turn["errors"]]
     if repeated_reasoning:
         errors.append(
-            f"reasoning line repeated across at least "
-            f"{REPETITION_FAILURE_COUNT} turns")
+            f"reasoning line repeated at least "
+            f"{REPETITION_FAILURE_COUNT} times across the run")
     if repeated_calls:
         errors.append(
             f"identical normalized tool call repeated at least "
@@ -436,13 +436,12 @@ def run_trajectory(client: Client, model: str, turns: int,
     for step in range(1, turns + 1):
         turn = seed_turns + step
 
-
         messages.append({"role": "user", "content": user_prompt(turn)})
         if replay_reasoning:
             replayed_reasoning_messages = live_reasoning_messages
         body = {
             "model": model,
-            "messages": messages,
+            "messages": list(messages),
             "tools": TOOLS,
             "tool_choice": "auto",
             "temperature": 0,

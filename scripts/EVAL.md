@@ -41,17 +41,18 @@ benchmarks, and MiaAI-Lab's own `scripts/stability-quick.py` + `scripts/benchmar
 | 3. RULER-lite quality | `ruler-lite.py` | S/MK-NIAH retrieval, variable tracking (multi-hop), common-words aggregation at 8k→262k | Beyond shallow NIAH: tests real long-context reasoning, not just recall (RULER's core finding: NIAH-perfect models fail tracing/aggregation at depth) |
 | 4. Tool calling | `tool-battery.py` | Single/complex/parallel/multi-turn calls + issue55 truncation | The agent-serving path; issue55 = truncated calls must report `finish=length`, never broken tool JSON |
 | 5. Deep-context tools | `deepctx-tool-battery.py` | Same battery at 32k/131k+ | Tool calls at depth (the Hermes/agent case) |
-| 6. Tool-history trajectory | `reproduce-issue82-live.py` | Evolving official tool history, prior reasoning replay, raw pre-parser output, and cross-turn repetition | Issue #82 is trajectory-dependent; isolated replay and per-response repetition checks miss it |
+| 6. Tool-history trajectory | `reproduce-issue82-live.py` | Evolving official tool history, prior reasoning replay, raw pre-parser output, and run-wide repetition | Issue #82 is trajectory-dependent; isolated replay and per-response-only checks miss it |
 | 7. Garble | `context-garble-sweep.py` | Cold-prefill prompt/schema/secret echo at depth | The classic DS4 failure mode; only visible cold |
 
-## Expected values (this recipe, 2x DGX Spark, Anemll 0.1.1, verified 2026-08-16)
+## Expected values (this recipe, 2x DGX Spark, Anemll 0.1.1; baseline verified 2026-08-16, tool-history row measured 2026-08-22)
 
 - C1 decode: **73-76 tok/s** (Keys abliterated 73.1, official 75.5); C6 aggregate 168-180
 - Acceptance: **~68-75%** overall, pos0 ~0.93 → pos4 ~0.33 (normal DSpark collapse)
 - RULER-lite: retrieval 100%, tracing/aggregation pass at all tested lengths
 - Tool battery: 7/7 + deep-context 8/8; issue55 truncation always `finish=length`
-- Tool-history trajectory: 10/10 required calls and 10/10 required no-tool acknowledgements;
-  maximum identical reasoning line and normalized tool call both ≤3
+- Tool-history trajectory (synthetic gate): 10/10 required calls and 10/10 required
+  no-tool acknowledgements; maximum identical reasoning line and normalized tool
+  call both ≤3 (threshold from the Issue #82 healthy control; recipe runs measured 1)
 - Garble: CLEAN at every length up to the 1M ceiling
 
 If a phase regresses, fix the recipe, not the test.
