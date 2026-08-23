@@ -222,6 +222,7 @@ services:
         if [ -z "$${NCCL_NET_GDR_LEVEL:-}" ]; then unset NCCL_NET_GDR_LEVEL; fi;
         if [ -z "$${NCCL_NET_GDR_READ:-}" ]; then unset NCCL_NET_GDR_READ; fi;
         if [ -z "$${NCCL_DMABUF_ENABLE:-}" ]; then unset NCCL_DMABUF_ENABLE; fi;
+        if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then unset NCCL_IB_GID_INDEX; fi;
         ENCODING_SOURCE="$${DSPARK_ENCODING_FILE:-}";
         if [ -z "$${ENCODING_SOURCE}" ]; then
           MODEL_HUB_DIR=$$(printf '%s' "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}" | sed 's|/|--|g');

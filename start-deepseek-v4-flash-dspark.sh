@@ -247,6 +247,14 @@ WORKER_GLOO_SOCKET_IFNAME="${WORKER_GLOO_SOCKET_IFNAME:-${GLOO_SOCKET_IFNAME:-$W
 # Set NCCL_IB_GID_AUTO=0 and pin NCCL_IB_GID_INDEX / WORKER_NCCL_IB_GID_INDEX
 # only if you need a manual override.
 NCCL_IB_GID_AUTO="${NCCL_IB_GID_AUTO:-1}"
+# Dual-HCA (tonyd2wild/DeepSeek-v4-Flash-0731-DSpark-1M-NVFP4-KV-2x-DGX-Spark#38):
+# a pinned NCCL_IB_GID_INDEX is one global value per rank. Indexes differ per
+# HCA and drift after link/fw events, so a pin of 3 (or any resolved common
+# index) later hangs with ibv_modify_qp 61. Default is to validate sysfs GIDs
+# then LEAVE the env unset so NCCL picks RoCEv2/IPv4 per device.
+# Set NCCL_IB_GID_LEAVE_UNSET=0 to keep pin-the-resolved-index.
+# Explicit NCCL_IB_GID_AUTO=0 pins still win.
+NCCL_IB_GID_LEAVE_UNSET="${NCCL_IB_GID_LEAVE_UNSET:-1}"
 # Optional match IPs if the RoCE address is not on NCCL_SOCKET_IFNAME /
 # WORKER_NCCL_SOCKET_IFNAME (rare). Prefer interface IPv4 when unset.
 NCCL_IB_GID_MATCH_IP="${NCCL_IB_GID_MATCH_IP:-}"
@@ -688,18 +696,34 @@ resolve_nccl_gid_indexes() {
   NCCL_IB_GID_INDEX="$resolved_head"
   WORKER_NCCL_IB_GID_INDEX="$resolved_worker"
   echo "RoCEv2 GID index: head=$NCCL_IB_GID_INDEX (match $head_match) worker=$WORKER_NCCL_IB_GID_INDEX (match $worker_match)"
+  if [ "${NCCL_IB_GID_LEAVE_UNSET:-1}" = "1" ]; then
+    echo "Leaving NCCL_IB_GID_INDEX unset (tonyd2wild #38): NCCL selects RoCEv2/IPv4 GID per HCA. Validated sysfs indexes were head=$resolved_head worker=$resolved_worker."
+    NCCL_IB_GID_INDEX=""
+    WORKER_NCCL_IB_GID_INDEX=""
+  fi
 }
 
 remote_nccl_env() {
   # Rebuild each call so GID resolve after early init is visible on the worker.
-  printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' NCCL_IB_GID_INDEX='%s' VLLM_HOST='%s' VLLM_PORT='%s'" \
-    "$WORKER_NCCL_IB_HCA" \
-    "$WORKER_NCCL_SOCKET_IFNAME" \
-    "$WORKER_TP_SOCKET_IFNAME" \
-    "$WORKER_GLOO_SOCKET_IFNAME" \
-    "$WORKER_NCCL_IB_GID_INDEX" \
-    "$VLLM_HOST" \
-    "$VLLM_PORT"
+  # Omit NCCL_IB_GID_INDEX when empty: an empty string parses as GID 0 (fe80).
+  if [ -n "${WORKER_NCCL_IB_GID_INDEX:-}" ]; then
+    printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' NCCL_IB_GID_INDEX='%s' VLLM_HOST='%s' VLLM_PORT='%s'" \
+      "$WORKER_NCCL_IB_HCA" \
+      "$WORKER_NCCL_SOCKET_IFNAME" \
+      "$WORKER_TP_SOCKET_IFNAME" \
+      "$WORKER_GLOO_SOCKET_IFNAME" \
+      "$WORKER_NCCL_IB_GID_INDEX" \
+      "$VLLM_HOST" \
+      "$VLLM_PORT"
+  else
+    printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' VLLM_HOST='%s' VLLM_PORT='%s'" \
+      "$WORKER_NCCL_IB_HCA" \
+      "$WORKER_NCCL_SOCKET_IFNAME" \
+      "$WORKER_TP_SOCKET_IFNAME" \
+      "$WORKER_GLOO_SOCKET_IFNAME" \
+      "$VLLM_HOST" \
+      "$VLLM_PORT"
+  fi
 }
 
 compose_base() {
