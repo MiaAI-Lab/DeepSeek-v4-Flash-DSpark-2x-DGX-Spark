@@ -100,3 +100,76 @@ if command -v ss >/dev/null 2>&1; then
 fi
 curl -fsS --max-time 5 "${AUTH_HEADER_ARGS[@]}" "$API_URL" || true
 echo
+# Issue #32 GB10 memory/NVRM observer (begin)
+# Opportunistic report of the report-only observer; never changes the exit
+# status and not gated on DSPARK_GB10_OBSERVER, so a manually attached
+# observer is visible too. Absent script/state dir prints a quiet note.
+OBSERVER_SCRIPT="$SCRIPT_DIR/scripts/gb10-memory-observer.py"
+observer_run() {
+  # Bounded best-effort: never let a wedged observer stall status/logs.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15 "$@"
+  else
+    "$@"
+  fi
+}
+observer_state_dir() {
+  printf '%s' "${DSPARK_GB10_OBSERVER_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/dspark-observer}"
+}
+show_observer_records() {
+  # $1 = state dir; tails the observer's record file, tolerating absence.
+  local state_dir="$1" records="$1/records.ndjson"
+  if [ -f "$records" ]; then
+    echo "-- latest records (tail ${TAIL:-160}): $records --"
+    tail -n "${TAIL:-160}" -- "$records" 2>/dev/null || true
+  else
+    echo "no records in $state_dir yet"
+  fi
+}
+echo "== GB10 observer: head =="
+if [ -f "$OBSERVER_SCRIPT" ]; then
+  observer_run python3 "$OBSERVER_SCRIPT" status || true
+else
+  echo "not installed ($OBSERVER_SCRIPT missing)"
+fi
+show_observer_records "$(observer_state_dir)"
+echo
+echo "== GB10 observer: worker ${WORKER_HOST} =="
+# Remote body ships verbatim via a quoted heredoc; config travels as %q'd
+# environment assignments ahead of bash -s, so no nested quoting survives.
+# A custom DSPARK_GB10_OBSERVER_STATE_DIR is forwarded only when actually set;
+# otherwise DS_OBS_STATE_DIR stays empty and the WORKER resolves its own
+# ${XDG_STATE_HOME:-$HOME/.local/state}/dspark-observer below (never the head's).
+DS_OBS_STATE_DIR_FWD=""
+if [ -n "${DSPARK_GB10_OBSERVER_STATE_DIR:-}" ]; then
+  DS_OBS_STATE_DIR_FWD="DS_OBS_STATE_DIR=$(printf '%q' "$DSPARK_GB10_OBSERVER_STATE_DIR")"
+fi
+if ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" \
+    "DS_OBS_SCRIPT=$(printf '%q' "$WORKER_DIR/scripts/gb10-memory-observer.py") DS_TAIL=$(printf '%q' "${TAIL:-160}") $DS_OBS_STATE_DIR_FWD bash -s" <<'DS_REMOTE_OBSERVER'
+obs_script="$DS_OBS_SCRIPT"
+state_dir="$DS_OBS_STATE_DIR"
+: "${state_dir:=${XDG_STATE_HOME:-$HOME/.local/state}/dspark-observer}"
+if [ -f "$obs_script" ]; then
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15 python3 "$obs_script" status || true
+  else
+    python3 "$obs_script" status || true
+  fi
+else
+  echo "not installed ($obs_script missing)"
+fi
+records="$state_dir/records.ndjson"
+if [ -f "$records" ]; then
+  echo "-- latest records (tail $DS_TAIL): $records --"
+  tail -n "$DS_TAIL" -- "$records" 2>/dev/null || true
+else
+  echo "no records in $state_dir yet"
+fi
+DS_REMOTE_OBSERVER
+then
+  :
+else
+  echo "worker unreachable; skipping worker GB10 observer report."
+fi
+echo
+# Issue #32 GB10 memory/NVRM observer (end)

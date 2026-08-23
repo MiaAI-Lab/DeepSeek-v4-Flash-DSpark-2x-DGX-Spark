@@ -21,6 +21,8 @@ for f in \
   scripts/ci-validate.sh \
   scripts/verify-overlay-sources.sh \
   scripts/test-draft-sample-method-gate.sh \
+  scripts/test-issue32-diagnostic-switches.sh \
+  scripts/test-issue32-observer-lifecycle.sh \
   scripts/test-nccl-fabric-passthrough.sh \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
   scripts/boot-shape-warmup.sh \
@@ -53,6 +55,8 @@ py_files+=(
   scripts/test-empty-encoder-output-hotfix.py
   scripts/ruler-lite.py
   scripts/verify-dsv4-027-equality-gate.py
+  scripts/gb10-memory-observer.py
+  scripts/test-gb10-memory-observer.py
 )
 python3 -m py_compile "${py_files[@]}"
 ok "py_compile ${#py_files[@]} files"
@@ -88,6 +92,8 @@ python3 scripts/test-python-hotfix-failclosed.py -q
 ok "test-python-hotfix-failclosed"
 python3 scripts/test-empty-encoder-output-hotfix.py -q
 ok "test-empty-encoder-output-hotfix"
+python3 scripts/test-gb10-memory-observer.py -q
+ok "test-gb10-memory-observer"
 python3 tests/test_issue27_inflight_cap.py -q
 ok "test_issue27_inflight_cap"
 python3 scripts/verify-dsv4-027-equality-gate.py
@@ -96,6 +102,10 @@ bash scripts/verify-overlay-sources.sh
 ok "verify-overlay-sources"
 bash scripts/test-draft-sample-method-gate.sh -q
 ok "test-draft-sample-method-gate"
+bash scripts/test-issue32-diagnostic-switches.sh -q
+ok "test-issue32-diagnostic-switches"
+bash scripts/test-issue32-observer-lifecycle.sh -q
+ok "test-issue32-observer-lifecycle"
 bash scripts/test-nccl-fabric-passthrough.sh -q
 ok "test-nccl-fabric-passthrough"
 bash scripts/test-boot-shape-warmup.sh -q

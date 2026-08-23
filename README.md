@@ -221,6 +221,25 @@ Issue **#21 / #26 / #27 / #43** Python hotfixes always run at container start
 (they are not skipped by `DSPARK_SKIP_HOTFIX`). `#27` + the 1024 prefill cap
 is why six huge cold prompts queue instead of starving decode.
 
+### Diagnostic switches (reversible; applied on restart)
+
+Two `.env.dspark` switches flip existing vLLM arguments for issue **#32**
+diagnosis ([Refs #32](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/32)).
+They are reversible diagnosis aids, not fixes: no root cause is claimed and
+issue **#32** remains open.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DSPARK_FLASHINFER_AUTOTUNE` | `1` | `1` = current `--enable-flashinfer-autotune`. `0` = `--no-enable-flashinfer-autotune`. |
+| `DSPARK_DIAG_FULL_DECODE_ONLY` | `0` | `0` = no extra argument (current argv). `1` = `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'`. |
+
+Any other value exits **2** before vLLM starts. Unset variables produce the
+same effective vLLM argv as before. Values are validated inside the container
+command on both ranks, so head and worker always get the same flags. Like every
+[`.env.dspark` switch](#envdspark-switches): **restart both ranks** after a
+flip. The parser accepts the FULL_DECODE_ONLY value on the pinned `0.1.1`
+image; treat a `1` boot as an experiment until you have re-verified serving.
+
 ### Stage-C only (no-ops on Anemll `0.1.1`)
 
 These warn `Unknown vLLM environment variable` on the default image. They
@@ -437,6 +456,96 @@ Compose is Anemll-shaped (`/usr/local/bin/vllm`, hotfixes under
 
 ---
 
+## GB10 memory observer (report-only)
+
+Opt-in, external, **report-only** host observer for issue **#32**
+([Refs #32](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/32)):
+one Python 3 standard-library script per node that samples host memory facts
+and sanitized kernel-log facts. It records evidence; it **never** fixes or
+restarts serving, never signals/stops/restarts serving containers or ranks or
+any unrelated process, never probes the API, and never declares anything
+safe. No root-cause or rescue claim is attached to it.
+
+```bash
+python3 scripts/gb10-memory-observer.py {run|start|stop|status|once}
+```
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DSPARK_GB10_OBSERVER` | `0` | `1` in `.env.dspark` = start (and auto-stop) the observer around serving. Unset/`0` preserves current behavior exactly. |
+| `DSPARK_GB10_OBSERVER_INTERVAL` | `2` | Sampling cadence in seconds. |
+| `DSPARK_GB10_OBSERVER_STATE_DIR` | *(empty)* | Empty uses `${XDG_STATE_HOME:-$HOME/.local/state}/dspark-observer`. Records live outside git and container bind mounts. |
+| `DSPARK_GB10_OBSERVER_AUTOSTOP` | `1` | `0` leaves the observer running after rank teardown. |
+
+What it records: append-only newline-delimited JSON with bounded rotation
+(16 MiB × 4 files). Common fields include `event`, `ts_utc`, `monotonic_s`,
+`boot_id`, and `seq`; each session carries a durable `session_id`. `sample`
+records carry `mem_available_kib` plus optional memory-pressure and
+source-health fields; journal drops (oversized or backlogged lines) are
+bounded and reported in-band, never silent. `kernel` records carry only
+sanitized `NV_ERR_NO_MEMORY (0x51)` / Xid matches — never container logs,
+prompts, or `.env.dspark` contents. `session_start` / graceful `session_end`
+markers make a missing `session_end` across a new `boot_id` usable as crash
+evidence.
+
+The kernel journal follows **future events only** (`journalctl -f`, no
+cursor/backfill): kernel events during observer downtime or between observer
+restarts are not replayed, and a new `session_start` anchors such gaps with
+`resume_after_ts_utc`. Any follower exit — including a clean one — is
+reported in-band as degradation while `/proc` sampling continues; an absence
+of kernel facts is **not** proof of absence. The observer never elevates
+privileges.
+
+Attach without touching a healthy serve — run on head **and** worker:
+
+```bash
+python3 scripts/gb10-memory-observer.py start   # repeat via ssh on $WORKER_HOST
+python3 scripts/gb10-memory-observer.py status
+python3 scripts/gb10-memory-observer.py once    # appends one one-shot session/sample to the records file
+```
+
+`once` appends its own `session_start` → `sample` → `session_end` sequence to
+the records file and is **silent on success** — errors go to stderr, the data
+goes to the state directory above (`status` shows the last sample).
+
+A second instance is prevented by an advisory lock. The observer signals
+only its own processes: `stop` pidfd-validates the daemon's identity before
+TERM/KILL, and bounded teardown may TERM/KILL the observer's own journalctl
+follower — nothing else is ever a signal target.
+Records carry a durable `session_id`; `status` reports the **current**
+session: the latest `session_start` opens it,
+and any earlier `session_end` belongs to a prior session — so an overlapping
+one-shot `once` run does not make a running daemon look stopped. Inspect
+records under the state directory above (plain newline-delimited JSON, e.g.
+`grep -h '"kernel"'` over the files). With the default `AUTOSTOP`,
+`./stop-deepseek-v4-flash-dspark.sh` tears ranks down first and stops
+observers last.
+
+Reading the evidence: an isolated warm-up `NV_ERR_NO_MEMORY (0x51)` is not
+independently fatal. The actionable pattern is an in-request `0x51` burst
+together with collapsing `MemAvailable`. The observer records those facts; it
+does not threshold-trigger any action, and no automatic remediation exists.
+Do **not** run unattended deep-context reproduction against a live serve;
+reproduce interactively, supervised, after reading the recorded facts.
+
+When enabled from `.env.dspark`, the launcher starts one observer per node
+before ranks/warm-up (also before the already-running exit-3 return), fully
+detached with WARN-and-continue semantics: an observer that fails to start
+never blocks serving. Once running, an opted-in observer intentionally keeps
+recording through a serving-start failure — evidence from a failing start is
+exactly what it exists for — until rank teardown (default `AUTOSTOP`) or a
+manual `stop`. The launcher boolean variables (`DSPARK_GB10_OBSERVER`,
+`DSPARK_GB10_OBSERVER_AUTOSTOP`) accept only unset/`0`/`1`; anything else
+makes `./start-…` exit **2** before vLLM starts, or `./stop-…` exit **2**
+after rank teardown — never a silent on/off guess. A failing observer
+command (invalid `DSPARK_GB10_OBSERVER_INTERVAL` / `_STATE_DIR`, missing
+interpreter, unreachable worker) still only warns. `./status-…` /
+`./logs-…` mention observer state opportunistically regardless of
+`DSPARK_GB10_OBSERVER`, and their exit status is unchanged when the
+observer is absent.
+
+---
+
 ## Experimental: Vision
 
 Not the default ship. 0731 on `:8888` stays text-only. Optional Qwen3-VL-4B
@@ -461,6 +570,7 @@ to **0.80** and shrinks the 0731 KV pool.
 - `--long-prefill-token-threshold 1024` · `--enable-chunked-prefill` · `--async-scheduling`
 - `--max-cudagraph-capture-size` = `MAX_NUM_SEQS * (MTP_NUM_TOKENS + 1)` → 36 at 6×5
 - `--moe-backend flashinfer_b12x` · `--generation-config vllm`
+- `--enable-flashinfer-autotune` (switchable via `DSPARK_FLASHINFER_AUTOTUNE`) · optional `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'` only when `DSPARK_DIAG_FULL_DECODE_ONLY=1`
 - DSpark: `{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}`
 
 This is the **Stage C padded NVFP4** path (584-byte sparse-MLA envelope via
@@ -513,6 +623,7 @@ when the corresponding live behavior is outside the test scope.
 | `scripts/benchmark-0731.py` | Prompt × concurrency sweep |
 | `scripts/verify-responses-api-live.py` | Strict Responses, multi-turn cache, and disconnect gates |
 | [docs/ENVS.md](docs/ENVS.md) | Anemll vs Stage-C env matrix |
+| `scripts/gb10-memory-observer.py` | Opt-in report-only GB10 memory/kernel-log observer ([GB10 memory observer](#gb10-memory-observer-report-only)) |
 | [docs/PATCHES.md](docs/PATCHES.md) | Keys / #27 / #22 notes |
 | `patches/` | Issue hotfixes applied at container start |
 | `docker-compose.stage-c.override.yml` | Stage-C-only env injection |

@@ -189,6 +189,11 @@ services:
       # value never reaches the JSON.
       DRAFT_SAMPLE_METHOD: "${DRAFT_SAMPLE_METHOD:-probabilistic}"
       DEFAULT_THINKING: "${DEFAULT_THINKING:-low}"
+      # Issue #32 reversible diagnostic switches (not VLLM_ registry keys).
+      # Unset/empty = current serving behavior; the entrypoint validates the
+      # value and exits 2 before vllm exec. See docs/ENVS.md.
+      DSPARK_FLASHINFER_AUTOTUNE: "${DSPARK_FLASHINFER_AUTOTUNE:-}"
+      DSPARK_DIAG_FULL_DECODE_ONLY: "${DSPARK_DIAG_FULL_DECODE_ONLY:-}"
       DSPARK_SKIP_HOTFIX: "${DSPARK_SKIP_HOTFIX:-0}"
       DSPARK_SKIP_ISSUE22_HOTFIX: "${DSPARK_SKIP_ISSUE22_HOTFIX:-0}"
       DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX: "${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}"
@@ -260,6 +265,18 @@ services:
           max) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"max"}' ;;
           *) echo "DEFAULT_THINKING must be one of: off, low, high, max (got: $${DEFAULT_THINKING})" >&2; exit 2 ;;
         esac;
+        AUTOTUNE_ARGS=();
+        case "$${DSPARK_FLASHINFER_AUTOTUNE:-}" in
+          ''|1) AUTOTUNE_ARGS=(--enable-flashinfer-autotune) ;;
+          0) AUTOTUNE_ARGS=(--no-enable-flashinfer-autotune) ;;
+          *) echo "DSPARK_FLASHINFER_AUTOTUNE must be unset, 0 or 1 (got: $${DSPARK_FLASHINFER_AUTOTUNE})" >&2; exit 2 ;;
+        esac;
+        COMPILATION_CONFIG_ARGS=();
+        case "$${DSPARK_DIAG_FULL_DECODE_ONLY:-}" in
+          ''|0) ;;
+          1) COMPILATION_CONFIG_ARGS=(--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}') ;;
+          *) echo "DSPARK_DIAG_FULL_DECODE_ONLY must be unset, 0 or 1 (got: $${DSPARK_DIAG_FULL_DECODE_ONLY})" >&2; exit 2 ;;
+        esac;
         REVISION_ARGS="";
         if [ -n "$${DSPARK_REVISION:-}" ]; then REVISION_ARGS="--revision $${DSPARK_REVISION}"; fi;
         exec /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}
@@ -294,7 +311,8 @@ services:
         --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
         --default-chat-template-kwargs "$${DEFAULT_CHAT_TEMPLATE_KWARGS}"
         --generation-config vllm
-        --enable-flashinfer-autotune
+        "$${AUTOTUNE_ARGS[@]}"
+        "$${COMPILATION_CONFIG_ARGS[@]}"
         --nnodes 2
         --node-rank ${NODE_RANK}
         --master-addr ${MASTER_ADDR}

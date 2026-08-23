@@ -93,6 +93,11 @@ if [ -n "${DSPARK_API_KEYS+x}" ]; then
   _dspark_ambient_has=1
   _dspark_ambient_keys="$DSPARK_API_KEYS"
 fi
+# Ambient snapshots for the two diagnostic-switch guards below the API_KEYS
+# block: captured BEFORE `set -a; source` replaces them with .env.dspark
+# values, so an ambient-only or diverging value stays detectable.
+_dspark_ambient_autotune="${DSPARK_FLASHINFER_AUTOTUNE-}"
+_dspark_ambient_diag="${DSPARK_DIAG_FULL_DECODE_ONLY-}"
 unset DSPARK_API_KEYS
 sed $'1s/^\xEF\xBB\xBF//; s/\r$//' "$ENV_FILE" > "$_dspark_env_clean"
 set -a
@@ -104,6 +109,37 @@ if [ "$_dspark_ambient_has" = "1" ] && [ "$_dspark_ambient_keys" != "${DSPARK_AP
   exit 2
 fi
 # DSPARK_API_KEYS ambient guard (end)
+
+# DSPARK_FLASHINFER_AUTOTUNE ambient guard (begin)
+# Same split-rank hazard as DSPARK_API_KEYS: head Compose interpolation sees
+# the process env while the worker rank is fed ONLY the streamed .env.dspark,
+# so an ambient-only or diverging switch value would put head and worker on
+# different vLLM argv. Gated on the PRE-SOURCE snapshot: unset or empty
+# ambient never rejects (a file-only flip is the documented flow); a nonempty
+# ambient must be present and identical in .env.dspark.
+if [ -n "$_dspark_ambient_autotune" ]; then
+  if ! grep -q '^DSPARK_FLASHINFER_AUTOTUNE=' "$_dspark_env_clean"; then
+    echo "error: DSPARK_FLASHINFER_AUTOTUNE is set in the environment but not in .env.dspark; set it only in .env.dspark" >&2
+    exit 2
+  fi
+  if [ "${DSPARK_FLASHINFER_AUTOTUNE:-}" != "$_dspark_ambient_autotune" ]; then
+    echo "error: DSPARK_FLASHINFER_AUTOTUNE is set in the environment but does not match .env.dspark; set it only in .env.dspark" >&2
+    exit 2
+  fi
+fi
+# DSPARK_FLASHINFER_AUTOTUNE ambient guard (end)
+# DSPARK_DIAG_FULL_DECODE_ONLY ambient guard (begin)
+if [ -n "$_dspark_ambient_diag" ]; then
+  if ! grep -q '^DSPARK_DIAG_FULL_DECODE_ONLY=' "$_dspark_env_clean"; then
+    echo "error: DSPARK_DIAG_FULL_DECODE_ONLY is set in the environment but not in .env.dspark; set it only in .env.dspark" >&2
+    exit 2
+  fi
+  if [ "${DSPARK_DIAG_FULL_DECODE_ONLY:-}" != "$_dspark_ambient_diag" ]; then
+    echo "error: DSPARK_DIAG_FULL_DECODE_ONLY is set in the environment but does not match .env.dspark; set it only in .env.dspark" >&2
+    exit 2
+  fi
+fi
+# DSPARK_DIAG_FULL_DECODE_ONLY ambient guard (end)
 COMPOSE_ENV_FILE="$_dspark_env_clean"
 
 # Vision mode flag selects 0731 GPU util (and whether the VL sidecar starts).
@@ -883,6 +919,81 @@ ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
   echo "Pull it on the worker (e.g. docker pull $DSPARK_VLLM_IMAGE) or run ./build-dspark-vllm-runtime.sh." >&2
   exit 1
 }
+
+# Issue #32 GB10 memory/NVRM observer (begin)
+# Report-only host observer, opt-in via DSPARK_GB10_OBSERVER (unset/0 = no-op).
+# Starts BEFORE rank startup/warm-up and before any already-running return, on
+# head and worker independently. Failures warn and continue; never fatal.
+OBSERVER_SCRIPT="$SCRIPT_DIR/scripts/gb10-memory-observer.py"
+# Worker copy lives under the WORKER repo dir; never reuse the head path there.
+# Raw path here: every consumer %q-quotes at use (scp hands its remote spec to
+# the worker shell, so its destination is quoted at the scp call below).
+REMOTE_OBSERVER_SCRIPT="$WORKER_DIR/scripts/gb10-memory-observer.py"
+observer_enabled() {
+  # Strict 0/1: any other value is rejected loudly instead of being silently
+  # treated as on/off; the observer CLI enforces the same contract.
+  local v="${DSPARK_GB10_OBSERVER:-}"
+  case "$v" in
+    ''|0|1) [ "$v" = "1" ] ;;
+    *)
+      echo "error: DSPARK_GB10_OBSERVER must be 0 or 1 (got: $v)" >&2
+      exit 2
+      ;;
+  esac
+}
+observer_remote_env() {
+  # Exported into the worker shell so per-node config travels intact; values
+  # are %q-quoted for the remote shell.
+  local name
+  for name in DSPARK_GB10_OBSERVER DSPARK_GB10_OBSERVER_INTERVAL DSPARK_GB10_OBSERVER_STATE_DIR DSPARK_GB10_OBSERVER_AUTOSTOP; do
+    if [ -n "${!name+x}" ]; then
+      printf '%s=%q ' "$name" "${!name}"
+    fi
+  done
+}
+observer_start_head() {
+  command -v timeout >/dev/null 2>&1 || { echo "WARN: GB10 observer not started: timeout(1) unavailable." >&2; return 0; }
+  echo "Starting GB10 memory observer on head..."
+  # start self-daemonizes (double-fork + stdio to /dev/null) and exits once the
+  # daemon is recording; timeout only bounds a wedged handshake.
+  if ! timeout 20 python3 "$OBSERVER_SCRIPT" start </dev/null >/dev/null 2>&1; then
+    echo "WARN: GB10 observer failed to start on head (continuing; serving is unaffected)." >&2
+  fi
+}
+observer_start_worker() {
+  command -v timeout >/dev/null 2>&1 || { echo "WARN: GB10 worker observer not started: timeout(1) unavailable." >&2; return 0; }
+  if ! timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "command -v python3 >/dev/null 2>&1"; then
+    echo "WARN: cannot reach ${WORKER_HOST} to start the GB10 observer there (head observer continues)." >&2
+    return 0
+  fi
+  # %q output must NOT be wrapped in extra literal quotes; it is already safe.
+  if ! timeout 30 ssh -o BatchMode=yes "$WORKER_HOST" "mkdir -p $(printf '%q' "$WORKER_DIR")/scripts"; then
+    echo "WARN: could not create ${WORKER_DIR}/scripts on ${WORKER_HOST}; skipping the worker GB10 observer." >&2
+    return 0
+  fi
+  if ! timeout 30 scp -q "$OBSERVER_SCRIPT" "${WORKER_HOST}:$(printf '%q' "$REMOTE_OBSERVER_SCRIPT")"; then
+    echo "WARN: could not copy the GB10 observer to ${WORKER_HOST}; skipping the worker observer." >&2
+    return 0
+  fi
+  echo "Starting GB10 memory observer on worker ${WORKER_HOST}..."
+  if ! timeout 30 ssh -o BatchMode=yes "$WORKER_HOST" "$(observer_remote_env)timeout 20 python3 $(printf '%q' "$REMOTE_OBSERVER_SCRIPT") start </dev/null >/dev/null 2>&1"; then
+    echo "WARN: GB10 observer failed to start on worker ${WORKER_HOST} (continuing; serving is unaffected)." >&2
+  fi
+}
+# Start before rank startup AND before any already-running exit below, so a
+# dockerd-restored cluster can be observed too. All hard preflight above has
+# passed; from here on observer failure is WARN-only, never a serving failure.
+# This runs before the ERR trap is armed and never in its failure path.
+#
+# Intentional: a later serving failure (port conflict, stale worker rank,
+# health-timeout) does NOT auto-stop an opted-in observer. The records it
+# gathered around the failed start are exactly the evidence issue #32 needs;
+# teardown happens at the next stop hook or via manual observer stop.
+if observer_enabled; then
+  observer_start_head
+  observer_start_worker
+fi
+# Issue #32 GB10 memory/NVRM observer (end)
 
 already_running_hint() {
   echo "This is not a failed start: dockerd likely restored ranks after a reboot (compose restart: unless-stopped). The cluster may already be serving. Run ./stop-deepseek-v4-flash-dspark.sh only if you want a cold start. Supervisors: treat exit 3 as already-up (systemd SuccessExitStatus=3)." >&2

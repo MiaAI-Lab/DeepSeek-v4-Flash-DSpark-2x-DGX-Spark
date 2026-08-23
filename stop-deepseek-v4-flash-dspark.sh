@@ -197,6 +197,72 @@ if [ "$LEGACY_PROJECT_NAME" != "$PROJECT_NAME" ]; then
   stop_project "$LEGACY_PROJECT_NAME"
 fi
 
+# Issue #32 GB10 memory/NVRM observer (begin)
+# Report-only host observer, opt-in via DSPARK_GB10_OBSERVER (unset/0 = no-op).
+# Stopped AFTER rank teardown, only when autostop is enabled, and never added
+# to STOP_FAILURES: an observer stop failure must not flip the stale-rank
+# verdict that a worker could still be serving.
+OBSERVER_SCRIPT="$SCRIPT_DIR/scripts/gb10-memory-observer.py"
+# Match where start ships the worker copy (never the head path remotely).
+REMOTE_OBSERVER_SCRIPT="$WORKER_DIR/scripts/gb10-memory-observer.py"
+observer_enabled() {
+  # Strict 0/1: any other value is rejected loudly instead of being silently
+  # treated as on/off; the observer CLI enforces the same contract.
+  local v="${DSPARK_GB10_OBSERVER:-}"
+  case "$v" in
+    ''|0|1) [ "$v" = "1" ] ;;
+    *)
+      echo "error: DSPARK_GB10_OBSERVER must be 0 or 1 (got: $v)" >&2
+      exit 2
+      ;;
+  esac
+}
+observer_autostop() {
+  # Strict 0/1 with default-on; mirrors the observer CLI's own validation so a
+  # typo like AUTOSTOP=true cannot wedge the stop hook on its ConfigError.
+  local v="${DSPARK_GB10_OBSERVER_AUTOSTOP:-1}"
+  case "$v" in
+    ''|0|1) [ "$v" = "1" ] ;;
+    *)
+      echo "error: DSPARK_GB10_OBSERVER_AUTOSTOP must be 0 or 1 (got: $v)" >&2
+      exit 2
+      ;;
+  esac
+}
+observer_remote_env() {
+  # Exported into the worker shell so per-node config travels intact; values
+  # are %q-quoted for the remote shell.
+  local name
+  for name in DSPARK_GB10_OBSERVER DSPARK_GB10_OBSERVER_INTERVAL DSPARK_GB10_OBSERVER_STATE_DIR DSPARK_GB10_OBSERVER_AUTOSTOP; do
+    if [ -n "${!name+x}" ]; then
+      printf '%s=%q ' "$name" "${!name}"
+    fi
+  done
+}
+observer_stop_head() {
+  command -v timeout >/dev/null 2>&1 || { echo "WARN: GB10 observer not stopped on head: timeout(1) unavailable." >&2; return 0; }
+  echo "Stopping GB10 memory observer on head..."
+  if ! timeout 20 python3 "$OBSERVER_SCRIPT" stop </dev/null >/dev/null 2>&1; then
+    echo "WARN: GB10 observer did not stop cleanly on head (continuing)." >&2
+  fi
+}
+observer_stop_worker() {
+  command -v timeout >/dev/null 2>&1 || { echo "WARN: GB10 observer not stopped on ${WORKER_HOST}: timeout(1) unavailable." >&2; return 0; }
+  echo "Stopping GB10 memory observer on worker ${WORKER_HOST}..."
+  if ! timeout 30 ssh -o BatchMode=yes "$WORKER_HOST" "$(observer_remote_env)timeout 20 python3 $(printf '%q' "$REMOTE_OBSERVER_SCRIPT") stop </dev/null >/dev/null 2>&1"; then
+    echo "WARN: GB10 observer did not stop cleanly on worker ${WORKER_HOST} (continuing)." >&2
+  fi
+}
+if observer_enabled && observer_autostop; then
+  observer_stop_head
+  if ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "true" >/dev/null 2>&1; then
+    observer_stop_worker
+  else
+    echo "WARN: cannot reach worker ${WORKER_HOST}; its GB10 observer keeps running until reboot or manual stop." >&2
+  fi
+fi
+# Issue #32 GB10 memory/NVRM observer (end)
+
 if [ "$STOP_FAILURES" -gt 0 ]; then
   echo "WARN: $STOP_FAILURES remote stop step(s) failed on ${WORKER_HOST}; the worker may still be serving a stale rank (restart: unless-stopped restores it on reboot). Re-run ./stop-deepseek-v4-flash-dspark.sh once the worker is reachable." >&2
   exit 1

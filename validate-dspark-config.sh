@@ -56,6 +56,24 @@ case "$DRAFT_SAMPLE_METHOD" in
 esac
 export DRAFT_SAMPLE_METHOD
 
+# Issue #32 reversible diagnostic switches. Same contract as the container
+# entrypoint: only unset/empty, 0 or 1 pass; anything else fails here with
+# exit 2 before any compose render or start attempt.
+case "${DSPARK_FLASHINFER_AUTOTUNE:-}" in
+  ''|0|1) ;;
+  *)
+    echo "DSPARK_FLASHINFER_AUTOTUNE must be unset, 0 or 1 (got: ${DSPARK_FLASHINFER_AUTOTUNE})" >&2
+    exit 2
+    ;;
+esac
+case "${DSPARK_DIAG_FULL_DECODE_ONLY:-}" in
+  ''|0|1) ;;
+  *)
+    echo "DSPARK_DIAG_FULL_DECODE_ONLY must be unset, 0 or 1 (got: ${DSPARK_DIAG_FULL_DECODE_ONLY})" >&2
+    exit 2
+    ;;
+esac
+
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
 : "${MASTER_PORT:?MASTER_PORT must be set in $ENV_FILE}"
@@ -116,6 +134,8 @@ echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION} (text ${GPU_MEMORY_UTI
 echo "  spec tokens (MTP_NUM_TOKENS): ${MTP_NUM_TOKENS:-5} with draft_sample_method=${DRAFT_SAMPLE_METHOD} (min 5 = dspark_block_size)"
 echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) )) (max_num_seqs * (mtp + 1))"
 echo "  breakable cudagraph: ${VLLM_USE_BREAKABLE_CUDAGRAPH:-0}"
+echo "  flashinfer autotune switch: ${DSPARK_FLASHINFER_AUTOTUNE:-<unset = enabled>}"
+echo "  FULL_DECODE_ONLY diag switch: ${DSPARK_DIAG_FULL_DECODE_ONLY:-<unset = off>}"
 echo "  dspark slot clamp: ${DSPARK_SLOT_CLAMP:-1}"
 echo "  sampling override: none (no --override-generation-config; --generation-config vllm only)"
 echo "  WO projection: ${VLLM_USE_B12X_WO_PROJECTION:-1}"
@@ -128,4 +148,4 @@ env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   DSPARK_MODEL="$DSPARK_MODEL" \
   DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|--compilation-config|--enable-flashinfer-autotune|--no-enable-flashinfer-autotune|DSPARK_FLASHINFER_AUTOTUNE|DSPARK_DIAG_FULL_DECODE_ONLY|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION'
