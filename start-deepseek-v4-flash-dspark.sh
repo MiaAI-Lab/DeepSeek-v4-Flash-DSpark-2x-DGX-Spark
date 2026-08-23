@@ -1108,6 +1108,17 @@ for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
         -d '{"model":"'"${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"'","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":32,"temperature":0.6,"top_p":0.95,"chat_template_kwargs":{"thinking":true,"reasoning_effort":"low"}}' >/dev/null
       echo "Minimal chat request succeeded."
     fi
+    # Issue #117: burn the spec-decode/prefill Triton shape buckets before real
+    # traffic can JIT them mid-serve (a compiling rank can stall its peer past
+    # torch's 600 s NCCL watchdog). Non-fatal: warmup gaps degrade back to the
+    # mid-serve-JIT status quo, never to a failed boot.
+    if [ "${DSPARK_BOOT_SHAPE_WARMUP:-1}" = "1" ]; then
+      bash "$SCRIPT_DIR/scripts/boot-shape-warmup.sh" \
+        "${CHAT_URL%/v1/chat/completions}" "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}" || \
+        echo "WARN: boot shape warmup incomplete — uncovered shapes may JIT mid-serve (issue #117)" >&2
+    else
+      echo "Boot shape warmup: SKIPPED (DSPARK_BOOT_SHAPE_WARMUP=0)"
+    fi
     exit 0
   fi
   wait_with_startup_logs

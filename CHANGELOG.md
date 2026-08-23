@@ -1,3 +1,9 @@
+## 2026-08-23
+
+### Added
+
+- **Boot-time defense against the mid-serve-JIT → TP-pair-loss chain ([Issue #117](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/117))**, two independent layers. (1) `TRITON_CACHE_DIR` now defaults to `/cache/huggingface/triton-cache` on the HF volume, mirroring the `TILELANG_CACHE_DIR` fix from issue #65: the in-image `~/.triton/cache` dies on container recreate, so every restart re-JIT-compiled already-known Triton shapes mid-serve — and a rank stalled in compilation leaves its TP peer waiting in a collective until torch's ProcessGroupNCCL watchdog (600 s, a deadline `VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS` does not extend) terminates it; the field incident in #117 recorded exactly this chain from `_prepare_dflash_inputs_kernel`. Cache entries are keyed by Triton version/backend hash, so the shared directory is safe across image updates. (2) `scripts/boot-shape-warmup.sh`, run by the launcher after the smoke request (gate `DSPARK_BOOT_SHAPE_WARMUP`, default `1`): a post-ready sweep — concurrency C=1/2/4/6 bursts, a medium and a multi-chunk (8192-boundary-crossing) prefill, and a thinking-off arm, all nonce-tagged so prefix caching cannot skip the prefill being warmed — that materializes the enumerable spec-decode/prefill shape buckets (`BLOCK_SIZE = min(256, next_pow2(max_tokens_per_req))`) before real traffic can JIT them. Warmup is non-fatal by contract: a failure degrades to the mid-serve-JIT status quo and WARNs, never fails the boot; `jit_monitor` warnings during subsequent serving are the closure signal for shapes the sweep still misses. Documented in `.env.dspark.example` and `docs/ENVS.md`; CPU-gated by `scripts/test-boot-shape-warmup.sh` (recording-curl-stub behavioral matrix: arm/tag inventory, single thinking-off arm, chunk-boundary length, per-run nonce rotation, fail and unreachable paths), wired into `scripts/ci-validate.sh`.
+
 ## 2026-08-22
 
 ### Changed

@@ -137,6 +137,13 @@ services:
       # Persist TileLang compiled kernels on the HF cache volume (issue #65).
       # Default in-image path was ~/.tilelang/cache (lost on recreate).
       TILELANG_CACHE_DIR: "${TILELANG_CACHE_DIR:-/cache/huggingface/tilelang-cache}"
+      # Persist Triton's JIT cache on the HF volume (issue #117). Default
+      # in-image path is ~/.triton/cache and dies on container recreate, so
+      # every restart re-JITs known shapes mid-serve; a compiling rank can
+      # stall its TP peer past torch's 600s NCCL watchdog. Entries are keyed
+      # by Triton version/backend hash, so sharing the dir across image
+      # updates is safe.
+      TRITON_CACHE_DIR: "${TRITON_CACHE_DIR:-/cache/huggingface/triton-cache}"
       DG_JIT_USE_NVRTC: "${DG_JIT_USE_NVRTC:-0}"
       DG_JIT_NVCC_COMPILER: "${DG_JIT_NVCC_COMPILER:-/usr/local/cuda/bin/nvcc}"
       PYTORCH_CUDA_ALLOC_CONF: "${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

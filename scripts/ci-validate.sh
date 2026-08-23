@@ -23,6 +23,8 @@ for f in \
   scripts/test-draft-sample-method-gate.sh \
   scripts/test-nccl-fabric-passthrough.sh \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
+  scripts/boot-shape-warmup.sh \
+  scripts/test-boot-shape-warmup.sh \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -96,6 +98,8 @@ bash scripts/test-draft-sample-method-gate.sh -q
 ok "test-draft-sample-method-gate"
 bash scripts/test-nccl-fabric-passthrough.sh -q
 ok "test-nccl-fabric-passthrough"
+bash scripts/test-boot-shape-warmup.sh -q
+ok "test-boot-shape-warmup"
 bash scripts/test-nccl-ib-hca-gid-resolve.sh -q
 ok "test-nccl-ib-hca-gid-resolve"
 

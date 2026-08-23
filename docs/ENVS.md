@@ -66,6 +66,8 @@ PY
 | `VLLM_CACHE_ROOT` | vLLM cache root (compose sets path) |
 | `CUTE_DSL_ARCH` | **Not** `VLLM_*` — CuTeDSL/b12x compile target (`sm_121a` on GB10) |
 | `TILELANG_CACHE_DIR` | **Not** `VLLM_*`. Compose default `/cache/huggingface/tilelang-cache` (HF volume). Issue #65: in-image `~/.tilelang/cache` dies on container recreate. |
+| `TRITON_CACHE_DIR` | **Not** `VLLM_*`. Compose default `/cache/huggingface/triton-cache` (HF volume). Issue #117: in-image `~/.triton/cache` dies on container recreate, so known shapes re-JIT mid-serve after every restart — and a compiling rank can stall its TP peer past torch's 600s NCCL watchdog. |
+| `DSPARK_BOOT_SHAPE_WARMUP` | Launcher-side (not passed to the container). `1` (default) runs `scripts/boot-shape-warmup.sh` after the smoke request: a C=1/2/4/6 + medium/long-prefill + thinking-off sweep that burns the spec-decode/prefill Triton shape buckets before traffic (issue #117). `0` skips. Warmup failure is a WARN, never a boot failure. |
 | `TORCH_CUDA_ARCH_LIST` / `FLASHINFER_CUDA_ARCH_LIST` | Build/JIT arch lists |
 | `NCCL_*` / `TP_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME` | Fabric |
 | `NCCL_IB_MERGE_NICS` | Passthrough, default **unset**. Contract for all four passthrough knobs below: a configured non-empty value passes through unchanged; an empty value is normalized to absent (the entrypoint unsets empty definitions before exec, so NCCL's built-in default and config-file values still apply and cannot be masked). NCCL's own default is `1`: it *permits* merging compatible dual-port NICs; it does not select HCAs or force arbitrary links (`NCCL_NET_MERGE_LEVEL`/`NCCL_NET_FORCE_MERGE` participate in that topology decision). `0` disables merging. |
