@@ -88,6 +88,11 @@ python3 scripts/test-empty-encoder-output-hotfix.py -q
 ok "test-empty-encoder-output-hotfix"
 python3 tests/test_issue27_inflight_cap.py -q
 ok "test_issue27_inflight_cap"
+python3 -m unittest -q \
+  tests.test_issue80_mixed_prefill_cap \
+  tests.test_issue80_mixed_prefill_cap_parser \
+  tests.test_issue80_scheduler_upgrade_gaps
+ok "test_issue80_mixed_prefill_cap"
 python3 scripts/verify-dsv4-027-equality-gate.py
 ok "verify-dsv4-027-equality-gate"
 bash scripts/verify-overlay-sources.sh

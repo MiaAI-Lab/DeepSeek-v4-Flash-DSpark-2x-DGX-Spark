@@ -37,6 +37,7 @@ class Req:
         self.num_output_placeholders = 0
         self.is_prefill_chunk = False
         self.next_decode_eligible_step = 0
+        self.load_kv_async = False
         self._sps = sampled_tokens_per_step
 
     @property
@@ -47,10 +48,27 @@ class Req:
         return f"{self.request_id}(c={self.num_computed_tokens},p={self.num_prompt_tokens})"
 
 
+def has_eligible_decode(self_running, current_step):
+    """Mirror the production schedule-start decode eligibility scan."""
+    for request in self_running:
+        if (request.num_output_placeholders > 0 and
+                request.num_computed_tokens + 2 - request.num_output_placeholders
+                >= request.num_prompt_tokens + request.max_tokens):
+            continue
+        if current_step < request.next_decode_eligible_step:
+            continue
+        if request.is_prefill_chunk:
+            continue
+        if request.num_computed_tokens >= request.num_prompt_tokens:
+            return True
+    return False
+
+
 def step(self_running, token_budget, current_step, defer_prefills=False,
          long_threshold=1024, max_num_partial_prefills=1,
          num_sampled_tokens_per_step=1, in_flight_prefills=None,
-         diag=None, floor=True):
+         diag=None, floor=True, mixed_prefill_cap=None,
+         mamba_block_size=None, eligible_decode_at_start=None):
     """One Scheduler.schedule RUNNING-list pass.
 
     Returns (scheduled:list[(req, ntok)], leftover_budget). Mutates each
@@ -58,6 +76,10 @@ def step(self_running, token_budget, current_step, defer_prefills=False,
     in_flight_prefills (issue #27 admission gate is modeled by the caller
     admitting at most max_num_partial_prefills NEW prefills per step).
     `diag` (dict) is filled like self.issue43_last_step_diag.
+    `mixed_prefill_cap` models issue #80's decode-active-only prefill cap. None
+    or 0 disables it, matching the production rollback knob.
+    `mamba_block_size` enables the generic hybrid-scheduler alignment step;
+    the exact DeepSeek target leaves it as None because it has no Mamba layer.
     """
     if diag is not None:
         diag["prefill"] = {}
@@ -67,6 +89,14 @@ def step(self_running, token_budget, current_step, defer_prefills=False,
     req_index = 0
     scheduled = []
     budget = token_budget
+    # [issue80-mixed-prefill-cap] Determine mixed-mode once, before walking the
+    # running list, so behavior does not depend on request order. Eligibility
+    # mirrors issue #43's decode floor, while explicitly excluding prefills.
+    eligible_decode = (
+        has_eligible_decode(self_running, current_step)
+        if eligible_decode_at_start is None
+        else eligible_decode_at_start
+    )
     while req_index < len(self_running) and budget > 0:
         request = self_running[req_index]
 
@@ -100,6 +130,26 @@ def step(self_running, token_budget, current_step, defer_prefills=False,
             if 0 < long_threshold < num_new_tokens:
                 num_new_tokens = long_threshold
         num_new_tokens = min(num_new_tokens, budget)
+
+        # [issue80-mixed-prefill-cap] Keep the global threshold unchanged for
+        # prefill-only steps, but bound mixed prefill chunks before the issue
+        # #43 floor so decode token counts and floor accounting are preserved.
+        if (mixed_prefill_cap and eligible_decode and
+                request.is_prefill_chunk):
+            num_new_tokens = min(num_new_tokens, mixed_prefill_cap)
+
+        # Match the production ordering: the dynamic cap is an input to the
+        # generic Mamba alignment helper, never a post-alignment override.
+        if (mamba_block_size and request.is_prefill_chunk and
+                num_new_tokens >= mamba_block_size):
+            last_cache_position = (
+                request.num_tokens_with_spec
+                - request.num_tokens_with_spec % mamba_block_size
+            )
+            if request.num_computed_tokens + num_new_tokens < last_cache_position:
+                num_new_tokens = (
+                    num_new_tokens // mamba_block_size * mamba_block_size
+                )
 
         # --- [issue43-hotfix] bounded decode service reservation ---
         # Gated by `floor`; disabled by the ablation (--no-floor) to prove
@@ -156,6 +206,83 @@ def step(self_running, token_budget, current_step, defer_prefills=False,
         req_index += 1
 
     return scheduled, budget
+
+
+def production_order_step(self_running, waiting, token_budget, current_step,
+                          defer_prefills=False, long_threshold=1024,
+                          max_num_partial_prefills=1,
+                          num_sampled_tokens_per_step=1,
+                          in_flight_prefills=None, floor=True,
+                          mixed_prefill_cap=None, mamba_block_size=None):
+    """Model one production-order RUNNING pass followed by WAITING admission.
+
+    The mixed-mode decision is captured once at schedule start and reused by
+    both phases. The returned diagnostic maps intentionally model issue43's
+    RUNNING-pass diagnostics; ``scheduled`` models production's combined
+    ``num_scheduled_tokens`` output for budget reconciliation.
+    """
+    eligible_decode = has_eligible_decode(self_running, current_step)
+    diag = {}
+    scheduled, budget = step(
+        self_running,
+        token_budget,
+        current_step,
+        defer_prefills=defer_prefills,
+        long_threshold=long_threshold,
+        max_num_partial_prefills=max_num_partial_prefills,
+        num_sampled_tokens_per_step=num_sampled_tokens_per_step,
+        in_flight_prefills=in_flight_prefills,
+        diag=diag,
+        floor=floor,
+        mixed_prefill_cap=mixed_prefill_cap,
+        mamba_block_size=mamba_block_size,
+        eligible_decode_at_start=eligible_decode,
+    )
+
+    for request in waiting:
+        if budget <= 0:
+            break
+        # The production async-load branch deliberately schedules zero new
+        # work and bypasses the false-branch first-chunk cap.
+        if request.load_kv_async:
+            continue
+
+        num_new_tokens = request.num_tokens_with_spec - request.num_computed_tokens
+        if 0 < long_threshold < num_new_tokens:
+            num_new_tokens = long_threshold
+        if mixed_prefill_cap and eligible_decode:
+            num_new_tokens = min(num_new_tokens, mixed_prefill_cap)
+        num_new_tokens = min(num_new_tokens, budget)
+
+        if mamba_block_size and num_new_tokens >= mamba_block_size:
+            last_cache_position = (
+                request.num_tokens_with_spec
+                - request.num_tokens_with_spec % mamba_block_size
+            )
+            if request.num_computed_tokens + num_new_tokens < last_cache_position:
+                num_new_tokens = (
+                    num_new_tokens // mamba_block_size * mamba_block_size
+                )
+        if num_new_tokens == 0:
+            break
+
+        scheduled.append((request, num_new_tokens))
+        budget -= num_new_tokens
+
+    return scheduled, budget, diag
+
+
+def rollback_scheduled_preemption(self_running, scheduled,
+                                  num_scheduled_tokens, diag, request_id):
+    """Model stock PRIORITY rollback plus issue43 diagnostic rollback."""
+    victim = next(r for r in self_running if r.request_id == request_id)
+    self_running.remove(victim)
+    scheduled[:] = [item for item in scheduled if item[0] is not victim]
+    restored = num_scheduled_tokens.pop(request_id)
+    if diag is not None:
+        diag["prefill"].pop(request_id, None)
+        diag["decode"].pop(request_id, None)
+    return restored
 
 
 def simulate_cell(n_lanes, prompt_tokens, out_tokens=256,

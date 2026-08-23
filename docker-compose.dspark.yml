@@ -81,6 +81,10 @@ services:
       # (scheduled prefill/decode tokens per request + zero-token decode
       # skips) when set to 1. Off by default (zero overhead).
       DSPARK_ISSUE43_SCHED_DIAG: "${DSPARK_ISSUE43_SCHED_DIAG:-0}"
+      # Issue #80: preserve the global 1024 prefill threshold when no decode is
+      # active, but cap new/resumed and running mixed-prefill chunks at 256.
+      # Set 0 to disable/roll back; parsed once when the scheduler imports.
+      DSPARK_MIXED_PREFILL_TOKEN_CAP: "${DSPARK_MIXED_PREFILL_TOKEN_CAP:-256}"
       # In-flight partial-prefill cap for the #27 hotfix (1-3, default 2).
       # Do NOT pass --max-num-partial-prefills (Anemll 0.1.1 rejects it).
       DSPARK_MAX_INFLIGHT_PREFILLS: "${DSPARK_MAX_INFLIGHT_PREFILLS:-2}"

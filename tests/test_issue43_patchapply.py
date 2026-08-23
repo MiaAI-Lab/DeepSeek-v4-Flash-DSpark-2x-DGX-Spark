@@ -9,6 +9,10 @@ HERE = pathlib.Path(__file__).resolve().parent  # .../tests
 ROOT = HERE.parent                            # project root
 HOT43 = ROOT / "patches/hotfix-dsv4-issue43-decode-fairness-and-diag.py"
 HOT27 = ROOT / "patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py"
+IMAGE = (
+    "ghcr.io/anemll/dspark-vllm-gx10:0.1.1@sha256:"
+    "a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
+)
 # Real container target path the hotfix patches inside the image.
 REAL = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py"
 
@@ -19,7 +23,7 @@ def extract_real():
     os.close(fd)
     r = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "cat",
-         "ghcr.io/anemll/dspark-vllm-gx10:0.1.1", REAL],
+         IMAGE, REAL],
         check=True, stdout=open(path, "w"))
     return pathlib.Path(path)
 
@@ -61,7 +65,27 @@ def main():
     assert "# [issue27-hotfix]" in base.read_text()
 
     apply_hotfix_to_copy(base, HOT43)
-    assert "# [issue43-hotfix]" in base.read_text()
+    patched = base.read_text()
+    assert "# [issue43-hotfix]" in patched
+    assert "# [issue80-scheduler-current-v2]" in patched
+    assert "# [issue80-scheduler-current-v3]" in patched
+    cap_pos = patched.index("num_new_tokens, _ISSUE80_MIXED_PREFILL_TOKEN_CAP")
+    mamba_pos = patched.index("if self.need_mamba_block_aligned_split", cap_pos)
+    floor_pos = patched.index("_dec_floor = 0", mamba_pos)
+    assert cap_pos < mamba_pos < floor_pos
+    assert 'issue43_step_diag["prefill"].pop(preempted_req_id, None)' in patched
+    assert 'issue43_step_diag["decode"].pop(preempted_req_id, None)' in patched
+    waiting_threshold = patched.index(
+        "threshold = self.scheduler_config.long_prefill_token_threshold"
+    )
+    waiting_cap = patched.index("# [issue80-scheduler-current-v3]", waiting_threshold)
+    waiting_budget = patched.index(
+        "# chunked prefill has to be enabled explicitly", waiting_cap
+    )
+    waiting_mamba = patched.index(
+        "if self.need_mamba_block_aligned_split", waiting_budget
+    )
+    assert waiting_threshold < waiting_cap < waiting_budget < waiting_mamba
     print("[4/6] applied issue #43 hotfix on top of #27")
 
     # 5. compiles
@@ -69,6 +93,7 @@ def main():
     print("[5/6] py_compile OK (patched scheduler is syntactically valid)")
 
     # 6. idempotent: re-apply #43 -> no-op (exits early with SystemExit)
+    once = base.read_bytes()
     try:
         apply_hotfix_to_copy(base, HOT43)
         print("[6/6] FAIL: re-apply did not raise SystemExit")
@@ -76,8 +101,7 @@ def main():
     except SystemExit:
         pass
     # ensure file unchanged after re-apply attempt
-    after = base.read_text()
-    once = base.read_text()
+    after = base.read_bytes()
     assert once == after
     print("[6/6] idempotent re-apply is a no-op (SystemExit, file unchanged)")
     print("\nPASS: issue #43 hotfix applies cleanly on top of #27, compiles, "

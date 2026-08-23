@@ -52,9 +52,30 @@ D. Step summary log (ask #1). When ``DSPARK_ISSUE43_SCHED_DIAG=1`` is set in
    decode_skips=[(rid,pos,computed)..]``. Off by default (zero overhead: the
    diag dict is cheap to build and only the log line is gated).
 
-Idempotent. Anchors are asserted; re-applying is a no-op once all marks are
-present. Safe to apply before or after the issue #27 hotfix (independent
-regions).
+E. Issue #80 mixed-step chunk cap. Parse ``DSPARK_MIXED_PREFILL_TOKEN_CAP``
+   once at module import (default 256; 0 disables; valid range 0..8192).
+   Whenever any eligible decode lane exists anywhere in ``self.running``, cap
+   each prefill chunk before generic Mamba block alignment and then apply the
+   issue #43 floor. Prefill-only steps retain the global
+   ``--long-prefill-token-threshold``.
+
+   The v3 revision also applies that same schedule-start decision to the first
+   chunk of a newly admitted or resumed WAITING request. The WAITING cap lives
+   in the ``load_kv_async == False`` branch, after the global threshold and
+   before budget checks and Mamba alignment; async remote-KV loads still
+   schedule zero new tokens and are untouched.
+
+F. Priority-preemption diagnostic rollback. When stock PRIORITY scheduling
+   removes a request already scheduled in the current step and restores its
+   token budget, remove that request from the prefill/decode diagnostic maps too
+   so their totals continue to match ``num_scheduled_tokens``.
+
+Versioned and idempotent. Current v2 sources receive only the WAITING block and
+v3 marker. A source carrying only the old issue #43 marker receives all issue80
+features, including the WAITING block. Fresh stock receives the complete current
+patch. Every upgrade anchor is asserted and all edits remain in memory until the
+single final write, so target drift fails closed. Safe to apply before or after
+the issue #27 hotfix (independent regions).
 
 Patches /usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
 in-place inside the container (called from the compose entrypoint before
@@ -65,42 +86,91 @@ import sys
 
 P = Path("/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py")
 MARK = "# [issue43-hotfix]"
+V2_MARK = "# [issue80-scheduler-current-v2]"
+CURRENT_MARK = "# [issue80-scheduler-current-v3]"
+
+
+def patch_status(status_src):
+    has_issue43 = MARK in status_src
+    has_v2 = V2_MARK in status_src
+    has_current = CURRENT_MARK in status_src
+    if has_issue43 and has_v2 and has_current:
+        return "CURRENT"
+    if has_issue43 and has_v2 and not has_current:
+        return "LEGACY_V2"
+    if has_issue43 and not has_v2 and not has_current:
+        return "LEGACY"
+    if not has_issue43 and not has_v2 and not has_current:
+        return "NOT APPLIED"
+    return "INVALID/DRIFT"
+
+
 if len(sys.argv) > 1 and sys.argv[1] == "--status":
     status_src = P.read_text() if P.is_file() else ""
-    print("issue43 decode-fairness + diag     :",
-          "APPLIED" if MARK in status_src else "NOT APPLIED")
+    print("issue43 decode-fairness + diag     :", patch_status(status_src))
     raise SystemExit(0)
 src = P.read_text()
-if MARK in src:
-    print(f"[issue43-hotfix] already applied to {P}")
+status = patch_status(src)
+if status == "CURRENT":
+    print(f"[issue43-hotfix] already applied (current) to {P}")
     raise SystemExit(0)
-
-# --- 0. import os (module-level diag gate) -----------------------------------
-A0_OLD = "import itertools\nimport time\n"
-assert A0_OLD in src, "issue43: import anchor not found; refusing to patch"
-src = src.replace(
-    A0_OLD,
-    A0_OLD
-    + "# [issue43-hotfix] os import for DSPARK_ISSUE43_SCHED_DIAG gate\n"
-    + "import os\n",
-    1,
+assert status != "INVALID/DRIFT", (
+    "issue43: inconsistent version markers; refusing to patch"
 )
+legacy_v2 = status == "LEGACY_V2"
+legacy = status == "LEGACY"
+fresh = status == "NOT APPLIED"
 
-# --- 1. module-level diag gate constant --------------------------------------
+# --- 0. import os (module-level diag gate; fresh stock only) -----------------
+A0_OLD = "import itertools\nimport time\n"
+if fresh:
+    assert A0_OLD in src, "issue43: import anchor not found; refusing to patch"
+    src = src.replace(
+        A0_OLD,
+        A0_OLD
+        + "# [issue43-hotfix] os import for DSPARK_ISSUE43_SCHED_DIAG gate\n"
+        + "import os\n",
+        1,
+    )
+
+# --- 1. module-level diag and mixed-cap constants ----------------------------
 A1_OLD = "logger = init_logger(__name__)\n"
-assert A1_OLD in src, "issue43: logger anchor not found; refusing to patch"
+A1_LEGACY_OLD = (
+    "_ISSUE43_SCHED_DIAG = os.environ.get(\"DSPARK_ISSUE43_SCHED_DIAG\", \"0\") "
+    "not in (\"0\", \"\", \"false\", \"False\")\n"
+)
 A1_NEW = (
     A1_OLD
     + "# [issue43-hotfix] per-step scheduler diagnostics gate (issue #43).\n"
     + "# Set DSPARK_ISSUE43_SCHED_DIAG=1 in the container env to emit one\n"
     + "# compact scheduled-tokens / decode-skip summary line per step.\n"
     + "_ISSUE43_SCHED_DIAG = os.environ.get(\"DSPARK_ISSUE43_SCHED_DIAG\", \"0\") not in (\"0\", \"\", \"false\", \"False\")\n"
+    + "# [issue80-scheduler-current-v2] Complete issue80 scheduler revision.\n"
+    + "# [issue80-mixed-prefill-cap] Bound prefill chunks only while an eligible\n"
+    + "# decode is active. Parse once at module import; 0 is the rollback knob.\n"
+    + "_ISSUE80_MIXED_PREFILL_TOKEN_CAP_RAW = os.environ.get(\"DSPARK_MIXED_PREFILL_TOKEN_CAP\", \"256\")\n"
+    + "try:\n"
+    + "    _ISSUE80_MIXED_PREFILL_TOKEN_CAP = int(_ISSUE80_MIXED_PREFILL_TOKEN_CAP_RAW)\n"
+    + "except ValueError as exc:\n"
+    + "    raise ValueError(\"DSPARK_MIXED_PREFILL_TOKEN_CAP must be an integer in 0..8192\") from exc\n"
+    + "if not 0 <= _ISSUE80_MIXED_PREFILL_TOKEN_CAP <= 8192:\n"
+    + "    raise ValueError(\"DSPARK_MIXED_PREFILL_TOKEN_CAP must be in 0..8192\")\n"
 )
-src = src.replace(A1_OLD, A1_NEW, 1)
+if legacy:
+    assert A1_LEGACY_OLD in src, (
+        "issue43 legacy upgrade: diag constant anchor not found; refusing to patch"
+    )
+    issue80_constants = A1_NEW.split(A1_LEGACY_OLD, 1)[1]
+    src = src.replace(A1_LEGACY_OLD, A1_LEGACY_OLD + issue80_constants, 1)
+elif fresh:
+    assert A1_OLD in src, "issue43: logger anchor not found; refusing to patch"
+    src = src.replace(A1_OLD, A1_NEW, 1)
 
-# --- 2. init diag dict at the top of schedule(), after prefill_scheduled -----
+# --- 2. init diag dict and global decode eligibility scan --------------------
 A2_OLD = "        prefill_scheduled = False\n"
-assert A2_OLD in src, "issue43: prefill_scheduled anchor not found; refusing to patch"
+A2_LEGACY_OLD = (
+    "        issue43_step_diag = {\"prefill\": {}, \"decode\": {}, \"skips\": []}\n"
+)
 A2_NEW = (
     A2_OLD
     + "        # [issue43-hotfix] per-step scheduler diagnostics (issue #43).\n"
@@ -108,26 +178,59 @@ A2_NEW = (
     + "        # zero-token decode skips (by request_id and running-list pos).\n"
     + "        # Always built (cheap); only the step log line (below) is gated.\n"
     + "        issue43_step_diag = {\"prefill\": {}, \"decode\": {}, \"skips\": []}\n"
+    + "        # [issue80-mixed-prefill-cap] Determine whether any decode lane is\n"
+    + "        # eligible once at schedule start. Scanning all of self.running\n"
+    + "        # makes the mixed cap independent of running-list order. Mirror\n"
+    + "        # issue #43 floor eligibility and explicitly exclude prefills.\n"
+    + "        _issue80_has_eligible_decode = False\n"
+    + "        if _ISSUE80_MIXED_PREFILL_TOKEN_CAP > 0:\n"
+    + "            for _r in self.running:\n"
+    + "                if (_r.num_output_placeholders > 0 and\n"
+    + "                        _r.num_computed_tokens + 2\n"
+    + "                        - _r.num_output_placeholders\n"
+    + "                        >= _r.num_prompt_tokens + _r.max_tokens):\n"
+    + "                    continue\n"
+    + "                if self.current_step < _r.next_decode_eligible_step:\n"
+    + "                    continue\n"
+    + "                if getattr(_r, \"is_prefill_chunk\", False):\n"
+    + "                    continue\n"
+    + "                if _r.num_computed_tokens >= _r.num_prompt_tokens:\n"
+    + "                    _issue80_has_eligible_decode = True\n"
+    + "                    break\n"
 )
-src = src.replace(A2_OLD, A2_NEW, 1)
+if legacy:
+    assert A2_LEGACY_OLD in src, (
+        "issue43 legacy upgrade: step-diag anchor not found; refusing to patch"
+    )
+    issue80_eligibility = A2_NEW.split(A2_LEGACY_OLD, 1)[1]
+    src = src.replace(A2_LEGACY_OLD, A2_LEGACY_OLD + issue80_eligibility, 1)
+elif fresh:
+    assert A2_OLD in src, (
+        "issue43: prefill_scheduled anchor not found; refusing to patch"
+    )
+    src = src.replace(A2_OLD, A2_NEW, 1)
 
-# --- 3. decode-floor reservation, inserted after the mamba split block and
-#        before the num_new_tokens == 0 skip check ----------------------------
-A3_OLD = (
+# --- 3. mixed cap -> Mamba alignment -> issue43 floor -> zero check ----------
+A3_MAMBA = (
     "            if self.need_mamba_block_aligned_split:\n"
     "                num_new_tokens = self._mamba_block_aligned_split(\n"
     "                    request, num_new_tokens\n"
     "                )\n"
     "\n"
-    "            if num_new_tokens == 0:\n"
 )
-assert A3_OLD in src, "issue43: mamba-split/zero-check anchor not found; refusing to patch"
-A3_NEW = (
-    "            if self.need_mamba_block_aligned_split:\n"
-    "                num_new_tokens = self._mamba_block_aligned_split(\n"
-    "                    request, num_new_tokens\n"
-    "                )\n"
+A3_CAP = (
+    "            # [issue80-mixed-prefill-cap] Keep prefill-only scheduling at\n"
+    "            # the global long-prefill threshold, but cap each mixed prefill\n"
+    "            # before Mamba block alignment and issue #43's decode floor.\n"
+    "            # 0 disables the cap.\n"
+    "            if (_ISSUE80_MIXED_PREFILL_TOKEN_CAP > 0 and\n"
+    "                    _issue80_has_eligible_decode and\n"
+    "                    getattr(request, \"is_prefill_chunk\", False)):\n"
+    "                num_new_tokens = min(\n"
+    "                    num_new_tokens, _ISSUE80_MIXED_PREFILL_TOKEN_CAP)\n"
     "\n"
+)
+A3_FLOOR = (
     "            # [issue43-hotfix] bounded decode service during mixed prefill\n"
     "            # steps (issue #43 ask #3). Generalizes the #27\n"
     "            # max_num_partial_prefills cap: regardless of the configured\n"
@@ -158,9 +261,21 @@ A3_NEW = (
     "                        num_new_tokens,\n"
     "                        max(0, token_budget - _dec_floor))\n"
     "\n"
-    "            if num_new_tokens == 0:\n"
 )
-src = src.replace(A3_OLD, A3_NEW, 1)
+A3_ZERO = "            if num_new_tokens == 0:\n"
+A3_OLD = A3_MAMBA + A3_ZERO
+A3_LEGACY_OLD = A3_MAMBA + A3_FLOOR + A3_ZERO
+A3_NEW = A3_CAP + A3_MAMBA + A3_FLOOR + A3_ZERO
+if legacy:
+    assert A3_LEGACY_OLD in src, (
+        "issue43 legacy upgrade: mamba/floor anchor not found; refusing to patch"
+    )
+    src = src.replace(A3_LEGACY_OLD, A3_NEW, 1)
+elif fresh:
+    assert A3_OLD in src, (
+        "issue43: mamba-split/zero-check anchor not found; refusing to patch"
+    )
+    src = src.replace(A3_OLD, A3_NEW, 1)
 
 # --- 4. record zero-token decode skips inside the skip branch ----------------
 A4_OLD = (
@@ -170,7 +285,6 @@ A4_OLD = (
     "                req_index += 1\n"
     "                continue\n"
 )
-assert A4_OLD in src, "issue43: woosuk-skip anchor not found; refusing to patch"
 A4_NEW = (
     "                # NOTE(woosuk): Here, by doing `continue` instead of `break`,\n"
     "                # we do not strictly follow the FCFS scheduling policy and\n"
@@ -186,7 +300,9 @@ A4_NEW = (
     "                req_index += 1\n"
     "                continue\n"
 )
-src = src.replace(A4_OLD, A4_NEW, 1)
+if fresh:
+    assert A4_OLD in src, "issue43: woosuk-skip anchor not found; refusing to patch"
+    src = src.replace(A4_OLD, A4_NEW, 1)
 
 # --- 5. record per-request scheduled tokens in the running branch -----------
 A5_OLD = (
@@ -198,7 +314,6 @@ A5_OLD = (
     "            token_budget -= num_new_tokens\n"
     "            req_index += 1\n"
 )
-assert A5_OLD in src, "issue43: running-schedule anchor not found; refusing to patch"
 A5_NEW = (
     "            scheduled_running_reqs.append(request)\n"
     "            prefill_scheduled |= request.is_prefill_chunk\n"
@@ -214,11 +329,14 @@ A5_NEW = (
     "                \"decode\" if _is_dec else \"prefill\"][request_id] = num_new_tokens\n"
     "            req_index += 1\n"
 )
-src = src.replace(A5_OLD, A5_NEW, 1)
+if fresh:
+    assert A5_OLD in src, (
+        "issue43: running-schedule anchor not found; refusing to patch"
+    )
+    src = src.replace(A5_OLD, A5_NEW, 1)
 
 # --- 6. step summary log + stash diag on self, at end of running loop -------
 A6_OLD = "        # Record the LoRAs in scheduled_running_reqs\n"
-assert A6_OLD in src, "issue43: end-of-running-loop anchor not found; refusing to patch"
 A6_NEW = (
     "        # [issue43-hotfix] step summary (issue #43 asks #1/#2). Stash the\n"
     "        # per-step diag for the live reproducer; emit a compact log line\n"
@@ -236,7 +354,76 @@ A6_NEW = (
     "\n"
     "        # Record the LoRAs in scheduled_running_reqs\n"
 )
-src = src.replace(A6_OLD, A6_NEW, 1)
+if fresh:
+    assert A6_OLD in src, (
+        "issue43: end-of-running-loop anchor not found; refusing to patch"
+    )
+    src = src.replace(A6_OLD, A6_NEW, 1)
+
+# --- 7. remove preempted scheduled requests from diagnostic totals -----------
+# V2 already carries this block; old issue43 and fresh stock still need it.
+if not legacy_v2:
+    A7_OLD = "scheduled_spec_decode_tokens.pop(preempted_req_id, None)\n"
+    assert src.count(A7_OLD) == 1, (
+        "issue43: priority-preemption rollback anchor not found or ambiguous; "
+        "refusing to patch"
+    )
+    a7_index = src.index(A7_OLD)
+    a7_line_start = src.rfind("\n", 0, a7_index) + 1
+    a7_indent = src[a7_line_start:a7_index]
+    assert a7_indent and not a7_indent.strip(), (
+        "issue43: priority-preemption indentation anchor invalid; refusing to patch"
+    )
+    A7_NEW = (
+        A7_OLD
+        + a7_indent
+        + "# [issue43-hotfix] Roll back diagnostics with scheduler bookkeeping.\n"
+        + a7_indent
+        + "issue43_step_diag[\"prefill\"].pop(preempted_req_id, None)\n"
+        + a7_indent
+        + "issue43_step_diag[\"decode\"].pop(preempted_req_id, None)\n"
+    )
+    src = src.replace(A7_OLD, A7_NEW, 1)
+
+# --- 8. cap the first chunk admitted from WAITING -----------------------------
+# This anchor is deliberately wholly inside load_kv_async's false branch. It
+# applies to new and resumed requests, but cannot touch async-load num_new_tokens
+# == 0. It also preserves threshold -> cap -> budget/encoder -> Mamba ordering.
+A8_OLD = (
+    "                    threshold = self.scheduler_config.long_prefill_token_threshold\n"
+    "                    if 0 < threshold < num_new_tokens:\n"
+    "                        num_new_tokens = threshold\n"
+    "\n"
+    "                    # chunked prefill has to be enabled explicitly to allow\n"
+)
+A8_CAP = (
+    "                    threshold = self.scheduler_config.long_prefill_token_threshold\n"
+    "                    if 0 < threshold < num_new_tokens:\n"
+    "                        num_new_tokens = threshold\n"
+    "\n"
+    "                    # [issue80-scheduler-current-v3] Complete issue80\n"
+    "                    # scheduler revision: cap a new/resumed WAITING first\n"
+    "                    # chunk when schedule-start found an eligible decode.\n"
+    "                    # This false branch excludes async remote-KV load0.\n"
+    "                    if (_ISSUE80_MIXED_PREFILL_TOKEN_CAP > 0 and\n"
+    "                            _issue80_has_eligible_decode):\n"
+    "                        num_new_tokens = min(\n"
+    "                            num_new_tokens,\n"
+    "                            _ISSUE80_MIXED_PREFILL_TOKEN_CAP)\n"
+    "\n"
+    "                    # chunked prefill has to be enabled explicitly to allow\n"
+)
+assert src.count(A8_OLD) == 1, (
+    "issue43: WAITING false-branch threshold/budget anchor not found or "
+    "ambiguous; refusing to patch"
+)
+src = src.replace(A8_OLD, A8_CAP, 1)
 
 P.write_text(src)
-print(f"[issue43-hotfix] patched {P}")
+if legacy_v2:
+    action = "upgraded v2 patch on"
+elif legacy:
+    action = "upgraded legacy patch on"
+else:
+    action = "patched"
+print(f"[issue43-hotfix] {action} {P}")
