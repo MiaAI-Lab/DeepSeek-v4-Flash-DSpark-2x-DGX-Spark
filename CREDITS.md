@@ -21,6 +21,11 @@ depend directly on that contribution.
 optional abliterated weights path (`ABLITERATED=1`):
 https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32
 
+**[drowzeys / Keys](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-Anchored-Tensors)** — published the MIT-licensed
+4096-dimensional refusal direction redistributed as `files/direction_r1.pt`
+for the optional reversible runtime path (`ABLATE=1`). Full notice:
+[`files/README.md`](files/README.md).
+
 ## DSpark Concurrency Patch
 
 The in-server DSpark concurrency breakthrough comes from Keys / drowzeys:

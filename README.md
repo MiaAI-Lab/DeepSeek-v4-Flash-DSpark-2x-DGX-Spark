@@ -158,6 +158,7 @@ cluster wiring, not product switches. Full Anemll vs Stage-C matrix:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `ABLITERATED` | `0` | `0` = official checkpoint; `1` = existing Keys abliterated checkpoint. Mutually exclusive with runtime `ABLATE=1`. |
 | `DSPARK_REVISION` | `9e165c30e2704aec5d9d593cce3eebd58bbef1cb` | Official pin. Empty = tip of `main`. |
 | `SERVED_MODEL_NAME` | `deepseek-v4-flash-0731` | Name clients send as `model`. |
 | `HF_HUB_OFFLINE` | `1` | `1` after both caches are warm (avoids filling the worker disk). Prepare forces online for the download. |
@@ -172,6 +173,50 @@ DSPARK_REVISION=<commit>
 ./stop-deepseek-v4-flash-dspark.sh
 ./start-deepseek-v4-flash-dspark.sh
 ```
+
+### Optional runtime refusal-direction ablation
+
+This is a reversible runtime projection ported from the 1× Spark recipe. It is
+**off by default** and is separate from selecting pre-edited weights with
+`ABLITERATED=1`.
+
+```env
+ABLITERATED=0
+ABLATE=1
+DSV4_ABLATE_LAMBDA=3.5
+DSV4_ABLATE_LAYERS=10-42
+```
+
+Then perform a cold two-rank restart:
+
+```bash
+./stop-deepseek-v4-flash-dspark.sh
+bash scripts/selftest-runtime-ablation.sh   # optional, no GPU
+./start-deepseek-v4-flash-dspark.sh
+```
+
+For a one-shot test, the shell value intentionally overrides `.env.dspark` on
+both ranks:
+
+```bash
+./stop-deepseek-v4-flash-dspark.sh
+ABLATE=1 ./start-deepseek-v4-flash-dspark.sh
+```
+
+The launcher hashes and stages `files/direction_r1.pt` into both nodes' HF
+cache, and each ephemeral container applies a narrow fail-closed patch to its
+installed DeepSeek V4 `model.py`. `ABLATE=0` leaves that file stock. Switching
+the flag, lambda, layer range, direction, or patch version clears only vLLM's
+`torch_compile_cache`; it preserves model weights and the Triton, TileLang and
+DeepGEMM caches. Use `DSPARK_ABLATE_SOURCE_FILE` for another host-side `.pt`.
+The configured layer range must stay within target layers 0–42, so the DSpark
+draft is not modified.
+
+The bundled direction is the MIT-licensed 4096-dimensional direction published
+by drowzeys/Keys; see `files/README.md`. The runtime path removes trained refusal
+behavior, so provide any safety policy externally. Treat effect, capability,
+long-CoT stability, and performance on this TP=2 NVFP4 lane as an A/B to measure,
+not as inherited validation from the 1× Spark runtime.
 
 ### Thinking, API, vision
 
@@ -507,6 +552,7 @@ when the corresponding live behavior is outside the test scope.
 | --- | --- |
 | [results/RESULTS-2026-08-14.md](results/RESULTS-2026-08-14.md) | Dated benches and how to read them |
 | `.env.dspark.example` | Cluster template |
+| `files/direction_r1.pt` | Bundled refusal direction for optional `ABLATE=1` (license/attribution in `files/README.md`) |
 | `docker-compose.dspark.yml` | Anemll serve (installs 0731 encoder + hotfixes) |
 | `start-` / `stop-` / `status-` / `logs-` / `smoke-*.sh` | Two-node ops |
 | `prepare-dspark-model-cache.sh` | 0731 (and optional VL) on head **and** worker |

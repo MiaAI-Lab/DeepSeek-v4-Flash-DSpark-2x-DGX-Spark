@@ -25,6 +25,7 @@ for f in \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
   scripts/boot-shape-warmup.sh \
   scripts/test-boot-shape-warmup.sh \
+  scripts/selftest-runtime-ablation.sh \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -51,6 +52,8 @@ py_files+=(
   scripts/test-hotfix-atomic-transaction.py
   scripts/test-python-hotfix-failclosed.py
   scripts/test-empty-encoder-output-hotfix.py
+  scripts/test-runtime-ablation.py
+  scripts/selftest-runtime-ablation.py
   scripts/ruler-lite.py
   scripts/verify-dsv4-027-equality-gate.py
   scripts/ab-issue133-triton-specialization.py
@@ -91,6 +94,8 @@ python3 scripts/test-python-hotfix-failclosed.py -q
 ok "test-python-hotfix-failclosed"
 python3 scripts/test-empty-encoder-output-hotfix.py -q
 ok "test-empty-encoder-output-hotfix"
+python3 scripts/test-runtime-ablation.py -q
+ok "test-runtime-ablation"
 python3 tests/test_issue27_inflight_cap.py -q
 ok "test_issue27_inflight_cap"
 python3 tests/test_dspark_stacked_mapping.py -q
@@ -244,6 +249,7 @@ for p in \
   patches/hotfix-dsv4-issue26-hybrid-swa-min.py \
   patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py \
   patches/hotfix-dsv4-issue133-triton-specialization.py \
+  patches/hotfix-dsv4-runtime-ablation.py \
   patches/hotfix-vllm-empty-encoder-output.py \
   patches/hotfix-nvfp4-ds-mla-issue22.sh \
   patches/hotfix-gb10-spin-wait.sh \

@@ -195,6 +195,7 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
                 "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
                 "hotfix-dsv4-issue26-hybrid-swa-min.py",
                 "hotfix-dsv4-issue133-triton-specialization.py",
+                "hotfix-dsv4-runtime-ablation.py",
                 "hotfix-dsv4-suppress-stops-in-reasoning.py",
             ],
         )
@@ -207,6 +208,7 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
             "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
             "hotfix-dsv4-issue26-hybrid-swa-min.py",
             "hotfix-dsv4-issue133-triton-specialization.py",
+            "hotfix-dsv4-runtime-ablation.py",
             "hotfix-dsv4-suppress-stops-in-reasoning.py",
         ]
         for step in order:
@@ -233,6 +235,7 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
                 "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
                 "hotfix-dsv4-issue26-hybrid-swa-min.py",
                 "hotfix-dsv4-issue133-triton-specialization.py",
+                "hotfix-dsv4-runtime-ablation.py",
             ],
         )
         self.assertTrue(reached)

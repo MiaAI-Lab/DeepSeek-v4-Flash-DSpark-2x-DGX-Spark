@@ -1,3 +1,9 @@
+## Unreleased
+
+### Added
+
+- **Optional TP=2 runtime refusal-direction ablation (`ABLATE=1`)**: ports the finalized off-by-default runtime projection from the 1× DGX Spark recipe without copying its incompatible whole-file `/opt/vllm` overlay. The pinned Anemll model is patched narrowly and fail-closed in each ephemeral rank; the bundled MIT-licensed 4096-d direction is SHA-256-verified and staged into both nodes' existing HF cache. `ABLATE=0` leaves the image model source unchanged. A compatibility stamp clears only `VLLM_CACHE_ROOT/torch_compile_cache` when the mode, lambda, layer range, direction, or patch changes. Runtime ablation is deliberately mutually exclusive with the existing `ABLITERATED=1` checkpoint selector. Includes source/compose tests and a manual no-GPU pinned-image numerical selftest; TP=2 behavioral and throughput effects remain operator A/B validation rather than a pre-measured claim.
+
 ## 2026-08-24
 
 ### Fixed
