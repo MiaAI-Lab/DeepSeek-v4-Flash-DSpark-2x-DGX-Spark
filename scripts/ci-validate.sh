@@ -29,6 +29,7 @@ for f in \
   scripts/test-boot-shape-warmup.sh \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
+  scripts/selftest-runtime-ablation.sh \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -62,6 +63,8 @@ py_files+=(
   scripts/test-issue136-xgrammar-termination.py
   scripts/verify-issue136-xgrammar-live.py
   scripts/test-empty-encoder-output-hotfix.py
+  scripts/test-runtime-ablation.py
+  scripts/selftest-runtime-ablation.py
   scripts/ruler-lite.py
   scripts/verify-dsv4-027-equality-gate.py
   scripts/ab-issue133-triton-specialization.py
@@ -115,6 +118,8 @@ python3 scripts/test-issue136-xgrammar-termination.py -q
 ok "test-issue136-xgrammar-termination"
 python3 scripts/test-empty-encoder-output-hotfix.py -q
 ok "test-empty-encoder-output-hotfix"
+python3 scripts/test-runtime-ablation.py -q
+ok "test-runtime-ablation"
 python3 tests/test_issue27_inflight_cap.py -q
 ok "test_issue27_inflight_cap"
 python3 tests/test_dspark_stacked_mapping.py -q
@@ -339,6 +344,7 @@ for p in \
   patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py \
   patches/hotfix-dsv4-issue133-triton-specialization.py \
   patches/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py \
+  patches/hotfix-dsv4-runtime-ablation.py \
   patches/hotfix-vllm-empty-encoder-output.py \
   patches/hotfix-dsv4-vision-exp.py \
   patches/hotfix-vllm-issue136-xgrammar-termination.py \

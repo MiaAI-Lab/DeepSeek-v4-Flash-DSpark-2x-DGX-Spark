@@ -38,6 +38,24 @@ else
 fi
 export DSPARK_MODEL DSPARK_REVISION
 
+ABLATE="${ABLATE:-0}"
+DSV4_ABLATE_LAMBDA="${DSV4_ABLATE_LAMBDA:-3.5}"
+DSV4_ABLATE_LAYERS="${DSV4_ABLATE_LAYERS:-10-42}"
+case "$ABLATE" in 0|1) ;; *) echo "ABLATE must be 0 or 1 (got: $ABLATE)" >&2; exit 2 ;; esac
+if [ "$ABLATE" = "1" ] && [ "${ABLITERATED:-0}" = "1" ]; then
+  echo "ABLATE=1 and ABLITERATED=1 cannot be combined." >&2
+  exit 2
+fi
+if [ "$ABLATE" = "1" ]; then
+  if [[ ! "$DSV4_ABLATE_LAYERS" =~ ^([0-9]+)[[:space:]]*-[[:space:]]*([0-9]+)$ ]] \
+    || (( 10#${BASH_REMATCH[1]:-999} > 10#${BASH_REMATCH[2]:-0} )) \
+    || (( 10#${BASH_REMATCH[2]:-999} > 42 )); then
+    echo "DSV4_ABLATE_LAYERS must be an ordered range within 0-42 (got: $DSV4_ABLATE_LAYERS)" >&2
+    exit 2
+  fi
+fi
+export ABLATE DSV4_ABLATE_LAMBDA DSV4_ABLATE_LAYERS
+
 # Same contract as the compose entrypoint: only these two values reach
 # --speculative-config; anything else must fail here too, not at boot.
 DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-probabilistic}"
@@ -60,6 +78,7 @@ echo "  worker: ${WORKER_HOST}"
 echo "  master: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "  image: ${DSPARK_VLLM_IMAGE}"
 echo "  checkpoint: $DSPARK_MODEL (ABLITERATED=${ABLITERATED:-0})"
+echo "  runtime ablation: $ABLATE (lambda=$DSV4_ABLATE_LAMBDA layers=$DSV4_ABLATE_LAYERS)"
 if [ -n "${DSPARK_REVISION:-}" ]; then
   echo "  revision: $DSPARK_REVISION"
 else
@@ -125,4 +144,4 @@ env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   DSPARK_MODEL="$DSPARK_MODEL" \
   DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--limit-mm-per-prompt|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--limit-mm-per-prompt|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION|ABLATE'

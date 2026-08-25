@@ -86,6 +86,34 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 _dspark_env_clean="$(mktemp)"
 chmod 600 "$_dspark_env_clean"
+# Preserve explicit one-shot runtime-ablation overrides across sourcing the
+# persistent env file. This makes `ABLATE=1 ./start-...` behave as expected;
+# the resolved values are also injected into the worker compose command.
+_dspark_ambient_ablate_has=0
+_dspark_ambient_ablate=""
+_dspark_ambient_ablate_lambda_has=0
+_dspark_ambient_ablate_lambda=""
+_dspark_ambient_ablate_layers_has=0
+_dspark_ambient_ablate_layers=""
+_dspark_ambient_ablate_source_has=0
+_dspark_ambient_ablate_source=""
+if [ -n "${ABLATE+x}" ]; then
+  _dspark_ambient_ablate_has=1
+  _dspark_ambient_ablate="$ABLATE"
+fi
+if [ -n "${DSV4_ABLATE_LAMBDA+x}" ]; then
+  _dspark_ambient_ablate_lambda_has=1
+  _dspark_ambient_ablate_lambda="$DSV4_ABLATE_LAMBDA"
+fi
+if [ -n "${DSV4_ABLATE_LAYERS+x}" ]; then
+  _dspark_ambient_ablate_layers_has=1
+  _dspark_ambient_ablate_layers="$DSV4_ABLATE_LAYERS"
+fi
+if [ -n "${DSPARK_ABLATE_SOURCE_FILE+x}" ]; then
+  _dspark_ambient_ablate_source_has=1
+  _dspark_ambient_ablate_source="$DSPARK_ABLATE_SOURCE_FILE"
+fi
+
 # DSPARK_API_KEYS ambient guard (begin)
 _dspark_ambient_has=0
 _dspark_ambient_keys=""
@@ -104,6 +132,18 @@ if [ "$_dspark_ambient_has" = "1" ] && [ "$_dspark_ambient_keys" != "${DSPARK_AP
   exit 2
 fi
 # DSPARK_API_KEYS ambient guard (end)
+if [ "$_dspark_ambient_ablate_has" = "1" ]; then
+  ABLATE="$_dspark_ambient_ablate"
+fi
+if [ "$_dspark_ambient_ablate_lambda_has" = "1" ]; then
+  DSV4_ABLATE_LAMBDA="$_dspark_ambient_ablate_lambda"
+fi
+if [ "$_dspark_ambient_ablate_layers_has" = "1" ]; then
+  DSV4_ABLATE_LAYERS="$_dspark_ambient_ablate_layers"
+fi
+if [ "$_dspark_ambient_ablate_source_has" = "1" ]; then
+  DSPARK_ABLATE_SOURCE_FILE="$_dspark_ambient_ablate_source"
+fi
 COMPOSE_ENV_FILE="$_dspark_env_clean"
 
 # GPU util comes from GPU_MEMORY_UTILIZATION_TEXT (default 0.835).
@@ -128,6 +168,54 @@ else
   fi
 fi
 export ABLITERATED DSPARK_MODEL DSPARK_MODEL_OFFICIAL DSPARK_MODEL_ABLITERATED DSPARK_REVISION
+
+# Optional runtime refusal-direction projection. Unlike ABLITERATED=1, this
+# stages only an 18 KiB direction and transforms activations in memory.
+ABLATE="${ABLATE:-0}"
+DSV4_ABLATE_LAMBDA="${DSV4_ABLATE_LAMBDA:-3.5}"
+DSV4_ABLATE_LAYERS="${DSV4_ABLATE_LAYERS:-10-42}"
+DSPARK_ABLATE_SOURCE_FILE="${DSPARK_ABLATE_SOURCE_FILE:-$SCRIPT_DIR/files/direction_r1.pt}"
+case "$ABLATE" in
+  0|1) ;;
+  *) echo "ABLATE must be 0 or 1 (got: $ABLATE)" >&2; exit 2 ;;
+esac
+if [ "$ABLATE" = "1" ] && [ "${ABLITERATED:-0}" = "1" ]; then
+  echo "ABLATE=1 and ABLITERATED=1 cannot be combined; runtime ablation uses official weights." >&2
+  exit 2
+fi
+if [ "$ABLATE" = "1" ]; then
+  if [[ ! "$DSV4_ABLATE_LAYERS" =~ ^([0-9]+)[[:space:]]*-[[:space:]]*([0-9]+)$ ]]; then
+    echo "DSV4_ABLATE_LAYERS must look like 10-42 (got: $DSV4_ABLATE_LAYERS)" >&2
+    exit 2
+  fi
+  _ablate_layer_lo="${BASH_REMATCH[1]}"
+  _ablate_layer_hi="${BASH_REMATCH[2]}"
+  if (( 10#$_ablate_layer_lo > 10#$_ablate_layer_hi || 10#$_ablate_layer_hi > 42 )); then
+    echo "DSV4_ABLATE_LAYERS must be an ordered range within target layers 0-42 (got: $DSV4_ABLATE_LAYERS)" >&2
+    exit 2
+  fi
+  if ! python3 - "$DSV4_ABLATE_LAMBDA" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and value >= 0.0 else 1)
+PY
+  then
+    echo "DSV4_ABLATE_LAMBDA must be a finite non-negative number (got: $DSV4_ABLATE_LAMBDA)" >&2
+    exit 2
+  fi
+  if [[ "$DSPARK_ABLATE_SOURCE_FILE" != /* ]]; then
+    DSPARK_ABLATE_SOURCE_FILE="$SCRIPT_DIR/$DSPARK_ABLATE_SOURCE_FILE"
+  fi
+  if [ ! -f "$DSPARK_ABLATE_SOURCE_FILE" ]; then
+    echo "ABLATE=1 direction file is missing: $DSPARK_ABLATE_SOURCE_FILE" >&2
+    exit 1
+  fi
+fi
+export ABLATE DSV4_ABLATE_LAMBDA DSV4_ABLATE_LAYERS DSPARK_ABLATE_SOURCE_FILE
 
 # Vision-Exp: Anemll SpeculativeConfig requires
 # num_speculative_tokens % num_nextn_predict_layers == 0 when k > n_predict.
@@ -331,6 +419,56 @@ need_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+stage_ablation_direction() {
+  [ "$ABLATE" = "1" ] || return 0
+  [ -n "${HF_CACHE:-}" ] || { echo "ABLATE=1 requires HF_CACHE" >&2; return 1; }
+  [ -n "${WORKER_HF_CACHE:-}" ] || { echo "ABLATE=1 requires WORKER_HF_CACHE or HF_CACHE" >&2; return 1; }
+
+  local expected local_dir local_target local_tmp remote_dir remote_target
+  local remote_dir_q remote_target_q expected_q
+  expected="$(sha256sum "$DSPARK_ABLATE_SOURCE_FILE" | awk '{print $1}')"
+  local_dir="${HF_CACHE}/dspark-ablation"
+  local_target="${local_dir}/direction_r1.pt"
+  mkdir -p "$local_dir"
+  local_tmp="$(mktemp "${local_target}.tmp.XXXXXX")"
+  if ! cp "$DSPARK_ABLATE_SOURCE_FILE" "$local_tmp"; then
+    rm -f -- "$local_tmp"
+    return 1
+  fi
+  chmod 0644 "$local_tmp"
+  if [ "$(sha256sum "$local_tmp" | awk '{print $1}')" != "$expected" ]; then
+    rm -f -- "$local_tmp"
+    echo "Local staged ablation direction failed SHA-256 verification" >&2
+    return 1
+  fi
+  mv -f -- "$local_tmp" "$local_target"
+
+  remote_dir="${WORKER_HF_CACHE}/dspark-ablation"
+  remote_target="${remote_dir}/direction_r1.pt"
+  printf -v remote_dir_q '%q' "$remote_dir"
+  printf -v remote_target_q '%q' "$remote_target"
+  printf -v expected_q '%q' "$expected"
+  if ! ssh "$WORKER_HOST" "
+    set -euo pipefail
+    _dir=$remote_dir_q
+    _target=$remote_target_q
+    _expected=$expected_q
+    mkdir -p \"\$_dir\"
+    _tmp=\"\${_target}.tmp.\$\$\"
+    trap 'rm -f -- \"\$_tmp\"' EXIT
+    cat > \"\$_tmp\"
+    _actual=\$(sha256sum \"\$_tmp\" | awk '{print \$1}')
+    [ \"\$_actual\" = \"\$_expected\" ] || { echo 'worker ablation direction SHA-256 mismatch' >&2; exit 1; }
+    chmod 0644 \"\$_tmp\"
+    mv -f -- \"\$_tmp\" \"\$_target\"
+    trap - EXIT
+  " < "$DSPARK_ABLATE_SOURCE_FILE"; then
+    echo "Failed to stage the ablation direction on worker $WORKER_HOST" >&2
+    return 1
+  fi
+  echo "Runtime-ablation direction staged on both nodes (sha256=$expected)"
 }
 
 # Strip user@ from ssh targets / host strings → bare host or IPv4.
@@ -770,14 +908,17 @@ resolve_nccl_gid_indexes() {
 
 remote_nccl_env() {
   # Rebuild each call so GID resolve after early init is visible on the worker.
-  printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' NCCL_IB_GID_INDEX='%s' VLLM_HOST='%s' VLLM_PORT='%s'" \
+  printf "NCCL_IB_HCA='%s' NCCL_SOCKET_IFNAME='%s' TP_SOCKET_IFNAME='%s' GLOO_SOCKET_IFNAME='%s' NCCL_IB_GID_INDEX='%s' VLLM_HOST='%s' VLLM_PORT='%s' ABLATE='%s' DSV4_ABLATE_LAMBDA='%s' DSV4_ABLATE_LAYERS='%s'" \
     "$WORKER_NCCL_IB_HCA" \
     "$WORKER_NCCL_SOCKET_IFNAME" \
     "$WORKER_TP_SOCKET_IFNAME" \
     "$WORKER_GLOO_SOCKET_IFNAME" \
     "$WORKER_NCCL_IB_GID_INDEX" \
     "$VLLM_HOST" \
-    "$VLLM_PORT"
+    "$VLLM_PORT" \
+    "$ABLATE" \
+    "$DSV4_ABLATE_LAMBDA" \
+    "$DSV4_ABLATE_LAYERS"
 }
 
 compose_base() {
@@ -852,6 +993,11 @@ print_resolved_profile() {
   echo "Resolved DSpark profile:"
   echo "  project: $PROJECT_NAME"
   echo "  checkpoint: $DSPARK_MODEL (ABLITERATED=${ABLITERATED:-0})"
+  if [ "$ABLATE" = "1" ]; then
+    echo "  runtime ablation: ON (lambda=$DSV4_ABLATE_LAMBDA, layers=$DSV4_ABLATE_LAYERS, source=$DSPARK_ABLATE_SOURCE_FILE)"
+  else
+    echo "  runtime ablation: off (stock model.py)"
+  fi
   if [ -n "${DSPARK_REVISION:-}" ]; then
     echo "  revision: $DSPARK_REVISION"
   else
@@ -936,6 +1082,7 @@ need_cmd docker
 need_cmd ssh
 need_cmd scp
 need_cmd curl
+need_cmd sha256sum
 
 if [ "$ENABLE_VLLM_GB10_PATCH" != "0" ] && [ "$ENABLE_VLLM_GB10_PATCH" != "1" ]; then
   echo "ENABLE_VLLM_GB10_PATCH must be 0 or 1." >&2
@@ -993,6 +1140,7 @@ else
   exit "$worker_rc"
 fi
 
+stage_ablation_direction
 cd "$SCRIPT_DIR"
 resolve_nccl_gid_indexes
 STARTUP_LOG_SINCE="$(log_since)"
@@ -1097,6 +1245,15 @@ if [ -f "$DSPARK_ISSUE141_HOTFIX" ]; then
   echo "Syncing Issue #141 sparse-MLA decode workaround to ${WORKER_HOST}:${WORKER_DIR}/patches/"
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ISSUE141_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py"
+fi
+DSPARK_ABLATION_HOTFIX="${DSPARK_ABLATION_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-runtime-ablation.py}"
+if [ -f "$DSPARK_ABLATION_HOTFIX" ]; then
+  echo "Syncing runtime-ablation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_ABLATION_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-runtime-ablation.py"
+elif [ "$ABLATE" = "1" ]; then
+  echo "Missing required runtime-ablation hotfix: $DSPARK_ABLATION_HOTFIX" >&2
+  exit 1
 fi
 DSPARK_SUPPRESS_STOPS_HOTFIX="${DSPARK_SUPPRESS_STOPS_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-suppress-stops-in-reasoning.py}"
 if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
