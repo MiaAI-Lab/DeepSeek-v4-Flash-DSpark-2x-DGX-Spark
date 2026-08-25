@@ -154,6 +154,12 @@ services:
       # by Triton version/backend hash, so sharing the dir across image
       # updates is safe.
       TRITON_CACHE_DIR: "${TRITON_CACHE_DIR:-/cache/huggingface/triton-cache}"
+      # Persist the B12X MoE backend's CuTeDSL compile cache the same way
+      # (issue #117 family, third JIT cache): default in-image path is
+      # ~/.cache/b12x/cute_compile and dies on container recreate, so
+      # W4A16FusedMoeKernel re-JITs after every restart. Entries are keyed
+      # by kernel/config hash inside the dir.
+      B12X_CUTE_COMPILE_CACHE_DIR: "${B12X_CUTE_COMPILE_CACHE_DIR:-/cache/huggingface/b12x-cute-cache}"
       DG_JIT_USE_NVRTC: "${DG_JIT_USE_NVRTC:-0}"
       DG_JIT_NVCC_COMPILER: "${DG_JIT_NVCC_COMPILER:-/usr/local/cuda/bin/nvcc}"
       PYTORCH_CUDA_ALLOC_CONF: "${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"

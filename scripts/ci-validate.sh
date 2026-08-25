@@ -82,6 +82,8 @@ python3 scripts/test-spec-acceptance.py -q
 ok "test-spec-acceptance"
 python3 scripts/test-ruler-lite-pad.py -q
 ok "test-ruler-lite-pad"
+python3 scripts/test-numeric-knob-validation.py -q
+ok "test-numeric-knob-validation"
 python3 scripts/test-env-normalisation.py -q
 ok "test-env-normalisation"
 python3 scripts/test-dspark-api-keys.py -q

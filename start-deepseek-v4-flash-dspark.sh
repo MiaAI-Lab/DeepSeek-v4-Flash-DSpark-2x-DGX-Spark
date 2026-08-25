@@ -243,6 +243,9 @@ if (( 10#$VLLM_PORT < 1 || 10#$VLLM_PORT > 65535 )); then
   exit 2
 fi
 VLLM_PORT="$((10#$VLLM_PORT))"
+
+source "$SCRIPT_DIR/dspark-numeric-knobs.sh"
+dspark_validate_numeric_knobs "$_dspark_env_clean" || exit $?
 # Keep PORT as a backwards-compatible alias, but use VLLM_PORT internally.
 PORT="$VLLM_PORT"
 DEFAULT_THINKING="${DEFAULT_THINKING:-low}"
@@ -1287,8 +1290,21 @@ for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
       if [ "$_dspark_keys_set" = "1" ]; then
         _warmup_bearer="${_dspark_keys[0]}"
       fi
+      # Sampler-cache postcondition (see the sweep script): hand the child the
+      # HOST path of this node's persistent Triton cache. Only the compose
+      # default layout (container path under /cache/huggingface, backed by the
+      # HF_CACHE bind mount) is mappable from here; any custom TRITON_CACHE_DIR
+      # gets an empty path and the sweep skips that check with a note.
+      _warmup_tcache_container="${TRITON_CACHE_DIR:-/cache/huggingface/triton-cache}"
+      _warmup_tcache_host=""
+      case "$_warmup_tcache_container" in
+        /cache/huggingface/*)
+          _warmup_tcache_host="${HF_CACHE:-${HOME}/.cache/huggingface}${_warmup_tcache_container#/cache/huggingface}"
+          ;;
+      esac
       DSPARK_WARMUP_MAX_CONCURRENCY="${MAX_NUM_SEQS:-6}" \
         DSPARK_WARMUP_BEARER="$_warmup_bearer" \
+        DSPARK_WARMUP_TRITON_CACHE_DIR="$_warmup_tcache_host" \
         bash "$SCRIPT_DIR/scripts/boot-shape-warmup.sh" \
         "${CHAT_URL%/v1/chat/completions}" "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}" || \
         echo "WARN: boot shape warmup incomplete — uncovered shapes may JIT mid-serve (issue #117)" >&2

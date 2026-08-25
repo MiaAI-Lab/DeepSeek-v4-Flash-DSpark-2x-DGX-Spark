@@ -29,6 +29,21 @@
 #   requests with client-default generation settings. Medium + multi-chunk
 #   long prefill and one thinking-off arm cover other batch-keyed variants;
 #   none of these arms contributes to the low buckets above.
+# - Sampling arms (2026-08-24 incident follow-up): every arm above runs
+#   greedy (temperature 0), so vllm/v1/sample/ops/topk_topp_triton.py's
+#   _topk_topp_kernel — dispatched only when a request carries top_k and/or
+#   top_p — was never warmed and JIT-compiled mid-serve (persistent-cache
+#   entries born 15:26/15:27 UTC on a serving box prove it). The pinned
+#   runtime's enumerable compile-key axes are the TOPK_ENABLED x TOPP_ENABLED
+#   constexpr pair. BATCH_SIZE remains a plain TTIR runtime argument. Each
+#   combo runs once at C=1 and, when the profile permits it, in one C=3 burst:
+#   live cold-cache validation showed the repeated dispatch is needed to
+#   materialize every combo reliably, but it must not require a second cache
+#   class. The resulting combos are verified as an observable postcondition.
+#   (The second family from the same incident,
+#   _compute_global_topk_indices_and_lens_kernel's pointer-alignment keys,
+#   is closed engine-side by #135's do_not_specialize_on_alignment fix and
+#   needs no request-side arms.)
 #
 # Non-fatal by design: the cost of a missed shape is a mid-serve JIT (what this
 # script exists to reduce), not an outage — the launcher must treat a warmup
@@ -48,7 +63,13 @@
 #                              DSPARK_WARMUP_BEARER was provided
 #   DSPARK_WARMUP_MAX_CONCURRENCY
 #                              resolved --max-num-seqs from the launcher
-#                              (default 6); C=1/2/4/6 arms above it are skipped
+#                              (default 6); C=1/2/3/4/6 arms above it are skipped
+#   DSPARK_WARMUP_TRITON_CACHE_DIR
+#                              host path of THIS node's persistent Triton cache
+#                              (launcher derives it from HF_CACHE when
+#                              TRITON_CACHE_DIR sits on the HF volume). Used
+#                              only by the sampler-cache postcondition; empty
+#                              or missing dir skips that check with a note.
 #   WARMUP_CURL                test seam: overrides the curl binary
 set -u
 
@@ -93,13 +114,23 @@ mk_prompt() { # $1 = approx token count (repeated filler words), $2 = tag
 }
 
 fire() { # $1 = tag, $2 = words, $3 = thinking, $4 = result file, $5 = request profile
-  local tag=$1 words=$2 thinking=$3 out=$4 profile=${5:-bounded} prompt payload
+  local tag=$1 words=$2 thinking=$3 out=$4 profile=${5:-bounded} prompt payload sample_fields
   prompt=$(mk_prompt "$words" "$tag")
   if [ "$profile" = "serve-default" ]; then
     # Mirror an ordinary short client request: no explicit max_tokens or
     # chat-template override. These scheduler defaults have distinct Triton
     # variants from the bounded long-context arms below.
     payload='{"model":"'"$MODEL"'","messages":[{"role":"user","content":"'"$prompt"'"}],"temperature":0}'
+  elif [ "${profile#sampling}" != "$profile" ]; then
+    # Sampling arms: temperature must be > 0 or vLLM drops the k/p tensors and
+    # _topk_topp_kernel never dispatches. Bounded max_tokens keeps each arm to
+    # a few sampler steps — the kernel key does not depend on output length.
+    case "$profile" in
+      sampling-k)  sample_fields='"top_k":40' ;;
+      sampling-p)  sample_fields='"top_p":0.9' ;;
+      *)           sample_fields='"top_k":40,"top_p":0.9' ;;
+    esac
+    payload='{"model":"'"$MODEL"'","messages":[{"role":"user","content":"'"$prompt"'"}],"max_tokens":24,"temperature":0.8,'"$sample_fields"',"chat_template_kwargs":{"thinking":'"$thinking"',"reasoning_effort":"low"}}'
   else
     payload='{"model":"'"$MODEL"'","messages":[{"role":"user","content":"'"$prompt"'"}],"max_tokens":24,"temperature":0,"chat_template_kwargs":{"thinking":'"$thinking"',"reasoning_effort":"low"}}'
   fi
@@ -125,6 +156,58 @@ burst() { # $1 = arm name, $2 = concurrency, $3 = words-per-request, $4 = reques
   wait
   t1=$(date +%s)
   echo "  arm ${arm}: C=${c} x ~${words} tok, profile=${profile}, $((t1 - t0))s"
+}
+
+SAMPLER_KERNEL=_topk_topp_kernel
+
+sampler_c3_arms() {
+  # Re-dispatch each constexpr combo three times. This is reliability
+  # redundancy, not a BATCH_SIZE compile-key axis.
+  burst samp-k-c3  3 8 sampling-k
+  burst samp-p-c3  3 8 sampling-p
+  burst samp-kp-c3 3 8 sampling-kp
+}
+
+sampler_cache_combos() { # $1 = cache root; emits one line per distinct constexpr combo
+  local root=$1 ttir kuse puse combo
+  for ttir in "$root"/*/"$SAMPLER_KERNEL.ttir"; do
+    [ -f "$ttir" ] || continue
+    # TOPK_ENABLED/TOPP_ENABLED are constexprs, folded out of the TTIR
+    # signature — observe them through argument USE instead: a disabled side
+    # never touches its tensor, so its %K / %P symbol appears exactly once
+    # (the declaration); an enabled side is referenced again in the body.
+    # ([^A-Za-z0-9_] guards %P against matching %PERCENTILE_TO_STD_TABLE.)
+    kuse=$(grep -oE '%K[^A-Za-z0-9_]' "$ttir" | wc -l)
+    puse=$(grep -oE '%P[^A-Za-z0-9_]' "$ttir" | wc -l)
+    if [ "$kuse" -gt 1 ] && [ "$puse" -gt 1 ]; then combo=k+p
+    elif [ "$kuse" -gt 1 ]; then combo=k-only
+    elif [ "$puse" -gt 1 ]; then combo=p-only
+    else combo=neither; fi
+    printf '%s\n' "$combo"
+  done | sort -u
+}
+
+verify_sampler_cache() { # postcondition; returns 0 = met or skipped, 1 = unmet
+  # Every TP rank executes the sampler. This host-side script can inspect only
+  # the head rank's cache, so the local check is a dispatch-shape proxy, not a
+  # worker-filesystem attestation; acceptance evidence must inspect both ranks.
+  local root="${DSPARK_WARMUP_TRITON_CACHE_DIR:-}" combos combo n missing=""
+  if [ -z "$root" ] || [ ! -d "$root" ]; then
+    echo "  sampler-cache postcondition: SKIPPED (DSPARK_WARMUP_TRITON_CACHE_DIR unset or not a directory)"
+    return 0
+  fi
+  combos=$(sampler_cache_combos "$root")
+  for combo in k-only p-only k+p; do
+    n=$(printf '%s\n' "$combos" | grep -cx "$combo")
+    [ "$n" -ge 1 ] || missing="${missing} ${combo}:0/1"
+  done
+  if [ -z "$missing" ]; then
+    echo "  sampler-cache postcondition: MET — ${SAMPLER_KERNEL} constexpr combos on this rank:"
+    printf '%s\n' "$combos" | sed 's/^/    /'
+    return 0
+  fi
+  echo "  sampler-cache postcondition: unmet —${missing} (constexpr combos)"
+  return 1
 }
 
 mk_ladder_prompt() { # $1 = exact token count ('hello' + (N-1)x ' hello')
@@ -193,10 +276,18 @@ total_t0=$(date +%s)
 # completions), then the batch/chat arms.
 ladder
 
-EXPECTED_CHAT_REQUESTS=5        # c1 + short-c1 + mid + longchunk + nothink
+EXPECTED_CHAT_REQUESTS=8        # c1 + short-c1 + samp-k + samp-p + samp-kp + mid + longchunk + nothink
 burst c1        1 300
 burst short-c1  1 8 serve-default
+# _topk_topp_kernel constexpr combos: k-only, p-only, k+p.
+burst samp-k    1 8 sampling-k
+burst samp-p    1 8 sampling-p
+burst samp-kp   1 8 sampling-kp
 if [ "$MAX_CONCURRENCY" -ge 2 ]; then burst c2 2 420; burst short-c2 2 8 serve-default; EXPECTED_CHAT_REQUESTS=$((EXPECTED_CHAT_REQUESTS + 4)); fi
+if [ "$MAX_CONCURRENCY" -ge 3 ]; then
+  sampler_c3_arms
+  EXPECTED_CHAT_REQUESTS=$((EXPECTED_CHAT_REQUESTS + 9))
+fi
 if [ "$MAX_CONCURRENCY" -ge 4 ]; then burst c4 4 380; burst short-c4 4 8 serve-default; EXPECTED_CHAT_REQUESTS=$((EXPECTED_CHAT_REQUESTS + 8)); fi
 if [ "$MAX_CONCURRENCY" -ge 6 ]; then burst c6 6 340; burst short-c6 6 8 serve-default; EXPECTED_CHAT_REQUESTS=$((EXPECTED_CHAT_REQUESTS + 12)); fi
 if [ "$MAX_CONCURRENCY" -gt 6 ]; then
@@ -209,6 +300,12 @@ t0=$(date +%s)
 fire nothink-1 300 false "$tmpdir/nothink-1"
 t1=$(date +%s)
 echo "  arm nothink: C=1 x ~300 tok, thinking=false, $((t1 - t0))s"
+
+# Observable postcondition for the sampler arms: the cache must actually hold
+# each _topk_topp_kernel constexpr combo. Request success alone cannot prove
+# that every sampling branch dispatched.
+SAMPLER_POSTCOND=ok
+verify_sampler_cache || SAMPLER_POSTCOND=fail
 
 total=0 ok_count=0
 for f in "$tmpdir"/*-*; do
@@ -227,6 +324,10 @@ echo "boot-shape-warmup: ${ok_count}/${total} requests ok in $((total_t1 - total
 if [ "$ok_count" -lt "$total" ]; then
   echo "boot-shape-warmup: $((total - ok_count)) request(s) failed — uncovered shapes may JIT mid-serve" >&2
   sed -n '1,5p' "$tmpdir/errors" >&2 2>/dev/null || true
+  exit 1
+fi
+if [ "$SAMPLER_POSTCOND" != ok ]; then
+  echo "boot-shape-warmup: sampler-cache postcondition UNMET — ${SAMPLER_KERNEL} variants may JIT mid-serve" >&2
   exit 1
 fi
 exit 0
