@@ -27,6 +27,22 @@ services:
       memlock: -1
       stack: 67108864
 
+    # The serving process only needs to lock its CUDA/RDMA buffers. Drop
+    # Docker's default capability set and prevent privilege gains through an
+    # image entrypoint or a subsequently executed helper.
+    cap_drop:
+      - ALL
+    cap_add:
+      - IPC_LOCK
+    security_opt:
+      - no-new-privileges:true
+    # Host-promoted checkpoints may intentionally be 0640 and shared through
+    # Ubuntu's `users` group (GID 100 on DGX Spark). This supplies that narrow
+    # read path without restoring CAP_DAC_OVERRIDE. Override when the cache's
+    # group differs (`stat -c %g <checkpoint>`).
+    group_add:
+      - "${DSPARK_CACHE_READ_GID:-100}"
+
     gpus: all
 
     devices:

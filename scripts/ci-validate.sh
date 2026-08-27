@@ -230,6 +230,14 @@ if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.ds
 else
   bad "compose missing restart: unless-stopped"
 fi
+if grep -A2 '^    cap_drop:$' docker-compose.dspark.yml | grep -Fq -- '- ALL' \
+  && grep -A2 '^    cap_add:$' docker-compose.dspark.yml | grep -Fq -- '- IPC_LOCK' \
+  && grep -A2 '^    security_opt:$' docker-compose.dspark.yml | grep -Fq -- '- no-new-privileges:true' \
+  && grep -A2 '^    group_add:$' docker-compose.dspark.yml | grep -Fq -- '${DSPARK_CACHE_READ_GID:-100}'; then
+  ok "compose drops default capabilities and grants only checkpoint-group access"
+else
+  bad "compose must cap-drop ALL, retain IPC_LOCK, set no-new-privileges, and add the checkpoint group"
+fi
 if grep -q 'exit 3' start-deepseek-v4-flash-dspark.sh \
   && grep -q 'SuccessExitStatus=3' start-deepseek-v4-flash-dspark.sh \
   && grep -q 'SuccessExitStatus=3' docs/ENVS.md; then
