@@ -70,6 +70,15 @@ working, and the same image + HF cache on both.
    online even if `HF_HUB_OFFLINE=1`, then you can serve offline. After the cache is complete, keep `HF_HUB_OFFLINE=1` so a hub
    retry cannot fill the worker disk.
 
+   Preparation and serving use the numeric, non-root
+   `DSPARK_RUNTIME_UID:GID` (default `1000:1000`). The prepare script creates
+   the persistent JIT/cache and `/tmp` bind paths under that identity and
+   refuses legacy root-owned paths. While serving, the model `hub` and all
+   repository-supplied patch sources are bind-mounted read-only. The brief
+   boot-time hotfix phase is root with only `SETUID`, `SETGID`, and `SETPCAP`;
+   vLLM is then executed as the runtime UID with group 0 removed, an empty
+   capability bounding set, and `no-new-privileges`.
+
 4. **Optional CPU gates** (no GPU; will not measure tok/s)
 
    ```bash
