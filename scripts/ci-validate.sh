@@ -243,12 +243,14 @@ if grep -A2 '^    cap_drop:$' docker-compose.dspark.yml | grep -Fq -- '- ALL' \
 else
   bad "compose must cap-drop ALL, use only transition caps, and exec vLLM non-root with no capabilities"
 fi
-if grep -Fq '${HF_CACHE:-${HOME}/.cache/huggingface}/hub:/cache/huggingface/hub:ro' docker-compose.dspark.yml \
+if grep -Fq '${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface:ro' docker-compose.dspark.yml \
+  && grep -Fq '${HF_CACHE:-${HOME}/.cache/huggingface}/hub:/cache/huggingface/hub:ro' docker-compose.dspark.yml \
+  && [ "$(grep -Ec '^      - \$\{HF_CACHE:-\$\{HOME\}/\.cache/huggingface\}/(runtime-home|flashinfer|tilelang-cache|triton-cache|b12x-cute-cache|vllm-cache|nccl-fr):/cache/huggingface/[^:]+:rw$' docker-compose.dspark.yml)" -eq 7 ] \
   && grep -Fq '${VLLM_GB10_PATCH_DIR:-./vllm_patch_gb10}:/opt/vllm-gb10-hybrid-nvfp4:ro' docker-compose.dspark.yml \
-  && grep -Fq 'if "$${RUNTIME_PRIVDROP[@]}" test -w /cache/huggingface/hub' docker-compose.dspark.yml; then
-  ok "compose makes checkpoints/patch sources read-only and verifies the checkpoint boundary"
+  && grep -Fq 'for _immutable_dir in /cache/huggingface /cache/huggingface/hub' docker-compose.dspark.yml; then
+  ok "compose makes the cache root/checkpoints/patches read-only and exposes seven named writable cache binds"
 else
-  bad "compose must mount checkpoints/patch sources read-only and fail if the hub is writable"
+  bad "compose must make the cache root/checkpoints/patches read-only and expose only the named writable cache binds"
 fi
 if [ "$(grep -Fc -- '--user "${DSPARK_RUNTIME_UID}:${DSPARK_RUNTIME_GID}"' prepare-dspark-model-cache.sh)" -eq 2 ] \
   && grep -Fq 'Run prepare as the configured runtime identity' prepare-dspark-model-cache.sh \

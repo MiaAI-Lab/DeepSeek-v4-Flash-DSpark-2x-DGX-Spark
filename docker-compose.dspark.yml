@@ -57,11 +57,20 @@ services:
       - /dev/infiniband:/dev/infiniband
 
     volumes:
-      - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      # The cache root is immutable while serving. Re-expose only the named
+      # runtime/JIT directories below as writable nested mounts.
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface:ro
       # Checkpoints are immutable while serving. Cache preparation/downloads
       # happen outside this compose service; the nested bind prevents either
       # the root hotfix phase or the unprivileged runtime from altering them.
       - ${HF_CACHE:-${HOME}/.cache/huggingface}/hub:/cache/huggingface/hub:ro
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/runtime-home:/cache/huggingface/runtime-home:rw
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/flashinfer:/cache/huggingface/flashinfer:rw
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/tilelang-cache:/cache/huggingface/tilelang-cache:rw
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/triton-cache:/cache/huggingface/triton-cache:rw
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/b12x-cute-cache:/cache/huggingface/b12x-cute-cache:rw
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/vllm-cache:/cache/huggingface/vllm-cache:rw
+      - ${HF_CACHE:-${HOME}/.cache/huggingface}/nccl-fr:/cache/huggingface/nccl-fr:rw
       # Optional Stage-C overlay: host proposer only when path exists on the
       # Anemll layout (vLLM ships DSpark under v1/worker/gpu/spec_decode).
       # GB10 hybrid plugin tree for ENABLE_VLLM_GB10_PATCH=1 only.
@@ -297,8 +306,8 @@ services:
         if ! [[ "$${DSPARK_RUNTIME_GID}" =~ ^[1-9][0-9]*$$ ]]; then echo "error: DSPARK_RUNTIME_GID must be a positive, non-root numeric GID" >&2; exit 2; fi;
         if ! [[ "$${DSPARK_CACHE_READ_GID}" =~ ^[1-9][0-9]*$$ ]]; then echo "error: DSPARK_CACHE_READ_GID must be a positive, non-root numeric GID" >&2; exit 2; fi;
         RUNTIME_PRIVDROP=(/usr/bin/setpriv "--reuid=$${DSPARK_RUNTIME_UID}" "--regid=$${DSPARK_RUNTIME_GID}" "--groups=$${DSPARK_CACHE_READ_GID}" --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs);
-        for _runtime_dir in /cache/huggingface /cache/huggingface/runtime-home /cache/huggingface/flashinfer /cache/huggingface/tilelang-cache /cache/huggingface/triton-cache /cache/huggingface/b12x-cute-cache /cache/huggingface/vllm-cache /cache/huggingface/nccl-fr /tmp; do if ! "$${RUNTIME_PRIVDROP[@]}" test -w "$${_runtime_dir}"; then echo "error: runtime cache path is missing or not writable by $${DSPARK_RUNTIME_UID}:$${DSPARK_RUNTIME_GID}: $${_runtime_dir}" >&2; exit 1; fi; done;
-        if "$${RUNTIME_PRIVDROP[@]}" test -w /cache/huggingface/hub; then echo "error: checkpoint hub must be mounted read-only at /cache/huggingface/hub" >&2; exit 1; fi;
+        for _runtime_dir in /cache/huggingface/runtime-home /cache/huggingface/flashinfer /cache/huggingface/tilelang-cache /cache/huggingface/triton-cache /cache/huggingface/b12x-cute-cache /cache/huggingface/vllm-cache /cache/huggingface/nccl-fr /tmp; do if ! "$${RUNTIME_PRIVDROP[@]}" test -w "$${_runtime_dir}"; then echo "error: runtime cache path is missing or not writable by $${DSPARK_RUNTIME_UID}:$${DSPARK_RUNTIME_GID}: $${_runtime_dir}" >&2; exit 1; fi; done;
+        for _immutable_dir in /cache/huggingface /cache/huggingface/hub; do if "$${RUNTIME_PRIVDROP[@]}" test -w "$${_immutable_dir}"; then echo "error: serving path must be mounted read-only: $${_immutable_dir}" >&2; exit 1; fi; done;
         API_KEY_ARGS=(); case "$${DSPARK_API_KEYS:-}" in *[$$'\r\n\v\f']*) echo "error: DSPARK_API_KEYS must be a single-line space-separated list" >&2; exit 2 ;; *\\*) echo "error: DSPARK_API_KEYS must not contain backslashes" >&2; exit 2 ;; esac; _dspark_keys_set=0; case "$${DSPARK_API_KEYS:-}" in *[!$$' \t']*) _dspark_keys_set=1 ;; esac; if [ -n "$${VLLM_API_KEY:-}" ] && [ "$${_dspark_keys_set}" = "1" ]; then echo "error: VLLM_API_KEY and DSPARK_API_KEYS are both set; set exactly one of them" >&2; exit 2; fi; if [ "$${_dspark_keys_set}" = "1" ]; then read -r -a _dspark_keys <<< "$${DSPARK_API_KEYS}"; for _dspark_key in "$${_dspark_keys[@]}"; do case "$${_dspark_key}" in -*) echo "error: DSPARK_API_KEYS contains a token beginning with '-'" >&2; exit 2 ;; esac; done; API_KEY_ARGS=(--api-key "$${_dspark_keys[@]}"); fi;
         if [ -z "$${NCCL_IB_MERGE_NICS:-}" ]; then unset NCCL_IB_MERGE_NICS; fi;
         if [ -z "$${NCCL_NET_GDR_LEVEL:-}" ]; then unset NCCL_NET_GDR_LEVEL; fi;

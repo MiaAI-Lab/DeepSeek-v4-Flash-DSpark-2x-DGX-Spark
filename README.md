@@ -77,7 +77,9 @@ working, and the same image + HF cache on both.
    repository-supplied patch sources are bind-mounted read-only. The brief
    boot-time hotfix phase is root with only `SETUID`, `SETGID`, and `SETPCAP`;
    vLLM is then executed as the runtime UID with group 0 removed, an empty
-   capability bounding set, and `no-new-privileges`.
+   capability bounding set, and `no-new-privileges`. The cache root is also
+   read-only; only the named runtime-home, CUDA/JIT, flight-recorder, and `/tmp`
+   nested binds are writable.
 
 4. **Optional CPU gates** (no GPU; will not measure tok/s)
 
