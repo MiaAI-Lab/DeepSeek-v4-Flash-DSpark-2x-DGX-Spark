@@ -102,8 +102,6 @@ services:
       DSPARK_RUNTIME_UID: "${DSPARK_RUNTIME_UID:-1000}"
       DSPARK_RUNTIME_GID: "${DSPARK_RUNTIME_GID:-1000}"
       DSPARK_CACHE_READ_GID: "${DSPARK_CACHE_READ_GID:-100}"
-      HOME: /cache/huggingface/runtime-home
-      XDG_CACHE_HOME: /cache/huggingface/runtime-home/.cache
       HF_HOME: /cache/huggingface
       HF_HUB_CACHE: /cache/huggingface/hub
       HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
@@ -347,6 +345,10 @@ services:
         esac;
         REVISION_ARGS="";
         if [ -n "$${DSPARK_REVISION:-}" ]; then REVISION_ARGS="--revision $${DSPARK_REVISION}"; fi;
+        export HOME=/cache/huggingface/runtime-home;
+        export XDG_CACHE_HOME=/cache/huggingface/runtime-home/.cache;
+        export PYTHONPYCACHEPREFIX=/cache/huggingface/runtime-home/.cache/pycache;
+        export USER=dspark LOGNAME=dspark;
         exec "$${RUNTIME_PRIVDROP[@]}" /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}
         $${REVISION_ARGS}
         --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}

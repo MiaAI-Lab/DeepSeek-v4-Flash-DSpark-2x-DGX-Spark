@@ -237,6 +237,7 @@ if grep -A2 '^    cap_drop:$' docker-compose.dspark.yml | grep -Fq -- '- ALL' \
   && grep -A2 '^    security_opt:$' docker-compose.dspark.yml | grep -Fq -- '- no-new-privileges:true' \
   && grep -A2 '^    group_add:$' docker-compose.dspark.yml | grep -Fq -- '${DSPARK_CACHE_READ_GID:-100}' \
   && grep -Fq 'exec "$${RUNTIME_PRIVDROP[@]}" /usr/local/bin/vllm serve' docker-compose.dspark.yml \
+  && grep -Fq 'export USER=dspark LOGNAME=dspark;' docker-compose.dspark.yml \
   && grep -Fq -- '--bounding-set=-all --no-new-privs' docker-compose.dspark.yml; then
   ok "compose uses boot-only transition caps and executes vLLM non-root with an empty bounding set"
 else
