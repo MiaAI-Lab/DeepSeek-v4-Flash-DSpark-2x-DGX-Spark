@@ -1019,6 +1019,10 @@ if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
   ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-suppress-stops-in-reasoning.py; fi"
   scp "$DSPARK_SUPPRESS_STOPS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py"
 fi
+DSPARK_LOOP_BREAKER_HOTFIX="${DSPARK_LOOP_BREAKER_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-loop-breaker.py}"
+if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
+  scp "$DSPARK_LOOP_BREAKER_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py"
+fi
 DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-assistant-final-continuation.py}"
 if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
   echo "Syncing assistant-final continuation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
