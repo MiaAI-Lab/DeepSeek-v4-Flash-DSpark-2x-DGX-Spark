@@ -39,6 +39,8 @@ py_files+=(
   scripts/test-issue31-thinking-budget-gpu.py
   scripts/test-issue55-tool-truncation.py
   scripts/test-responses-api-live.py
+  scripts/reproduce-issue82-live.py
+  scripts/test-issue82-tool-history.py
   scripts/test-encoding-dsv4-issue21.py
   scripts/test-suppress-stops-in-reasoning.py
   scripts/test-assistant-final-continuation.py
@@ -69,6 +71,8 @@ python3 scripts/test-issue55-tool-truncation.py -q
 ok "test-issue55-tool-truncation"
 python3 scripts/test-responses-api-live.py -q
 ok "test-responses-api-live"
+python3 scripts/test-issue82-tool-history.py -q
+ok "test-issue82-tool-history"
 python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q
