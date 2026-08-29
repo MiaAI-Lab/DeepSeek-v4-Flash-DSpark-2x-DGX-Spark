@@ -27,6 +27,8 @@ for f in \
   scripts/test-boot-shape-warmup.sh \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
+  ops/dgx-recovery/*.sh \
+  ops/dgx-recovery/mia-worker-orphan-guard \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -285,6 +287,12 @@ if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.ds
   ok "compose restart unless-stopped"
 else
   bad "compose missing restart: unless-stopped"
+fi
+if grep -Fq 'init: true' docker-compose.dspark.yml \
+  && grep -Eq 'stop_grace_period:.*30s' docker-compose.dspark.yml; then
+  ok "compose has init + bounded stop grace"
+else
+  bad "compose missing init: true or 30-second stop grace"
 fi
 if grep -q 'exit 3' start-deepseek-v4-flash-dspark.sh \
   && grep -q 'SuccessExitStatus=3' start-deepseek-v4-flash-dspark.sh \

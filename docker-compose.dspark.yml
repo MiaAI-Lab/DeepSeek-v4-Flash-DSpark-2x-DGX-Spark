@@ -2,6 +2,7 @@ services:
   vllm-dspark:
     image: ${DSPARK_VLLM_IMAGE:-ghcr.io/anemll/dspark-vllm-gx10:0.1.1}
     pull_policy: if_not_present
+    init: true
     entrypoint: []
     network_mode: host
     ipc: host
@@ -9,7 +10,7 @@ services:
     # Issue #38/#39: bring a crashed worker back. Keep grace short — vLLM
     # ignores SIGTERM while loading and a long period hangs `compose stop`.
     restart: ${DSPARK_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: ${DSPARK_STOP_GRACE:-10s}
+    stop_grace_period: ${DSPARK_STOP_GRACE:-30s}
 
     # Only rank 0 serves HTTP; the worker runs HEADLESS with no :8888 listener.
     # Gate on $HEADLESS so the worker is not marked unhealthy forever. $$HEADLESS

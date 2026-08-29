@@ -1,0 +1,14 @@
+[Unit]
+Description=Recover the MIA worker after head loss
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/mia-worker-orphan-guard
+ExecStart=/usr/local/sbin/mia-worker-orphan-guard
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

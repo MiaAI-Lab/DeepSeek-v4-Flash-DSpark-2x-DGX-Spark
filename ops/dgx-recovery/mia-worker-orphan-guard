@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -u
+
+container="${MIA_CONTAINER:-deepseek-v4-flash-vllm-dspark-1}"
+api_host="${MIA_API_HOST:-100.125.193.22}"
+api_port="${MIA_API_PORT:-8888}"
+master_host="${MIA_MASTER_HOST:-192.168.200.12}"
+master_port="${MIA_MASTER_PORT:-25000}"
+seen_api=0
+failures=0
+
+port_open() {
+  timeout 2 bash -c "</dev/tcp/$1/$2" 2>/dev/null
+}
+
+while sleep 5; do
+  running="$(timeout 3 docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null || true)"
+
+  if [ "$running" != true ]; then
+    seen_api=0
+    failures=0
+    if port_open "$master_host" "$master_port"; then
+      timeout 20 docker start "$container" >/dev/null 2>&1 &&
+        logger -t mia-worker-orphan-guard "started $container for a waiting head rank"
+    fi
+    continue
+  fi
+
+  if port_open "$api_host" "$api_port"; then
+    if [ "$seen_api" = 0 ]; then
+      logger -t mia-worker-orphan-guard "armed after the MIA API became reachable"
+    fi
+    seen_api=1
+    failures=0
+  elif [ "$seen_api" = 1 ]; then
+    failures=$((failures + 1))
+    if [ "$failures" -ge 6 ]; then
+      logger -t mia-worker-orphan-guard "head API unavailable for 30 seconds; stopping $container"
+      if ! timeout 45 docker stop -t 30 "$container" >/dev/null 2>&1; then
+        logger -t mia-worker-orphan-guard "graceful stop failed; trying docker kill"
+        if ! timeout 10 docker kill "$container" >/dev/null 2>&1; then
+          logger -t mia-worker-orphan-guard "Docker cannot reap the rank; forcing host reboot"
+          systemctl reboot --force --force
+        fi
+      fi
+      seen_api=0
+      failures=0
+    fi
+  fi
+done
