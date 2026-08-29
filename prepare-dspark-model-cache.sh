@@ -63,6 +63,9 @@ DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-F
 # (default empty = tip of that repo).
 DEFAULT_OFFICIAL_REVISION="9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
+: "${DSPARK_TMP_HOST:=$HOME/.cache/dspark-tmp}"
+: "${DSPARK_RUNTIME_UID:=1000}"
+: "${DSPARK_RUNTIME_GID:=1000}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
 # Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
@@ -170,7 +173,37 @@ verify_worker_image() {
 }
 
 need_cmd docker
-mkdir -p "$HF_CACHE"
+if ! [[ "$DSPARK_RUNTIME_UID" =~ ^[1-9][0-9]*$ ]]; then
+  echo "DSPARK_RUNTIME_UID must be a positive, non-root numeric UID." >&2
+  exit 2
+fi
+if ! [[ "$DSPARK_RUNTIME_GID" =~ ^[1-9][0-9]*$ ]]; then
+  echo "DSPARK_RUNTIME_GID must be a positive, non-root numeric GID." >&2
+  exit 2
+fi
+if [ "$(id -u)" != "$DSPARK_RUNTIME_UID" ] || [ "$(id -g)" != "$DSPARK_RUNTIME_GID" ]; then
+  echo "Run prepare as the configured runtime identity $DSPARK_RUNTIME_UID:$DSPARK_RUNTIME_GID (current: $(id -u):$(id -g))." >&2
+  exit 1
+fi
+runtime_dirs=(
+  "$HF_CACHE"
+  "$HF_CACHE/runtime-home"
+  "$HF_CACHE/runtime-home/.cache"
+  "$HF_CACHE/flashinfer"
+  "$HF_CACHE/tilelang-cache"
+  "$HF_CACHE/triton-cache"
+  "$HF_CACHE/b12x-cute-cache"
+  "$HF_CACHE/vllm-cache"
+  "$HF_CACHE/nccl-fr"
+  "$DSPARK_TMP_HOST"
+)
+for runtime_dir in "${runtime_dirs[@]}"; do
+  if ! mkdir -p -- "$runtime_dir" || [ ! -w "$runtime_dir" ]; then
+    echo "Runtime path must be writable by $DSPARK_RUNTIME_UID:$DSPARK_RUNTIME_GID: $runtime_dir" >&2
+    echo "Fix legacy root-owned cache paths before retrying; do not run this downloader with sudo." >&2
+    exit 1
+  fi
+done
 verify_local_image
 resolve_checkpoint
 resolve_revision
@@ -192,7 +225,9 @@ run_download() {
     echo "prepare: downloading $model → $HF_CACHE" >&2
   fi
   docker run --rm -i \
+    --user "${DSPARK_RUNTIME_UID}:${DSPARK_RUNTIME_GID}" \
     -v "${HF_CACHE}:/cache/huggingface" \
+    -e HOME=/cache/huggingface/runtime-home \
     -e HF_HOME=/cache/huggingface \
     -e HF_HUB_OFFLINE=0 \
     -e TRANSFORMERS_OFFLINE=0 \
@@ -234,7 +269,9 @@ verify_cache() {
   local revision="${2:-}"
   # local_files_only=True; force offline so verify never re-hits the hub.
   docker run --rm -i \
+    --user "${DSPARK_RUNTIME_UID}:${DSPARK_RUNTIME_GID}" \
     -v "${HF_CACHE}:/cache/huggingface" \
+    -e HOME=/cache/huggingface/runtime-home \
     -e HF_HOME=/cache/huggingface \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \

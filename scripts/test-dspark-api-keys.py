@@ -156,7 +156,7 @@ def entrypoint_auth_block() -> str:
 def entrypoint_exec_tail() -> str:
     """The `exec vllm serve ...` tail as the container sees it ($$ already `$`)."""
     text = COMPOSE.read_text(encoding="utf-8")
-    start = text.index("exec /usr/local/bin/vllm serve")
+    start = text.index("/usr/local/bin/vllm serve")
     line_start = text.rindex("\n", 0, start) + 1
     tail_lines = []
     for line in text[line_start:].splitlines():
@@ -172,7 +172,10 @@ def entrypoint_exec_tail() -> str:
 
 def tail_from_text(text: str) -> str:
     """The `exec vllm serve ...` tail from a one-line rendered `command[2]`."""
-    start = text.index("exec /usr/local/bin/vllm serve")
+    binary = text.index("/usr/local/bin/vllm serve")
+    start = text.rfind("exec ", 0, binary)
+    if start < 0:
+        raise AssertionError("exec vllm serve tail not found in render")
     return text[start:]
 
 
@@ -210,7 +213,10 @@ def middle_segment(text: str) -> str:
     """Entrypoint text skipped by the auth-block + exec-tail harness."""
     block = find_auth_block(text)
     start = text.index(block) + len(block)
-    end = text.index("exec /usr/local/bin/vllm serve", start)
+    binary = text.index("/usr/local/bin/vllm serve", start)
+    end = text.rfind("exec ", start, binary)
+    if end < 0:
+        raise AssertionError("exec vllm serve tail not found")
     return text[start:end]
 
 
@@ -297,9 +303,11 @@ _VLLM_DUMPER = "python3 -c 'import sys; [print(\"A[\"+a+\"]\") for a in sys.argv
 
 def _decode_block_tail(block: str, tail: str):
     block = block.replace("$$", "$")
-    tail = tail.replace("$$", "$").replace(
-        "exec /usr/local/bin/vllm serve", _VLLM_DUMPER
-    )
+    tail = tail.replace("$$", "$")
+    tail = tail.replace(
+        'exec "${RUNTIME_PRIVDROP[@]}" /usr/local/bin/vllm serve',
+        _VLLM_DUMPER,
+    ).replace("exec /usr/local/bin/vllm serve", _VLLM_DUMPER)
     return block, tail
 
 

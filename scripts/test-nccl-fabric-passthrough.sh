@@ -96,7 +96,7 @@ else
   bad "compose environment map missing:$wiring_missing"
 fi
 unset_line="$(grep -n 'unset NCCL_DMABUF_ENABLE' "$COMPOSE" | head -1 | cut -d: -f1)"
-exec_line="$(grep -n 'exec /usr/local/bin/vllm serve' "$COMPOSE" | head -1 | cut -d: -f1)"
+exec_line="$(grep -n '/usr/local/bin/vllm serve' "$COMPOSE" | head -1 | cut -d: -f1)"
 if [ -n "$unset_line" ] && [ -n "$exec_line" ] && [ "$unset_line" -lt "$exec_line" ]; then
   ok "normalization runs in the entrypoint before exec vllm"
 else
