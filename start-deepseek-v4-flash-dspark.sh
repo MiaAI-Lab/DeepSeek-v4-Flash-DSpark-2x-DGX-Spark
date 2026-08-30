@@ -880,9 +880,9 @@ print_resolved_profile() {
     echo "  DSV4 perf hotfixes (#50312/#49486+52492/#48407/#48957/#50298/#44993-grammar): will apply on start"
   fi
   if [ "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" = "1" ]; then
-    echo "  GB10 shm spin-wait hotfix (#79): SKIPPED (DSPARK_SKIP_SPIN_WAIT_HOTFIX=1)"
+    echo "  GB10 shm IPC wait hotfixes (#79 spin-wait + #117 reader re-check): SKIPPED (DSPARK_SKIP_SPIN_WAIT_HOTFIX=1)"
   else
-    echo "  GB10 shm spin-wait hotfix (#79): will apply on start (busy_loop_s 1s -> 2ms)"
+    echo "  GB10 shm IPC wait hotfixes (#79 busy_loop_s 1s -> 2ms + #117 reader re-check 1000ms): will apply on start"
   fi
   if [ "${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}" = "1" ]; then
     echo "  Suppress stops in <think>: SKIPPED (DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX=1)"
@@ -1005,7 +1005,7 @@ if [ -f "$DSPARK_HOTFIX_FILE" ]; then
 fi
 DSPARK_SPIN_WAIT_HOTFIX="${DSPARK_SPIN_WAIT_HOTFIX:-$SCRIPT_DIR/patches/hotfix-gb10-spin-wait.sh}"
 if [ -f "$DSPARK_SPIN_WAIT_HOTFIX" ]; then
-  echo "Syncing GB10 shm spin-wait hotfix (#79) to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  echo "Syncing GB10 shm IPC wait hotfix (#79 + #117 reader re-check) to ${WORKER_HOST}:${WORKER_DIR}/patches/"
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_SPIN_WAIT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-gb10-spin-wait.sh"
 fi
@@ -1129,7 +1129,7 @@ if [ "${DSPARK_SKIP_ISSUE22_HOTFIX:-0}" = "1" ]; then
   echo "Entrypoint will skip Issue #22 hotfix (DSPARK_SKIP_ISSUE22_HOTFIX=1)."
 fi
 if [ "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" = "1" ]; then
-  echo "Entrypoint will skip GB10 shm spin-wait hotfix (DSPARK_SKIP_SPIN_WAIT_HOTFIX=1)."
+  echo "Entrypoint will skip GB10 shm IPC wait hotfix (#79 + #117 reader re-check, DSPARK_SKIP_SPIN_WAIT_HOTFIX=1)."
 fi
 echo "Issue #22 / v0.27 .sh hotfixes run in the compose entrypoint before vllm (no mid-boot stop)."
 

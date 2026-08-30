@@ -56,3 +56,77 @@ else
   echo "[FAIL] busy_loop_s not set to 0.002" >&2
   exit 1
 fi
+
+# === [shm-reader-recheck] bounded dispatch-ring reader re-check (#117 family) ===
+# Upstream vLLM already ships exactly this fix (SHM_READER_RECHECK_INTERVAL_MS,
+# timeout_ms() never returns None); this is a backport with a shorter ceiling
+# (1000 ms) so a lost/coalesced PUB-SUB notify self-heals within ~1 s instead
+# of black-holing the EngineCore->local-worker ring (dispatch-trace observed:
+# "disp seq=27591 idx=0 (wrap 8->9->0) with no recv on rank 0", 600 s NCCL kill).
+# https://raw.githubusercontent.com/vllm-project/vllm/main/vllm/distributed/device_communicators/shm_broadcast.py
+REC_FILE="$VLLM_ROOT/distributed/device_communicators/shm_broadcast.py"
+if grep -qF "[shm-reader-recheck]" "$REC_FILE"; then
+echo " [skip] shm-reader-recheck already applied"
+else
+python3 - "$REC_FILE" <<'PYEOF'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1]); s = p.read_text()
+
+# 1) module-level constant (after VLLM_RINGBUFFER_WARNING_INTERVAL).
+CONST_ANCHOR = "VLLM_RINGBUFFER_WARNING_INTERVAL = envs.VLLM_RINGBUFFER_WARNING_INTERVAL"
+CONST_ADD = CONST_ANCHOR + (
+    "\n\n# [shm-reader-recheck] bounded reader re-check for the EngineCore->local\n"
+    "# worker dispatch ring; a lost notify must never hang the reader.\n"
+    "# Upstream vLLM default 5000; this backport uses 1000 for a shorter\n"
+    "# self-heal ceiling (negligible idle-wakeup cost).\n"
+    "SHM_READER_RECHECK_INTERVAL_MS = 1000"
+)
+assert s.count(CONST_ANCHOR) == 1, "const anchor count != 1"
+s = s.replace(CONST_ANCHOR, CONST_ADD, 1)
+
+# 2) timeout_ms(): never return None; cap at the recheck interval.
+OLD_METHOD = '''        def timeout_ms(self) -> int | None:
+            """Returns a timeout that is:
+            - min(time to deadline, time to next warning) if we're logging warnings
+            - time to deadline, if we're not logging warnings
+            - None if the timeout is None and we're not logging warnings
+            - raise TimeoutError if we are past the deadline
+            """
+            warning_wait_time = self.warning_wait_time_ms
+            if self.timeout is None:
+                return warning_wait_time
+
+            time_left_ms = int((self.deadline - time.monotonic()) * 1000)
+            if time_left_ms <= 0:
+                raise TimeoutError
+
+            if warning_wait_time and warning_wait_time < time_left_ms:
+                return warning_wait_time
+
+            return time_left_ms
+'''
+NEW_METHOD = '''        def timeout_ms(self) -> int:
+            """Returns a timeout capped at the reader recheck interval:
+            min(time to deadline, time to next warning,
+            SHM_READER_RECHECK_INTERVAL_MS). Never returns None, so a lost or
+            coalesced notify cannot strand a reader in an indefinite poll.
+            """
+            wait_ms = SHM_READER_RECHECK_INTERVAL_MS
+            if self.warning_wait_time_ms is not None:
+                wait_ms = min(wait_ms, self.warning_wait_time_ms)
+            if self.timeout is None:
+                return wait_ms
+            time_left_ms = int((self.deadline - time.monotonic()) * 1000)
+            if time_left_ms <= 0:
+                raise TimeoutError
+            return min(wait_ms, time_left_ms)
+'''
+assert s.count(OLD_METHOD) == 1, "timeout_ms anchor count != 1"
+s = s.replace(OLD_METHOD, NEW_METHOD, 1)
+
+compile(s, str(p), "exec")
+p.write_text(s)
+print(" [OK] shm-reader-recheck applied (SHM_READER_RECHECK_INTERVAL_MS=1000)")
+PYEOF
+fi

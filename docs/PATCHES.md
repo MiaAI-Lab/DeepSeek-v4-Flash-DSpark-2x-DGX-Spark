@@ -614,3 +614,65 @@ flag, fixtures/tests, sync/preflight, and documentation together.
 
 Evidence currently checked in is CPU/source-exact only. Do not claim the live
 incident closed until the two-rank canary and log/health gate above pass.
+
+## Issue #117 — bounded shared-memory dispatch-ring reader re-check (upstream backport)
+
+### Symptom and root cause
+
+The "rank0 quiescent" variant of the TP-pair loss (the head-local worker stops
+consuming the EngineCore dispatch ring while the remote worker keeps pace, then
+torch's 600 s ProcessGroupNCCL watchdog kills the peer) is a lost PUB/SUB notify
+on the `shm_broadcast.MessageQueue`. The local worker's dispatch path is
+`dequeue(indefinite=True)` → `acquire_read(indefinite=True)` →
+`SpinCondition.wait(timeout_ms=None)`: once the reader leaves the `busy_loop_s`
+fast path it sleeps in `poller.poll(None)` until a notify or cancel, with no
+periodic re-check. The GB10 #79 hotfix (`busy_loop_s` 1 → 0.002 s) makes that
+notify path the steady-state wake mechanism, so a dropped/coalesced notify
+(writer `SNDHWM=1`, reader `CONFLATE=1`) at a ring-slot wrap black-holes the
+reader indefinitely.
+
+PR #142's dispatch-trace captured the moment on the reporting pair
+(2026-08-30): `disp seq=27590 idx=9` and `disp seq=27591 idx=0` (the 8→9→0
+slot wrap) with **no** matching `recv` on rank 0; rank 1 completed both via its
+socket path; EngineCore blocked on rank 0's response and logged
+`shm_broadcast` 60 s warnings until the 600 s watchdog killed rank 1 in the
+logits `all_gather` (`sample_tokens` → `_gather_logits`,
+`[[6,64640]]`/387840). No OOM, no CUDA error, no fabric fault involved.
+
+### Fix (upstream backport, 1000 ms)
+
+Upstream vLLM `main` already ships this exact fix: `timeout_ms()` never returns
+`None` and every reader re-checks the ring on a bounded cadence
+(`SHM_READER_RECHECK_INTERVAL_MS = 5000` upstream). This recipe backports the
+same two edits with a **1000 ms** ceiling for a shorter self-heal (≲1 s worst
+case when a notify is lost, versus 20+ minute blackouts before), at negligible
+idle-wakeup cost; the hot path (fast-path spin within `busy_loop_s` + immediate
+notify wake) is unchanged.
+
+Target: `vllm/distributed/device_communicators/shm_broadcast.py`
+(`ReadTimeoutWithWarnings.timeout_ms` + module-level `SHM_READER_RECHECK_INTERVAL_MS`).
+
+### Application and rollback
+
+- Applied by `patches/hotfix-gb10-spin-wait.sh` on both ranks: fail-closed
+  (anchor/compile failures and drift exit nonzero), idempotent via the
+  `[shm-reader-recheck]` marker, source-exact string anchors.
+- Skip switch: the existing `DSPARK_SKIP_SPIN_WAIT_HOTFIX` covers both the #79
+  busy-loop change and this backport (they patch the same file).
+- Rollback: set `DSPARK_SKIP_SPIN_WAIT_HOTFIX=1`, then stop and start both
+  containers so they are recreated; a process or `docker compose restart`
+  retains patched writable-layer bytes and is **not** rollback.
+
+### Validation status and remaining gates
+
+- Initial A/B on the reporting pair: multiple 355 K+ context agent sessions
+  with no recurrence after the change (previously recurring every few hours).
+- Remaining gates: sustained-soak closure, and the upstream-fidelity question
+  (keep the official 5000 ms default vs this 1000 ms ceiling) — an
+  operator-facing decision this PR documents rather than removes.
+
+### Refs
+
+- Upstream source: https://raw.githubusercontent.com/vllm-project/vllm/main/vllm/distributed/device_communicators/shm_broadcast.py
+- Issue #117; dispatch-trace instrumentation PR #142.
+
