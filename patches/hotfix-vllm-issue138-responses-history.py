@@ -19,6 +19,7 @@ Usage:
 """
 from __future__ import annotations
 
+import ast
 import os
 import stat
 import sys
@@ -38,6 +39,29 @@ TYPE_ALIAS_GUARD = (
     "ResponseInputItemParam | ResponseOutputItem"
 )
 INPUT_FIELD_GUARD = "\n    input: str | list[ResponseInputOutputItem]\n"
+
+STATUS_ANCHORS = (
+    '''            content = item.get("content")
+            legacy_assistant_output = (
+                "type" not in item
+                and item.get("role") == "assistant"
+                and isinstance(content, list)
+                and len(content) == 1
+                and isinstance(content[0], dict)
+                and content[0].get("type") == "output_text"
+                and isinstance(content[0].get("text"), str)
+            )
+''',
+    '''            elif (
+                item.get("role") == "assistant"
+                and (item_type == "message" or legacy_assistant_output)
+            ):
+''',
+    '''                if legacy_assistant_output:
+                    # [issue138-hotfix] Normalize the observed singleton type-less assistant output replay.
+                    item["type"] = "message"
+''',
+)
 
 # vLLM 752a3a504485790a2e8491cacbb35c137339ad34
 # vllm/entrypoints/openai/responses/protocol.py, complete pinned method.
@@ -277,6 +301,33 @@ def _compile(source: str, target: Path) -> None:
         raise PatchError(f"target does not compile: {type(error).__name__}: {error}") from error
 
 
+def _extract_method(source: str, target: Path) -> str:
+    try:
+        tree = ast.parse(source, filename=str(target))
+    except SyntaxError as error:
+        raise PatchError(f"target does not parse: {error}") from error
+
+    matches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "input_item_parsing"
+    ]
+    if len(matches) != 1:
+        raise PatchError(
+            f"expected one input_item_parsing method, found {len(matches)}"
+        )
+    method_node = matches[0]
+    if not method_node.decorator_list or method_node.end_lineno is None:
+        raise PatchError("input_item_parsing method boundaries are unavailable")
+    start_line = min(decorator.lineno for decorator in method_node.decorator_list)
+    lines = source.splitlines(keepends=True)
+    method = "".join(lines[start_line - 1 : method_node.end_lineno])
+    if not method.endswith("\n") or source.count(method) != 1:
+        raise PatchError("input_item_parsing method boundary is not exact")
+    return method
+
+
 def _source_state(source: str, target: Path) -> str:
     alias_count = source.count(TYPE_ALIAS_GUARD)
     field_count = source.count(INPUT_FIELD_GUARD)
@@ -308,6 +359,45 @@ def _source_state(source: str, target: Path) -> str:
         )
     if field_at >= method_at:
         raise PatchError("outer Responses input-union guards are out of order")
+    _compile(source, target)
+    return result
+
+
+def _status_source_state(source: str, target: Path) -> str:
+    alias_count = source.count(TYPE_ALIAS_GUARD)
+    field_count = source.count(INPUT_FIELD_GUARD)
+    if alias_count != 1 or field_count != 1:
+        raise PatchError(
+            "outer Responses input-union guards drifted "
+            f"(alias={alias_count}, input_field={field_count})"
+        )
+
+    alias_at = source.find(TYPE_ALIAS_GUARD)
+    field_at = source.find(INPUT_FIELD_GUARD)
+    method = _extract_method(source, target)
+    method_at = source.find(method)
+    if not alias_at < field_at < method_at:
+        raise PatchError("outer Responses input-union guards are out of order")
+
+    marker_count = source.count(MARKER)
+    if method == OLD_METHOD and marker_count == 0:
+        result = "stock"
+    elif method == NEW_METHOD and marker_count == 1:
+        result = "applied"
+    else:
+        anchor_counts = tuple(method.count(anchor) for anchor in STATUS_ANCHORS)
+        anchor_positions = tuple(method.find(anchor) for anchor in STATUS_ANCHORS)
+        if (
+            marker_count == 1
+            and all(count == 1 for count in anchor_counts)
+            and list(anchor_positions) == sorted(anchor_positions)
+        ):
+            result = "applied-with-extensions"
+        else:
+            raise PatchError(
+                "status input_item_parsing source lock mismatch "
+                f"(marker={marker_count}, anchors={anchor_counts})"
+            )
     _compile(source, target)
     return result
 
@@ -365,12 +455,14 @@ def status(target: Path) -> int:
         if not target.is_file():
             raise PatchError(f"target file not found: {target}")
         source = _decode(target.read_bytes(), target)
-        state = _source_state(source, target)
+        state = _status_source_state(source, target)
     except (OSError, PatchError) as error:
         print(f"[FAIL] {TAG} {error}", file=sys.stderr)
         return 1
     if state == "stock":
         print(f"[OK] {TAG} compatible stock source: {target}")
+    elif state == "applied-with-extensions":
+        print(f"[OK] {TAG} already applied and verified ({state}): {target}")
     else:
         print(f"[OK] {TAG} already applied and verified: {target}")
     return 0

@@ -21,6 +21,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCHER = ROOT / "patches" / "hotfix-vllm-issue138-responses-history.py"
+AGENT_PATCHER = ROOT / "patches" / "hotfix-vllm-codex-agent-message.py"
 PINNED_VLLM_COMMIT = "752a3a504485790a2e8491cacbb35c137339ad34"
 PINNED_PROTOCOL_BLOB = "ba8bc5a40f1bcffe8073cfdb4f0a8995da5e02e4"
 OLD_METHOD_SHA256 = "2412484a81e8679cedf1934287f1b4187a72bf6e8c910c8ecad463b29b79d9d7"
@@ -44,7 +45,16 @@ def load_patcher():
     return module
 
 
+def load_agent_patcher():
+    spec = importlib.util.spec_from_file_location("agent_message_fixture", AGENT_PATCHER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 _PATCHER = load_patcher()
+_AGENT_PATCHER = load_agent_patcher()
 
 # The patcher's exact preimage/postimage method constants, frozen by the
 # independent SHA-256 pins above.
@@ -224,9 +234,26 @@ class SourceLockTests(unittest.TestCase):
         self.assertEqual(after.st_ino, before.st_ino)
 
     def test_status_distinguishes_stock_applied_and_drift_without_writing(self):
+        extended_method = NEW_METHOD.replace(
+            _AGENT_PATCHER.BRANCH_ANCHOR,
+            _AGENT_PATCHER.AGENT_BRANCH,
+            1,
+        )
+        broken_method = NEW_METHOD.replace(
+            '                    item["type"] = "message"',
+            '                    item["kind"] = "message"',
+            1,
+        )
         for label, method, expected, rc in (
             ("stock", OLD_METHOD, "compatible stock source", 0),
             ("applied", NEW_METHOD, "already applied and verified", 0),
+            (
+                "applied with agent_message extension",
+                extended_method,
+                "applied-with-extensions",
+                0,
+            ),
+            ("broken with marker", broken_method, "source lock mismatch", 1),
             ("drift", OLD_METHOD.replace("Specifically", "SpecificalLy", 1), "source lock mismatch", 1),
         ):
             with self.subTest(label=label):
@@ -242,6 +269,14 @@ class SourceLockTests(unittest.TestCase):
                 self.assertEqual(self.target.read_bytes(), raw)
                 after = self.target.stat()
                 self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+
+    def test_apply_still_rejects_agent_message_extension_without_writing(self):
+        extended_method = NEW_METHOD.replace(
+            _AGENT_PATCHER.BRANCH_ANCHOR,
+            _AGENT_PATCHER.AGENT_BRANCH,
+            1,
+        )
+        self.assert_rejected_without_write(protocol_source(extended_method).encode())
 
     def test_missing_target_and_invalid_utf8_fail(self):
         missing = self.root / "missing.py"
