@@ -1,5 +1,9 @@
 ## 2026-09-01
 
+### Added
+
+- **Validated request-priority scheduling control**: `SCHEDULING_POLICY=priority` now passes vLLM's request-level integer `priority` field through to the scheduler, where lower values are admitted before higher values and arrival time breaks ties. The default remains `fcfs`; both the container entrypoint and preflight validator accept only `fcfs` or `priority` and fail before `vllm serve` on malformed input. The resolved launcher profile and env reference expose the active policy, and a CPU gate covers defaults, both accepted values, injection-shaped rejects, validator behavior, CLI quoting, and operator documentation.
+
 ### Fixed
 
 - **Vision-Exp image tokens now use `bias_vl` instead of the text MoE router ([Issue #175](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/issues/175))**: `e_score_correction_bias_vl` was loaded on every layer but `fused_topk_bias` always scored with text bias + `tid2eid`. Placeholder id 129264 is in-vocab, so hash layers 0–2 collapsed every image token onto `tid2eid[129264]`. Image rows now route with `bias_vl` and no hash table; text rows are unchanged; mixed batches split. CUDA graph capture takes the stock text path (no `.item()` on token ids). Recreate both containers after pull (`./stop` then `./start`); restart keeps the old overlay bytes.

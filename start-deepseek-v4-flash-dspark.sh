@@ -863,6 +863,7 @@ print_resolved_profile() {
   echo "  max model len: ${MAX_MODEL_LEN:-1000000}"
   echo "  max num seqs: ${MAX_NUM_SEQS:-6}"
   echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
+  echo "  scheduling policy: ${SCHEDULING_POLICY:-fcfs}"
   echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION:-0.835} (from GPU_MEMORY_UTILIZATION_TEXT=${GPU_MEMORY_UTILIZATION_TEXT:-0.835})"
   echo "  mtp speculative tokens: ${MTP_NUM_TOKENS:-6} (Vision-Exp: >=5 and divisible by 3)"
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"

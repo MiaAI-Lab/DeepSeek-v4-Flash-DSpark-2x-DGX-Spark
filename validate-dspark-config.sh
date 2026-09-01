@@ -50,6 +50,17 @@ case "$DRAFT_SAMPLE_METHOD" in
 esac
 export DRAFT_SAMPLE_METHOD
 
+# Match the compose entrypoint and reject shell/CLI injection before rendering.
+SCHEDULING_POLICY="${SCHEDULING_POLICY:-fcfs}"
+case "$SCHEDULING_POLICY" in
+  fcfs|priority) ;;
+  *)
+    echo "SCHEDULING_POLICY must be one of: fcfs, priority (got: ${SCHEDULING_POLICY})" >&2
+    exit 2
+    ;;
+esac
+export SCHEDULING_POLICY
+
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
 : "${MASTER_PORT:?MASTER_PORT must be set in $ENV_FILE}"
@@ -109,6 +120,7 @@ dspark_validate_numeric_knobs || exit $?
 
 echo "  max num seqs: ${MAX_NUM_SEQS:-6}"
 echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
+echo "  scheduling policy: ${SCHEDULING_POLICY}"
 echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION} (GPU_MEMORY_UTILIZATION_TEXT=${GPU_MEMORY_UTILIZATION_TEXT:-0.835})"
 echo "  spec tokens (MTP_NUM_TOKENS): ${MTP_NUM_TOKENS:-6} with draft_sample_method=${DRAFT_SAMPLE_METHOD} (Vision-Exp: >=5 and divisible by 3)"
 echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-6} + 1) )) (max_num_seqs * (mtp + 1))"
@@ -125,4 +137,4 @@ env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   DSPARK_MODEL="$DSPARK_MODEL" \
   DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--limit-mm-per-prompt|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--scheduling-policy|--limit-mm-per-prompt|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|SCHEDULING_POLICY|DSPARK_REVISION'

@@ -23,6 +23,7 @@ for f in \
   scripts/ci-validate.sh \
   scripts/verify-overlay-sources.sh \
   scripts/test-draft-sample-method-gate.sh \
+  scripts/test-scheduling-policy-gate.sh \
   scripts/test-nccl-fabric-passthrough.sh \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
   scripts/boot-shape-warmup.sh \
@@ -127,6 +128,8 @@ bash scripts/verify-overlay-sources.sh
 ok "verify-overlay-sources"
 bash scripts/test-draft-sample-method-gate.sh -q
 ok "test-draft-sample-method-gate"
+bash scripts/test-scheduling-policy-gate.sh -q
+ok "test-scheduling-policy-gate"
 bash scripts/test-nccl-fabric-passthrough.sh -q
 ok "test-nccl-fabric-passthrough"
 bash scripts/test-boot-shape-warmup.sh -q

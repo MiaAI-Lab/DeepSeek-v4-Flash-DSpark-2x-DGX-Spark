@@ -84,6 +84,9 @@ services:
       TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-0}"
       HF_HUB_DISABLE_XET: "${HF_HUB_DISABLE_XET:-1}"
       DSPARK_MODEL: "${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
+      # vLLM request admission order. `priority` accepts the request-level
+      # `priority` field (lower values run first); `fcfs` preserves stock.
+      SCHEDULING_POLICY: "${SCHEDULING_POLICY:-fcfs}"
       # Issue #26: sparsify SWA prefix-cache checkpoints (one tail per
       # 4096-token segment + replay boundary). Complements the hybrid
       # coordinator hotfix — SWA-min alone still 0/8 at 44K+ x8 because
@@ -314,6 +317,10 @@ services:
           *) echo "DRAFT_SAMPLE_METHOD must be one of: probabilistic, greedy (got: $${DRAFT_SAMPLE_METHOD})" >&2; exit 2 ;;
         esac;
         SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-6},\"draft_sample_method\":\"$${DRAFT_SAMPLE_METHOD}\"}";
+        case "$${SCHEDULING_POLICY:-fcfs}" in
+          fcfs|priority) SCHEDULING_POLICY="$${SCHEDULING_POLICY:-fcfs}" ;;
+          *) echo "SCHEDULING_POLICY must be one of: fcfs, priority (got: $${SCHEDULING_POLICY})" >&2; exit 2 ;;
+        esac;
         case "$${DEFAULT_THINKING:-low}" in
           off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":false}' ;;
           low) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"low"}' ;;
@@ -342,6 +349,7 @@ services:
         --long-prefill-token-threshold ${LONG_PREFILL_TOKEN_THRESHOLD:-1024}
         --max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-6} + 1) ))
         --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
+        --scheduling-policy "$${SCHEDULING_POLICY}"
         --enable-prefix-caching
         --enable-prompt-tokens-details
         --async-scheduling
