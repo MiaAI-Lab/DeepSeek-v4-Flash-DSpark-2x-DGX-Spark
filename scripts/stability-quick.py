@@ -152,16 +152,14 @@ def log(msg: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8888/v1")
-    parser.add_argument("--vl-url", default="http://127.0.0.1:8889/v1")
-    parser.add_argument("--model", default="deepseek-v4-flash-0731")
-    parser.add_argument("--vl-model", default="qwen3-vl-4b")
+    parser.add_argument("--vl-url", default="http://127.0.0.1:8888/v1")
+    parser.add_argument("--model", default="deepseek-v4-flash-vision-exp")
+    parser.add_argument("--vl-model", default="deepseek-v4-flash-vision-exp")
     parser.add_argument(
         "--skip-vl",
         action="store_true",
-        default=os.environ.get("ENABLE_VL_SIDECAR", "0") != "1",
-        help="Skip vision-sidecar checks (readiness probe and phase 3). Defaults to "
-             "skipping unless ENABLE_VL_SIDECAR=1, so the text-only serve profile "
-             "runs out of the box.",
+        default=False,
+        help="Skip native image_url checks on the Vision-Exp API.",
     )
     parser.add_argument(
         "--ladder",
@@ -345,13 +343,13 @@ def main() -> int:
         }
         save()
 
-    # --- Phase 3: vision while holding long 0731 prefix ---
+    # --- Phase 3: native image_url while holding a long prefix ---
     if args.skip_vl:
-        log("Phase 3: vision mid-context SKIPPED (no vision sidecar; --skip-vl)")
+        log("Phase 3: vision mid-context SKIPPED (--skip-vl)")
         report["phases"]["vision_mid"] = {"skipped": True, "ok": True}
         save()
     else:
-        log(f"Phase 3: vision mid-context (0731 prefix ~{args.vision_prefix_tokens})")
+        log(f"Phase 3: native image_url mid-context (prefix ~{args.vision_prefix_tokens})")
         try:
             prefix = build_prompt(
                 args.base_url, args.model, args.vision_prefix_tokens, "vision-prefix"

@@ -8,28 +8,36 @@ usage() {
   cat <<'EOF'
 Usage: ./prepare-dspark-model-cache.sh [--official | --abliterated] [--yes]
 
-Downloads DeepSeek-V4-Flash-0731 weights (official or abliterated) into HF_CACHE
-on this node, then optionally on the worker.
+Downloads DeepSeek-V4-Flash-Vision-Exp weights (official or abliterated) into HF_CACHE
+on this node, then onto the worker (default DSPARK_WORKER_HF_NFS=0). Set
+DSPARK_WORKER_HF_NFS=1 to skip the worker copy; start then exports this cache over NFS.
 
-  --official      Download deepseek-ai/DeepSeek-V4-Flash-0731 (sets ABLITERATED=0)
+  --official      Download deepseek-ai/DeepSeek-V4-Flash-Vision-Exp (sets ABLITERATED=0)
   --abliterated   Download Keys abliterated weights (sets ABLITERATED=1)
   --yes           Non-interactive: use ABLITERATED from .env.dspark (or 0)
 
-Official downloads default to DSPARK_REVISION=9e165c30… (tested pin). Override
+Official downloads default to DSPARK_REVISION=86f746b3… (Vision-Exp pin). Override
 via DSPARK_REVISION in .env.dspark, or clear it to follow tip of main.
-Abliterated uses DSPARK_REVISION_ABLITERATED (default: unpinned).
+Abliterated uses DSPARK_REVISION_ABLITERATED (default: unpinned). The Hub id is
+gated (auto-approve after RESPONSIBLE_USE.md). Prefer overlaying the 26 edited
+shards onto the already-cached official Vision-Exp dump
+(scripts/overlay-vision-exp-ablit-cache.py) instead of re-fetching 157 GiB.
+
+Hub auth is automatic when HF_TOKEN or HUGGING_FACE_HUB_TOKEN is exported in
+the calling shell (it wins over .env.dspark). Otherwise prepare uses the env
+file, then ~/.cache/huggingface/token from huggingface-cli login.
 
 With no flags and a TTY, you are asked which checkpoint to download.
 Worker recurse (PREPARE_WORKER=0) never re-asks — it uses the already-chosen model.
-
-Optional / experimental: set PREPARE_VL_SIDECAR_MODEL=1 to also download
-VL_SIDECAR_MODEL (Qwen3-VL) on head + worker. Default is 0 (text-only ship).
-See README §Experimental: Vision.
 EOF
 }
 
 CLI_CHOICE=""
 ASSUME_YES=0
+# Snapshot Hub credentials from the calling shell before .env.dspark is
+# sourced — an empty HF_TOKEN= in the env file must not wipe an exported token.
+_SHELL_HF_TOKEN="${HF_TOKEN-}"
+_SHELL_HF_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --official) CLI_CHOICE=0 ;;
@@ -56,21 +64,66 @@ if [ -n "${THIS_NODE_HF_CACHE:-}" ]; then
   HF_CACHE="$THIS_NODE_HF_CACHE"
 fi
 
-DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
-DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
-# Official tested pin (issue #19). Override with DSPARK_REVISION=<sha> or clear with
+DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
+DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4Flash-Vision-EXP-ablit}"
+# Official tested pin. Override with DSPARK_REVISION=<sha> or clear with
 # DSPARK_REVISION= to follow tip of main. Abliterated uses DSPARK_REVISION_ABLITERATED
 # (default empty = tip of that repo).
-DEFAULT_OFFICIAL_REVISION="9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
+DEFAULT_OFFICIAL_REVISION="86f746b36186f0e567729a5c06a8c918caba82a9"
 : "${HF_CACHE:=$HOME/.cache/huggingface}"
 : "${HF_DOWNLOAD_WORKERS:=1}"
 : "${DSPARK_VLLM_IMAGE:=vllm-dspark-runtime:dspark-nvfp4-stage-c}"
 # Anemll image ships python at /usr/bin/python3 (Stage-C used /opt/env/bin/python).
 : "${IMAGE_PYTHON:=/usr/bin/python3}"
-# VL sidecar is optional/experimental (TP=2). Default off for the text-only ship;
-# set PREPARE_VL_SIDECAR_MODEL=1 (and ENABLE_VL_SIDECAR=1) when experimenting.
-: "${VL_SIDECAR_MODEL:=cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit}"
-: "${PREPARE_VL_SIDECAR_MODEL:=0}"
+
+# Hugging Face token. Never printed. docker inspect on the short-lived
+# download container can still show it, same as any -e secret.
+# Precedence: exported shell env → .env.dspark → huggingface-cli token file.
+_HF_TOKEN_SRC=""
+if [ -n "${_SHELL_HF_TOKEN}" ]; then
+  HF_TOKEN="${_SHELL_HF_TOKEN}"
+  _HF_TOKEN_SRC="shell HF_TOKEN"
+elif [ -n "${_SHELL_HF_HUB_TOKEN}" ]; then
+  HF_TOKEN="${_SHELL_HF_HUB_TOKEN}"
+  _HF_TOKEN_SRC="shell HUGGING_FACE_HUB_TOKEN"
+else
+  HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+  if [ -n "$HF_TOKEN" ]; then
+    _HF_TOKEN_SRC=".env.dspark"
+  fi
+fi
+if [ -z "$HF_TOKEN" ]; then
+  for _hf_token_file in \
+    "${HF_CACHE}/token" \
+    "${HOME}/.cache/huggingface/token"
+  do
+    if [ -f "$_hf_token_file" ]; then
+      HF_TOKEN="$(tr -d '[:space:]' < "$_hf_token_file")"
+      if [ -n "$HF_TOKEN" ]; then
+        _HF_TOKEN_SRC="$_hf_token_file"
+        break
+      fi
+    fi
+  done
+  unset _hf_token_file
+fi
+unset _SHELL_HF_TOKEN _SHELL_HF_HUB_TOKEN
+case "${HF_TOKEN}" in
+  *$'\n'*|*$'\r'*)
+    echo "error: HF_TOKEN must be a single line" >&2
+    exit 2
+    ;;
+esac
+DOCKER_HF_TOKEN_ARGS=()
+WORKER_HF_TOKEN_ENV=""
+if [ -n "$HF_TOKEN" ]; then
+  DOCKER_HF_TOKEN_ARGS=(-e "HF_TOKEN=${HF_TOKEN}" -e "HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}")
+  WORKER_HF_TOKEN_ENV="HF_TOKEN=$(printf '%q' "$HF_TOKEN") HUGGING_FACE_HUB_TOKEN=$(printf '%q' "$HF_TOKEN")"
+  echo "prepare: Hugging Face token: set (from ${_HF_TOKEN_SRC}; redacted)" >&2
+else
+  echo "prepare: Hugging Face token: unset (anonymous Hub; slower / rate-limited)" >&2
+fi
+unset _HF_TOKEN_SRC
 
 resolve_revision() {
   # Export a single DSPARK_REVISION for prepare + compose (may be empty = unpin).
@@ -123,7 +176,7 @@ resolve_checkpoint() {
   elif [ -t 0 ] && [ -t 1 ]; then
     local default="${ABLITERATED:-0}"
     echo "" >&2
-    echo "Which DeepSeek-V4-Flash-0731 checkpoint should be downloaded?" >&2
+    echo "Which DeepSeek-V4-Flash checkpoint should be downloaded?" >&2
     echo "  [0] Official  — $DSPARK_MODEL_OFFICIAL" >&2
     echo "  [1] Abliterated — $DSPARK_MODEL_ABLITERATED" >&2
     echo "Current .env.dspark ABLITERATED=${ABLITERATED:-unset} (default answer: $default)" >&2
@@ -202,6 +255,7 @@ run_download() {
     -e DSPARK_MODEL="$model" \
     -e DSPARK_REVISION="$revision" \
     -e HF_DOWNLOAD_WORKERS="$HF_DOWNLOAD_WORKERS" \
+    "${DOCKER_HF_TOKEN_ARGS[@]}" \
     --entrypoint "$IMAGE_PYTHON" \
     "$DSPARK_VLLM_IMAGE" \
     - <<'PY'
@@ -215,6 +269,9 @@ kwargs = {
     "repo_id": repo_id,
     "max_workers": int(os.environ.get("HF_DOWNLOAD_WORKERS", "1")),
 }
+token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or "").strip()
+if token:
+    kwargs["token"] = token
 if revision:
     kwargs["revision"] = revision
 path = Path(snapshot_download(**kwargs))
@@ -280,26 +337,34 @@ PY
 run_download "$DSPARK_MODEL" "${DSPARK_REVISION:-}"
 verify_cache "$DSPARK_MODEL" "${DSPARK_REVISION:-}"
 
-# Optional / experimental VL weights (default off — text-only ship).
-# TP=2 needs the cache on every rank when enabled (head prepare + worker recurse).
-# No revision pin — tip of the VL repo (override with a future VL_SIDECAR_REVISION if needed).
-if [ "${PREPARE_VL_SIDECAR_MODEL:-0}" = "1" ]; then
-  echo "prepare: VL sidecar model ($VL_SIDECAR_MODEL) [experimental]" >&2
-  run_download "$VL_SIDECAR_MODEL" ""
-  verify_cache "$VL_SIDECAR_MODEL" ""
-else
-  echo "prepare: skipping VL sidecar weights (PREPARE_VL_SIDECAR_MODEL=0; text-only default)" >&2
-fi
-
 if [ "${PREPARE_WORKER:-1}" = "1" ]; then
   : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE or environment}"
-  WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
-  WORKER_HF_CACHE="${WORKER_HF_CACHE:-$HF_CACHE}"
-  need_cmd ssh
-  need_cmd scp
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "mkdir -p '$WORKER_DIR' '$WORKER_HF_CACHE'"
-  verify_worker_image
-  scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
-  scp "$ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
-  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ABLITERATED='$ABLITERATED' DSPARK_REVISION='${DSPARK_REVISION:-}' DSPARK_REVISION_ABLITERATED='${DSPARK_REVISION_ABLITERATED:-}' ./prepare-dspark-model-cache.sh --yes"
+  if [ "${DSPARK_WORKER_HF_NFS:-0}" = "1" ]; then
+    echo "prepare: DSPARK_WORKER_HF_NFS=1 — checkpoint stays on this node ($HF_CACHE)."
+    echo "prepare: worker will mount it over NFS at start (no second Hub download)."
+    echo "prepare: set DSPARK_WORKER_HF_NFS=0 to copy weights onto the worker instead."
+  else
+    WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
+    WORKER_HF_CACHE="${WORKER_HF_CACHE:-$HF_CACHE}"
+    need_cmd ssh
+    need_cmd scp
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "mkdir -p '$WORKER_DIR' '$WORKER_HF_CACHE'"
+    verify_worker_image
+    scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER_HOST}:${WORKER_DIR}/prepare-dspark-model-cache.sh"
+    scp "$ENV_FILE" "${WORKER_HOST}:${WORKER_DIR}/.env.dspark"
+    ssh "$WORKER_HOST" "cd '$WORKER_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER_HF_CACHE' PREPARE_WORKER=0 ABLITERATED='$ABLITERATED' DSPARK_REVISION='${DSPARK_REVISION:-}' DSPARK_REVISION_ABLITERATED='${DSPARK_REVISION_ABLITERATED:-}' ${WORKER_HF_TOKEN_ENV} ./prepare-dspark-model-cache.sh --yes"
+    if [ -n "${WORKER2_HOST:-}" ]; then
+      WORKER2_DIR="${WORKER2_SCRIPT_DIR:-${WORKER2_DIR:-$WORKER_DIR}}"
+      WORKER2_HF_CACHE="${WORKER2_HF_CACHE:-$WORKER_HF_CACHE}"
+      echo "prepare: also downloading onto worker2 $WORKER2_HOST → $WORKER2_HF_CACHE"
+      ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER2_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
+        echo "Missing worker2 Docker image $DSPARK_VLLM_IMAGE." >&2
+        exit 1
+      }
+      ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER2_HOST" "mkdir -p '$WORKER2_DIR' '$WORKER2_HF_CACHE'"
+      scp "$SCRIPT_DIR/prepare-dspark-model-cache.sh" "${WORKER2_HOST}:${WORKER2_DIR}/prepare-dspark-model-cache.sh"
+      scp "$ENV_FILE" "${WORKER2_HOST}:${WORKER2_DIR}/.env.dspark"
+      ssh "$WORKER2_HOST" "cd '$WORKER2_DIR' && chmod +x ./prepare-dspark-model-cache.sh && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS ENV_FILE='.env.dspark' THIS_NODE_HF_CACHE='$WORKER2_HF_CACHE' PREPARE_WORKER=0 ABLITERATED='$ABLITERATED' DSPARK_REVISION='${DSPARK_REVISION:-}' DSPARK_REVISION_ABLITERATED='${DSPARK_REVISION_ABLITERATED:-}' ${WORKER_HF_TOKEN_ENV} ./prepare-dspark-model-cache.sh --yes"
+    fi
+  fi
 fi

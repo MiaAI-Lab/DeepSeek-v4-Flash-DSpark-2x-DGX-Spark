@@ -189,7 +189,7 @@ def launcher_slice(start: str, end: str) -> str:
     return SOURCE[begin:SOURCE.index(end, begin)]
 
 
-LAUNCHER_ENV_BLOCK = launcher_slice("_dspark_env_clean=", "# Vision mode flag")
+LAUNCHER_ENV_BLOCK = launcher_slice("_dspark_env_clean=", "# GPU util comes from GPU_MEMORY_UTILIZATION_TEXT")
 PREFLIGHT_BLOCK = launcher_slice(
     "# DSPARK redaction pre-flight (begin)",
     "# DSPARK redaction pre-flight (end)",

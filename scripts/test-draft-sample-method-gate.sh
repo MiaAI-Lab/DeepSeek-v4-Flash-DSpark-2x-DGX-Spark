@@ -38,8 +38,8 @@ printf '%s\n' "$fragment" >"$tmp/fragment.sh"
 # Probe appended after the fragment: only reached when the gate accepts.
 printf 'printf "%%s" "$SPECULATIVE_CONFIG"\n' >>"$tmp/fragment.sh"
 
-OLD_DEFAULT='{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'
-GREEDY_JSON='{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"greedy"}'
+OLD_DEFAULT='{"method":"dspark","num_speculative_tokens":6,"draft_sample_method":"probabilistic"}'
+GREEDY_JSON='{"method":"dspark","num_speculative_tokens":6,"draft_sample_method":"greedy"}'
 
 run_case() { # $1=mode(unset|set) $2=value-if-set -> stdout; rc in $RC
   RC=0

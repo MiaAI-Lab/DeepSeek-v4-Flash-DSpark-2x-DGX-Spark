@@ -18,8 +18,11 @@ def extract_before(start: str, end: str) -> str:
     return SOURCE[i:SOURCE.index(end, i)]
 
 
-ENV_BLOCK = extract_before("_dspark_env_clean=", "# Vision mode flag")
-PUBLISH_BLOCK = extract_before("# Stream into a private sibling", "SIDECAR_COMPOSE_FILE=")
+ENV_BLOCK = extract_before("_dspark_env_clean=", "# GPU util comes from GPU_MEMORY_UTILIZATION_TEXT")
+PUBLISH_BLOCK = extract_before(
+    "# Stream into a private sibling",
+    'ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"',
+)
 
 
 def run_env(content: bytes, extra: str = "") -> subprocess.CompletedProcess:
@@ -105,8 +108,8 @@ class EnvNormalisationTest(unittest.TestCase):
     def test_all_local_compose_calls_use_normalized_snapshot(self):
         self.assertNotIn('--env-file "$ENV_FILE"', SOURCE)
         self.assertIn('docker compose -p "$PROJECT_NAME" --env-file "$COMPOSE_ENV_FILE"', SOURCE)
-        self.assertIn('--env-file "$COMPOSE_ENV_FILE" -f "$SIDECAR_COMPOSE_FILE" up -d', SOURCE)
-        self.assertIn('--env-file "$COMPOSE_ENV_FILE" -f "$SIDECAR_COMPOSE_FILE" logs', SOURCE)
+        self.assertNotIn("SIDECAR_COMPOSE_FILE", SOURCE)
+        self.assertNotIn("docker-compose.vl-sidecar.yml", SOURCE)
 
 
 class WorkerPublishTest(unittest.TestCase):

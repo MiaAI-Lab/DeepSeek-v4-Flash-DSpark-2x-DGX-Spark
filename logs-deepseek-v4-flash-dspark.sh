@@ -19,6 +19,8 @@ fi
 
 cd "$SCRIPT_DIR"
 WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
+WORKER2_HOST="${WORKER2_HOST:-}"
+WORKER2_DIR="${WORKER2_SCRIPT_DIR:-${WORKER2_DIR:-$WORKER_DIR}}"
 
 show_logs() {
   local project="$1"
@@ -28,6 +30,11 @@ show_logs() {
   echo "== worker logs: $project =="
   ssh "$WORKER_HOST" "cd '$WORKER_DIR' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml logs --tail='$TAIL' vllm-dspark" || true
   echo
+  if [ -n "${WORKER2_HOST:-}" ]; then
+    echo "== worker2 logs: $project =="
+    ssh "$WORKER2_HOST" "cd '${WORKER2_DIR:-$WORKER_DIR}' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml logs --tail='$TAIL' vllm-dspark" || true
+    echo
+  fi
 }
 
 show_logs "$PROJECT_NAME"

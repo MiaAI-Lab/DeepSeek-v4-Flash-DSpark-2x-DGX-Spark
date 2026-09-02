@@ -69,7 +69,7 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         line: str,
         *,
         fail_step: str | None = None,
-        env_extra: dict[str, str] | None = None,
+        env_extra: dict[str, str | None] | None = None,
         missing_encoding: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], list[str], bool]:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -99,6 +99,10 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
                     "DSPARK_ENABLE_ISSUE31_GPU_HOTFIX": "0",
                     "DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX": "0",
                     "DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX": "0",
+                    # Opt-in (compose default 0); the chain tests model them
+                    # enabled so their fail-closed behaviour is covered.
+                    "DSPARK_ENABLE_ADAPTIVE_CHUNK": "1",
+                    "DSPARK_ENABLE_REPLICATE_MARKOV": "1",
                 }
             )
             env.pop("DSPARK_ENABLE_ISSUE138_RESPONSES_HISTORY_COMPAT", None)
@@ -111,7 +115,11 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
                 env.pop("FAIL_STEP", None)
                 env.pop("FAIL_CODE", None)
             if env_extra:
-                env.update(env_extra)
+                for key, value in env_extra.items():
+                    if value is None:
+                        env.pop(key, None)
+                    else:
+                        env[key] = value
 
             proc = subprocess.run(
                 ["bash", "-c", command],
@@ -222,8 +230,11 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
             invocations,
             [
                 "hotfix-vllm-issue138-responses-history.py",
+                "hotfix-dsv4-vision-exp.py",
                 "hotfix-vllm-empty-encoder-output.py",
                 "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                "hotfix-dsv4-adaptive-prefill-chunk.py",
+                "hotfix-dsv4-replicate-markov-head.py",
                 "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
                 "hotfix-dsv4-issue26-hybrid-swa-min.py",
                 "hotfix-dsv4-issue133-triton-specialization.py",
@@ -302,11 +313,15 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
             "DSPARK_ISSUE138_HOTFIX='./patches/"
             "hotfix-vllm-issue138-responses-history.py'"
         )
-        self.assertEqual(source.count(worker_env), 2)
+        self.assertEqual(source.count(worker_env), 4)
         self.assertIn(
             'scp "$DSPARK_ISSUE138_HOTFIX" "${WORKER_HOST}:'
             '${REMOTE_WORKER_DIR}/patches/'
             'hotfix-vllm-issue138-responses-history.py"',
+            source,
+        )
+        self.assertIn(
+            "NODE_RANK=2 HEADLESS=1 $WORKER2_HF_COMPOSE_ENV",
             source,
         )
 
@@ -316,8 +331,11 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         self.assertEqual(
             invocations,
             [
+                "hotfix-dsv4-vision-exp.py",
                 "hotfix-vllm-empty-encoder-output.py",
                 "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                "hotfix-dsv4-adaptive-prefill-chunk.py",
+                "hotfix-dsv4-replicate-markov-head.py",
                 "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
                 "hotfix-dsv4-issue26-hybrid-swa-min.py",
                 "hotfix-dsv4-issue133-triton-specialization.py",
@@ -328,8 +346,11 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
 
     def test_each_runtime_patcher_failure_blocks_later_steps_and_service_exec(self):
         order = [
+            "hotfix-dsv4-vision-exp.py",
             "hotfix-vllm-empty-encoder-output.py",
             "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+            "hotfix-dsv4-adaptive-prefill-chunk.py",
+            "hotfix-dsv4-replicate-markov-head.py",
             "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
             "hotfix-dsv4-issue26-hybrid-swa-min.py",
             "hotfix-dsv4-issue133-triton-specialization.py",
@@ -347,8 +368,11 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
 
     def test_issue141_unset_zero_and_nonone_are_byte_neutral(self):
         expected = [
+            "hotfix-dsv4-vision-exp.py",
             "hotfix-vllm-empty-encoder-output.py",
             "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+            "hotfix-dsv4-adaptive-prefill-chunk.py",
+            "hotfix-dsv4-replicate-markov-head.py",
             "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
             "hotfix-dsv4-issue26-hybrid-swa-min.py",
             "hotfix-dsv4-issue133-triton-specialization.py",
@@ -380,9 +404,12 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         self.assertEqual(
             invocations,
             [
+                "hotfix-dsv4-vision-exp.py",
                 "hotfix-dsv4-issue141-sparse-mla-decode-chunk.py",
                 "hotfix-vllm-empty-encoder-output.py",
                 "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                "hotfix-dsv4-adaptive-prefill-chunk.py",
+                "hotfix-dsv4-replicate-markov-head.py",
                 "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
                 "hotfix-dsv4-issue26-hybrid-swa-min.py",
                 "hotfix-dsv4-issue133-triton-specialization.py",
@@ -400,9 +427,37 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertEqual(
             invocations,
-            ["hotfix-dsv4-issue141-sparse-mla-decode-chunk.py"],
+            [
+                "hotfix-dsv4-vision-exp.py",
+                "hotfix-dsv4-issue141-sparse-mla-decode-chunk.py",
+            ],
         )
         self.assertFalse(reached)
+
+    def test_easy_knobs_default_off_skip_adaptive_and_markov_patchers(self):
+        for adaptive, markov in ((None, None), ("0", "0"), ("2", "true")):
+            with self.subTest(adaptive=adaptive, markov=markov):
+                proc, invocations, reached = self._run_line(
+                    self.runtime_line,
+                    env_extra={
+                        "DSPARK_ENABLE_ADAPTIVE_CHUNK": adaptive,
+                        "DSPARK_ENABLE_REPLICATE_MARKOV": markov,
+                    },
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertEqual(
+                    invocations,
+                    [
+                        "hotfix-dsv4-vision-exp.py",
+                        "hotfix-vllm-empty-encoder-output.py",
+                        "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                        "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
+                        "hotfix-dsv4-issue26-hybrid-swa-min.py",
+                        "hotfix-dsv4-issue133-triton-specialization.py",
+                        "hotfix-dsv4-suppress-stops-in-reasoning.py",
+                    ],
+                )
+                self.assertTrue(reached)
 
     def test_suppress_stops_skip_switch_keeps_other_patchers_fail_closed(self):
         proc, invocations, reached = self._run_line(
@@ -413,8 +468,11 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         self.assertEqual(
             invocations,
             [
+                "hotfix-dsv4-vision-exp.py",
                 "hotfix-vllm-empty-encoder-output.py",
                 "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                "hotfix-dsv4-adaptive-prefill-chunk.py",
+                "hotfix-dsv4-replicate-markov-head.py",
                 "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
                 "hotfix-dsv4-issue26-hybrid-swa-min.py",
                 "hotfix-dsv4-issue133-triton-specialization.py",
