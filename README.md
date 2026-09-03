@@ -603,14 +603,13 @@ DSPARK_RESPONSES_STORE_MAX_ENTRIES=256
 Enabled starts source-check and apply the patch fail-closed on every rank.
 The cap covers terminal response/message/event bundles; active work can
 temporarily exceed it, and it is not a retained-byte limit. Retrieval and
-`previous_response_id` use refresh LRU recency. State is process-local and is
-lost on container recreation. Recreate every rank when changing either value;
-a plain restart preserves patched writable-layer bytes.
+`previous_response_id` use refresh LRU recency. Stored state is process-local
+and is lost on any process restart. Recreate every rank when changing either
+value; a Docker restart preserves patched writable-layer bytes, not state.
 
-The store remains off by default. A continuation `response_id` 404 while the
-other gates pass therefore indicates configuration, not a verifier regression.
-The verifier treats a continuation 404 as an explicit store-configuration
-failure rather than silently accepting a stateless run.
+The store remains off by default. The verifier treats a continuation
+`response_id` 404 as an explicit store-configuration failure rather than
+silently accepting a stateless run.
 
 After the server is ready, run the dependency-free live verifier to check
 Responses text/SSE, stateful tool continuation, strict JSON schema, reasoning,

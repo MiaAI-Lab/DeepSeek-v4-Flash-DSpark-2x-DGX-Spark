@@ -326,9 +326,9 @@ removed on error or early close unless a terminal response was stored.
 
 Queued, in-progress, pinned, and tracked-producer entries can temporarily exceed
 the terminal cap. The setting bounds entry count, not bytes or concurrent
-request admission. State remains memory-only and is lost on container
-recreation. Recreate every rank when changing either setting; a Docker restart
-preserves the patched writable layer.
+request admission. Stored state remains memory-only and is lost on any process
+restart. Recreate every rank when changing either setting; a Docker restart
+preserves the patched writable layer, not stored Responses state.
 
 The patcher accepts only the exact stock or patched full-file hash, compiles the
 postimage, preserves file mode, publishes through a same-directory atomic
