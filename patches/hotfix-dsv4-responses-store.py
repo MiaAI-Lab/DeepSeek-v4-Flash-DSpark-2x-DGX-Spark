@@ -2,8 +2,10 @@
 """Bound the pinned vLLM Responses API terminal-state store.
 
 The patch is invoked only when ``VLLM_ENABLE_RESPONSES_API_STORE=1``. It keeps
-one LRU order for response, rendered-message, and background-event state;
-queued, in-progress, and actively replayed responses are never evicted.
+one LRU order for response, rendered-message, and background-event state.
+Queued, in-progress, pinned-continuation, and tracked-producer entries are not
+evicted; an active reader retains its captured event state if the dictionary
+bundle is later evicted.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ DEFAULT_PATH = Path(
     "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/responses/serving.py"
 )
 PREIMAGE_SHA256 = "fe3a48ab09c516835ce6dd1471c06cc784ae7504eaa7af7f10574704106830d8"
-POSTIMAGE_SHA256 = "350b88e0c39ba991ceb42d25be28b93f70bde2506412c51a7d1f545cf9ca9b5c"
+POSTIMAGE_SHA256 = "1b0033131a34e03a2e129743258f5da81b3e60e979072920153f6d09bf4e5d8f"
 MARK = "# [dspark-responses-store] bounded terminal store"
 
 WARNING_ANCHOR = """        self.enable_store = envs.VLLM_ENABLE_RESPONSES_API_STORE
@@ -435,8 +437,16 @@ READER_REPLACEMENT = """    async def responses_background_stream_generator(
             deque[StreamingResponsesResponse],
             asyncio.Event,
             asyncio.Event,
-        ],
+        ] | None = None,
     ) -> AsyncGenerator[StreamingResponsesResponse, None]:
+        if event_state is None:
+            event_state = self.event_store.get(response_id)
+            if event_state is None:
+                raise VLLMValidationError(
+                    f"Unknown response_id: {response_id}",
+                    parameter="response_id",
+                    value=response_id,
+                )
         event_deque, new_event_signal, done_signal = event_state
         current_index = 0 if starting_after is None else starting_after + 1
 
@@ -476,7 +486,10 @@ RETRIEVE_REPLACEMENT = """        async with self.response_store_lock:
 
         if stream:
             if event_state is None:
-                return self._make_not_found_error(response_id)
+                return self.responses_background_stream_generator(
+                    response_id,
+                    starting_after,
+                )
             return self.responses_background_stream_generator(
                 response_id,
                 starting_after,

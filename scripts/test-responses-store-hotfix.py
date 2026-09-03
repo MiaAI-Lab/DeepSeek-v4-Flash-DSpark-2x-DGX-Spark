@@ -266,6 +266,10 @@ def response(response_id: str, status: str = "completed"):
     return types.SimpleNamespace(id=response_id, status=status)
 
 
+async def collect_async(generator):
+    return [item async for item in generator]
+
+
 class ResponsesStoreHotfixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -351,6 +355,51 @@ class ResponsesStoreHotfixTests(unittest.TestCase):
             self.assertNotIn("continued", probe.msg_store)
 
         asyncio.run(exercise())
+
+    def test_retrieve_refreshes_lru_before_terminal_eviction(self):
+        async def exercise():
+            probe = self.make_store(capacity=2)
+            await probe._store_response(response("old"))
+            await probe._store_response(response("new"))
+            retrieve = method_from_source(self.source, "retrieve_responses")
+
+            retrieved = await retrieve(probe, "old", None, False)
+            self.assertEqual(retrieved.id, "old")
+            self.assertEqual(list(probe.response_store), ["new", "old"])
+
+            await probe._store_response(response("rollover"))
+            self.assertEqual(list(probe.response_store), ["old", "rollover"])
+
+            class ValidationError(Exception):
+                def __init__(self, message, **_):
+                    super().__init__(message)
+
+            reader = method_from_source(
+                self.source,
+                "responses_background_stream_generator",
+                {"VLLMValidationError": ValidationError},
+            )
+            probe.responses_background_stream_generator = types.MethodType(
+                reader, probe
+            )
+            missing_event_stream = await retrieve(probe, "old", None, True)
+            with self.assertRaisesRegex(ValidationError, "Unknown response_id"):
+                await collect_async(missing_event_stream)
+
+        asyncio.run(exercise())
+
+    def test_terminal_completion_does_not_overwrite_cancelled_status(self):
+        async def exercise():
+            probe = self.make_store(capacity=1)
+            probe.response_store["request"] = response("request", "cancelled")
+            await probe._store_response(
+                response("request", "completed"),
+                preserve_cancelled=True,
+            )
+            self.assertEqual(probe.response_store["request"].status, "cancelled")
+
+        asyncio.run(exercise())
+
 
     def test_tracked_terminal_producer_is_pruned_only_after_callback(self):
         async def exercise():
@@ -474,10 +523,22 @@ class ResponsesStoreHotfixTests(unittest.TestCase):
 
         asyncio.run(exercise())
 
-    def test_background_cancellation_terminalizes_before_task_finishes(self):
+    def test_background_cancellation_terminalizes_and_unblocks_waiting_reader(self):
         async def exercise():
             probe = self.make_store(capacity=1)
             probe.response_store["cancelled"] = response("cancelled", "in_progress")
+            events = (deque(), asyncio.Event(), asyncio.Event())
+            probe.event_store["cancelled"] = events
+            reader = method_from_source(
+                self.source, "responses_background_stream_generator"
+            )
+            reader_task = asyncio.create_task(
+                collect_async(
+                    reader(probe, "cancelled", event_state=events)
+                )
+            )
+            await asyncio.sleep(0)
+
             task = asyncio.create_task(asyncio.sleep(60))
             probe.background_tasks["cancelled"] = task
             task.add_done_callback(
@@ -491,6 +552,8 @@ class ResponsesStoreHotfixTests(unittest.TestCase):
             await asyncio.sleep(0)
             self.assertEqual(probe.response_store["cancelled"].status, "cancelled")
             self.assertNotIn("cancelled", probe.background_tasks)
+            self.assertTrue(events[2].is_set())
+            self.assertEqual(await asyncio.wait_for(reader_task, 1), [])
 
         asyncio.run(exercise())
 

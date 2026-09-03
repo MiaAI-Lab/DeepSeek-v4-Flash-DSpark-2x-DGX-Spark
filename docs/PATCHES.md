@@ -310,7 +310,7 @@ The target is pinned vLLM `752a3a504`:
 ```text
 /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/responses/serving.py
 stock SHA-256  fe3a48ab09c516835ce6dd1471c06cc784ae7504eaa7af7f10574704106830d8
-patched SHA-256 350b88e0c39ba991ceb42d25be28b93f70bde2506412c51a7d1f545cf9ca9b5c
+patched SHA-256 1b0033131a34e03a2e129743258f5da81b3e60e979072920153f6d09bf4e5d8f
 ```
 
 `DSPARK_RESPONSES_STORE_MAX_ENTRIES` is a positive terminal-entry cap
