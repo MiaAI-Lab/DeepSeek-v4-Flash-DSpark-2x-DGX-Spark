@@ -15,6 +15,8 @@ StepCurve = Callable[[int], float]
 _STACKED_PARAM_NAME_MAPPING = (
     ("attn.fused_wqa_wkv", ".attn.wq_a", 0),
     ("attn.fused_wqa_wkv", ".attn.wkv", 1),
+    ("shared_experts.gate_up_proj", ".shared_experts.w1", 0),
+    ("shared_experts.gate_up_proj", ".shared_experts.w3", 1),
 )
 
 

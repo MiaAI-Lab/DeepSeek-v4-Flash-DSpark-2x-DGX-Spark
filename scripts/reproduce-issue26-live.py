@@ -12,10 +12,14 @@ Protocol from issue #26:
 
 Reports per-wave aggregate cache-hit ratio and per-lane cached_tokens.
 """
-import json, time, urllib.request, sys, threading, statistics
+import json, os, time, urllib.request, sys, threading, statistics
 
-API = "http://127.0.0.1:8888"
-MODEL = "deepseek-v4-flash-0731"
+# Endpoint/model are overridable the same way reproduce-issue43-live.py already
+# does it; the hardcoded defaults only match a deployment served on 8888 under
+# the recipe's default model name, so a rig serving on another port or with a
+# custom SERVED_MODEL_NAME could not run this repro at all.
+API = os.environ.get("DSPARK_API", "http://127.0.0.1:8888")
+MODEL = os.environ.get("DSPARK_MODEL", "deepseek-v4-flash-0731")
 N_LANES = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 TARGET_IN = int(sys.argv[2]) if len(sys.argv) > 2 else 32768
 OUT = 256

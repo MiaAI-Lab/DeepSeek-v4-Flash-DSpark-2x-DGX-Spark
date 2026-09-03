@@ -73,5 +73,48 @@ class ThinkingBudgetGpuHotfixTests(unittest.TestCase):
         self.assertNotIn("prefill_token_ids.index", self.source)
 
 
+class ComposeWiringTest(unittest.TestCase):
+    """Static OFF-default wiring: the patch ships to the worker but is
+    invoked only when DSPARK_ENABLE_ISSUE31_GPU_HOTFIX is exactly 1,
+    fail-closed via `|| exit 1`."""
+
+    def setUp(self):
+        self.compose = (ROOT / "docker-compose.dspark.yml").read_text(encoding="utf-8")
+        self.env_example = (ROOT / ".env.dspark.example").read_text(encoding="utf-8")
+        self.start = (ROOT / "start-deepseek-v4-flash-dspark.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_env_passthrough_defaults_off(self):
+        self.assertIn(
+            'DSPARK_ENABLE_ISSUE31_GPU_HOTFIX: "${DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0}"',
+            self.compose,
+        )
+
+    def test_entrypoint_invocation_gated_and_fail_closed(self):
+        gated = (
+            'if [ "$${DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0}" = "1" ]; then '
+            "python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py || exit 1; fi;"
+        )
+        self.assertIn(gated, self.compose)
+        for line in self.compose.splitlines():
+            if "python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py" in line:
+                self.assertIn('DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0}" = "1"', line)
+                self.assertIn("|| exit 1", line)
+
+    def test_env_example_documents_default_off(self):
+        self.assertIn("DSPARK_ENABLE_ISSUE31_GPU_HOTFIX=0", self.env_example)
+
+    def test_start_smoke_omits_budget_unless_flag_on(self):
+        self.assertIn(
+            'if [ "${DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0}" = "1" ]; then',
+            self.start,
+        )
+        self.assertIn(
+            "Running minimal OpenAI-compatible chat request (stock V2; no thinking_token_budget)...",
+            self.start,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

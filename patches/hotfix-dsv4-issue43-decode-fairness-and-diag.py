@@ -61,11 +61,16 @@ in-place inside the container (called from the compose entrypoint before
 ``exec vllm serve``).
 """
 from pathlib import Path
+import sys
 
 P = Path("/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py")
-src = P.read_text()
-
 MARK = "# [issue43-hotfix]"
+if len(sys.argv) > 1 and sys.argv[1] == "--status":
+    status_src = P.read_text() if P.is_file() else ""
+    print("issue43 decode-fairness + diag     :",
+          "APPLIED" if MARK in status_src else "NOT APPLIED")
+    raise SystemExit(0)
+src = P.read_text()
 if MARK in src:
     print(f"[issue43-hotfix] already applied to {P}")
     raise SystemExit(0)

@@ -61,6 +61,11 @@ class SuppressStopsPatchTest(unittest.TestCase):
         self.assertTrue(status.startswith("missing"))
         self.assertEqual(new, "not a detokenizer\n")
 
+    def test_cli_fails_when_target_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "detokenizer.py"
+            self.assertEqual(self.mod.main(["hotfix", str(missing)]), 1)
+
     def test_apply_live_anemll_snapshot_if_present(self):
         snap = Path("/tmp/anemll-detokenizer.py")
         if not snap.is_file():

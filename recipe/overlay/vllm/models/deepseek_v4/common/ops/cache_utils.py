@@ -430,18 +430,23 @@ def compute_global_topk_indices_and_lens(
     return global_topk_indices, topk_lens
 
 
-@triton.jit
+@triton.jit(
+    do_not_specialize_on_alignment=[
+        "token_to_req_indices_ptr",
+        "is_valid_token_ptr",
+    ]
+)
 def _compute_global_topk_indices_and_lens_kernel(
     global_topk_indices_ptr,
-    global_topk_indices_stride,
+    global_topk_indices_stride: tl.constexpr,
     topk_lens_ptr,
     topk_indices_ptr,
-    topk_indices_stride,
-    topk,
+    topk_indices_stride: tl.constexpr,
+    topk: tl.constexpr,
     token_to_req_indices_ptr,
     block_table_ptr,
-    block_table_stride,
-    block_size,
+    block_table_stride: tl.constexpr,
+    block_size: tl.constexpr,
     is_valid_token_ptr,
     num_blocks,
     TRITON_BLOCK_SIZE: tl.constexpr,

@@ -6,10 +6,10 @@ upstream vLLM v0.27.0 onto the Anemll dspark-vllm-gx10 0.1.1 image
 
 | hotfix | upstream PR | effect | state on this fork |
 |---|---|---|---|
-| `hotfix-dsv4-skip-topk-49486.sh` | #49486 | 3.4% E2E TTFT: skip indexer topk/router when every candidate is selected | **live**; fires only at ≤2048 tokens (512 topk × 4 compress ratio) |
+| `hotfix-dsv4-skip-topk-49486.sh` | #49486 + #52492 | 3.4% E2E TTFT: skip indexer topk/router when every candidate is selected; the #52492 guard keeps the shortcut out of CUDA graph capture (a captured shortcut replays against longer cached prefixes and selects candidates 0..topk-1 unscored) | **live**; fires only at ≤2048 tokens (512 topk × 4 compress ratio), eager steps only |
 | `hotfix-dsv4-dense-prefill-indexer-48407.sh` | #48407 | skip indexer scoring on short dense prefills | **Stage A only — dormant by design** (see below) |
 | `hotfix-dsv4-mtp-buffer-50312.sh` | #50312 | 448 MiB GPU memory saved in the PP buffer (256 MiB/rank here) | **live**; includes two `model_runner.py` None-guards upstream 0.27.0 lacks |
-| `hotfix-dsv4-adaptive-topk-50004.sh` | #50004 | 1.0% E2E: adaptive C128A topk width | **live** |
+| ~~`hotfix-dsv4-adaptive-topk-50004.sh`~~ | #50004 | 1.0% E2E: adaptive C128A topk width | **removed** — upstream vLLM reverted #50004 in [#51318](https://github.com/vllm-project/vllm/pull/51318): the builder writes packed rows at the live batch's stride while FULL-graph consumers keep the capture-time stride, so rows ≥ 1 read stale slot ids (intermittent wrong-context attention / token corruption; see the NVIDIA forum report on 2× DGX Spark). The 0.1.1 image's stock code is the exact pre-#50004 state, so removal = upstream's post-revert state. Historical note: upstream re-landed adaptive top-k width capture-safely in [#52823](https://github.com/vllm-project/vllm/pull/52823) on 2026-08-21; this fork still removes the obsolete #50004 backport because its pinned image's stock code predates #50004 entirely — there is no capture-safe variant to port onto it |
 | `hotfix-dsv4-skip-empty-c128-48957.sh` | #48957 | ~2x kernel: skip C128 compressor launch when no request crosses a 128-token boundary | **script verified, not yet applied**; fires only when cudagraph mode ≠ FULL |
 | `hotfix-dsv4-flashmla-workspace-50298.sh` | #50298 | 1.88x kernel: workspace reuse for combined topk+SWA indices on the FlashMLA prefill path | **script verified, not yet applied** |
 
@@ -81,6 +81,5 @@ Checked against the running container — these are absent from the fork base:
   hunks are written per-file as they match — an earlier hunk would stay
   applied. Idempotency makes this recoverable; moot on the 0.1.1 image, where
   every anchor matches.
-- The upstream unit tests for #50004
-  (`test_deepseek_v4_c128a_dynamic_topk_packed_buffers`) and #48407
+- The upstream unit tests for #48407
   (`test_mla_short_prefill_indexer.py`) are not ported.

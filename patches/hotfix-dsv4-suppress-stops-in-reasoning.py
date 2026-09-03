@@ -199,10 +199,15 @@ def apply_file(path: Path) -> str:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == "--status":
+        target = Path(argv[2]) if len(argv) > 2 else P
+        applied = target.is_file() and MARK in target.read_text()
+        print("suppress-stops-in-reasoning    :", "APPLIED" if applied else "NOT APPLIED")
+        return 0
     target = Path(argv[1]) if len(argv) > 1 else P
     if not target.is_file():
         print(f"[suppress-stops-in-reasoning] missing {target}", file=sys.stderr)
-        return 0
+        return 1
     status = apply_file(target)
     print(f"[suppress-stops-in-reasoning] {status}: {target}")
     return 0 if status.startswith("applied") or status == "skipped" else 1

@@ -73,11 +73,10 @@ CHECKS=$(docker exec deepseek-v4-flash-vllm-dspark-1 bash -c "
   c22=\$(grep -c 'nvfp4_ds_mla' '$VLLM/models/deepseek_v4/sparse_mla.py' 2>/dev/null || echo 0)
   c49=\$(grep -c 'PORT #49486' '$VLLM/models/deepseek_v4/attention.py' 2>/dev/null || echo 0)
   c50=\$(grep -c 'needs_mtp_hidden_states' '$VLLM/models/deepseek_v4/nvidia/model.py' 2>/dev/null || echo 0)
-  c04=\$(grep -c 'active_topk_width' '$VLLM/models/deepseek_v4/sparse_mla.py' 2>/dev/null || echo 0)
   c07=\$(grep -c 'dense_mha_metadata_layer_name' '$VLLM/model_executor/layers/sparse_attn_indexer.py' 2>/dev/null || echo 0)
-  echo \$c22 \$c49 \$c50 \$c04 \$c07
+  echo \$c22 \$c49 \$c50 \$c07
 " 2>/dev/null)
-echo "  Issue #22:$(echo $CHECKS | cut -d' ' -f1)  #49486:$(echo $CHECKS | cut -d' ' -f2)  #50312:$(echo $CHECKS | cut -d' ' -f3)  #50004:$(echo $CHECKS | cut -d' ' -f4)  #48407:$(echo $CHECKS | cut -d' ' -f5)"
+echo "  Issue #22:$(echo $CHECKS | cut -d' ' -f1)  #49486:$(echo $CHECKS | cut -d' ' -f2)  #50312:$(echo $CHECKS | cut -d' ' -f3)  #48407:$(echo $CHECKS | cut -d' ' -f4)"
 echo "  (expect: Issue #22 ≥2, others = 0)"
 
 # ── Step 4: Run benchmark ─────────────────────────────────────────────────

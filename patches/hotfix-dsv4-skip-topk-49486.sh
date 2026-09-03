@@ -2,8 +2,9 @@
 # hotfix-dsv4-skip-topk-49486.sh — Skip indexer topk/router on short contexts (DSV4 Flash)
 #
 # Backport of upstream vLLM PR #49486 ("skip indexer topk/router when every
-# candidate is selected") applied to the Anemll dspark-vllm-gx10 0.1.1 image
-# (vLLM 0.25.2.dev0+g752a3a504.d20260714).
+# candidate is selected") plus its follow-up correctness guard from PR #52492
+# ("keep indexer scoring in breakable graphs"), applied to the Anemll
+# dspark-vllm-gx10 0.1.1 image (vLLM 0.25.2.dev0+g752a3a504.d20260714).
 #
 # WHAT IT FIXES: the Lightning-Indexer (C4) normally runs
 #   wq_b projection -> RoPE -> MXFP4/FP8 quant -> QK logits -> top-k -> indices
@@ -22,8 +23,17 @@
 #   - Indexer metadata at attn_metadata[self.k_cache.prefix] is a
 #     DeepseekV32IndexerMetadata, so the fast path uses upstream verbatim:
 #     num_tokens = num_decode_tokens + num_prefill_tokens.
-#   - No CUDA-graph guard (faithful to upstream): max_seq_len is a
-#     per-captured-batch constant, so the branch is stable inside a capture.
+#   - CUDA-graph capture guard (upstream vLLM PR #52492): the shortcut is
+#     never taken while a CUDA stream is capturing. An earlier revision of
+#     this port assumed "max_seq_len is a per-captured-batch constant, so the
+#     branch is stable inside a capture" — upstream showed that assumption
+#     wrong: a graph captured against short dummy metadata bakes the shortcut
+#     in, then replays it for longer cached prefixes (>2048 tokens), where C4
+#     layers must score >topk candidates but the captured path just selects
+#     candidates 0..topk-1. Symptom class: intermittent wrong-context
+#     attention / degenerate output under prefix caching + CUDA graphs
+#     (see vllm-project/vllm#52492 and the NVIDIA forum report on 2x DGX
+#     Spark intermittent token corruption). Eager steps keep the skip.
 #
 # Usage:
 #   docker cp hotfix-dsv4-skip-topk-49486.sh <container>:/tmp/ && \
@@ -188,6 +198,7 @@ def check(name, cond):
 check("import tl, triton", "from vllm.triton_utils import tl, triton" in t)
 check("_fill_short_context_topk_indices kernel", "@triton.jit\ndef _fill_short_context_topk_indices" in t)
 check("[PORT #49486] early return", "[PORT #49486]" in t and "_fill_short_context_topk_indices[(num_tokens,)](" in t)
+check("[PORT #52492] capture guard", "and not torch.cuda.is_current_stream_capturing()" in t)
 sys.exit(0 if ok else 1)
 PY
   exit $?
@@ -204,7 +215,10 @@ if [ -n "${WORKER_HOST:-}" ]; then
 fi
 
 python3 <<PYEOF
+import os
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 root = Path("$VLLM_ROOT")
@@ -212,24 +226,45 @@ applied = 0
 skipped = 0
 errors = []
 
+# ---- whole-script transaction ------------------------------------------------
+# Hunks validate against an in-memory staged view; nothing touches the tree
+# until the last hunk has validated. originals/modes hold the per-run bytes and
+# permission bits of every target so a failed commit rolls back byte-exactly.
+originals: dict[str, bytes] = {}
+modes: dict[str, int] = {}
+staged: dict[str, str] = {}
+
+
+def _stage(path: str) -> str:
+    if path not in staged:
+        p = root / path
+        originals[path] = p.read_bytes()
+        modes[path] = stat.S_IMODE(p.stat().st_mode)
+        staged[path] = originals[path].decode()
+    return staged[path]
+
+
 def patch(path: str, old: str, new: str, label: str, expect: int = 1) -> None:
     global applied, skipped
     p = root / path
     if not p.exists():
         errors.append(f"File not found: {path}")
         return
-    text = p.read_text()
-    if new in text:
+    text = _stage(path)
+    n_old = text.count(old)
+    n_new = text.count(new)
+    if n_new == expect and n_old == new.count(old) * expect:
         print(f"  [skip] {label} (already applied)")
         skipped += 1
         return
-    n = text.count(old)
-    if n == 0 or (expect and n != expect):
-        errors.append(f"[ERR] anchor x{n} (expect {expect}) for {label} in {path}")
+    if n_old != expect or n_new != 0:
+        errors.append(
+            f"[ERR] ambiguous state for {label} in {path}: "
+            f"old x{n_old} (expect {expect}), new x{n_new}"
+        )
         return
-    text = text.replace(old, new)
-    p.write_text(text)
-    print(f"  [OK]   {label} (replaced {n})")
+    staged[path] = text.replace(old, new)
+    print(f"  [stage] {label} (prepared {n_old})")
     applied += 1
 
 
@@ -280,6 +315,9 @@ def _resolve_dsv4_kv_cache_dtype(""",
 # ---- attention.py: short-context early return in DeepseekV4Indexer.forward ---
 # Uses upstream verbatim: indexer metadata at self.k_cache.prefix is a
 # DeepseekV32IndexerMetadata (num_decode_tokens + num_prefill_tokens).
+# The capture guard is upstream #52492 verbatim: taking the shortcut during
+# CUDA graph capture bakes it into the graph, which then replays for longer
+# cached prefixes and selects candidates 0..topk-1 instead of scoring them.
 patch(
     "models/deepseek_v4/attention.py",
     """    ) -> torch.Tensor:
@@ -293,10 +331,16 @@ patch(
         # would be selected (max_seq_len/ratio <= topk), the wq_b -> RoPE -> quant
         # -> QK logits -> top-k pipeline is a no-op: the result is all candidates.
         # Fill the buffer directly (bit-identical output; still build the K cache).
+        # [PORT #52492] Never take the shortcut while a CUDA stream is capturing:
+        # a graph captured with the shortcut baked in replays it against longer
+        # cached prefixes and returns candidates 0..topk-1 unscored.
         attn_metadata = get_forward_context().attn_metadata
         if isinstance(attn_metadata, dict):
             indexer_metadata = cast(Any, attn_metadata[self.k_cache.prefix])
-            if indexer_metadata.max_seq_len // self.compress_ratio <= self.topk_tokens:
+            if (
+                indexer_metadata.max_seq_len // self.compress_ratio <= self.topk_tokens
+                and not torch.cuda.is_current_stream_capturing()
+            ):
                 # candidates num smaller than topk, every candidate is selected
                 # but we still need to build k cache
                 compressor(compressed_kv_score, positions, rotary_emb)
@@ -321,13 +365,123 @@ patch(
 )
 
 
-print(f"\nApplied: {applied}, Skipped: {skipped}, Errors: {len(errors)}")
+print(f"\nStaged: {applied}, Skipped: {skipped}, Errors: {len(errors)}")
 for e in errors:
     print(f"  {e}", file=sys.stderr)
 
 if errors:
-    print("\nWARNING: Some patches could not be applied. Nothing was left half-applied.")
+    print("\nWARNING: Some patches could not be applied. Nothing was written.")
     sys.exit(1)
+
+
+# ---- atomic commit -----------------------------------------------------------
+# Every hunk validated against the staged view. Publish changed targets in
+# deterministic order via same-directory temp files + os.replace (mode kept,
+# file fsynced, directory fsynced best-effort), then re-read to verify the
+# written bytes. A target is tracked as published the moment its rename lands,
+# so any later failure — including interrupts and verification faults — rolls
+# back every published target from the per-run originals in reverse order
+# through the same safe writer and re-verifies byte identity; a failed
+# rollback is loud and exits nonzero.
+
+def _fsync_dir(d: Path) -> None:
+    try:
+        fd = os.open(str(d), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def _safe_write(dest: Path, data: bytes, mode: int, done: list[str] | None = None, rel: str | None = None) -> None:
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(dest.parent), prefix="." + dest.name + ".", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    if done is not None:
+        done.append(rel)
+    _fsync_dir(dest.parent)
+
+
+def _rollback(done: list[str], why: str) -> None:
+    print(f"\nERROR: {why}", file=sys.stderr)
+    print(f"Restoring {len(done)} published file(s) in reverse order...", file=sys.stderr)
+    for rel in reversed(done):
+        try:
+            _safe_write(root / rel, originals[rel], modes[rel])
+            if (root / rel).read_bytes() != originals[rel]:
+                raise RuntimeError("restored bytes differ from the originals")
+        except Exception as exc:
+            print(f"FATAL: rollback of {rel} failed: {exc}", file=sys.stderr)
+            print("FATAL: targets above may not match their pre-run state; inspect manually.", file=sys.stderr)
+            sys.exit(2)
+        print(f"  [restored] {rel}", file=sys.stderr)
+
+
+pending = [rel for rel in sorted(staged) if staged[rel].encode() != originals[rel]]
+if pending:
+    done: list[str] = []
+
+    def _track_published(rel: str) -> None:
+        # A failure may race the rename (e.g. an interrupt delivered after
+        # the syscall completed): if the destination already holds the staged
+        # bytes, the target is published and must join the rollback set.
+        try:
+            published = (root / rel).read_bytes() == staged[rel].encode()
+        except OSError:
+            published = True
+        if published and rel not in done:
+            done.append(rel)
+
+    try:
+        for rel in pending:
+            try:
+                _safe_write(root / rel, staged[rel].encode(), modes[rel], done, rel)
+            except Exception as exc:
+                _track_published(rel)
+                raise RuntimeError(f"commit failed for {rel}: {exc}") from exc
+            except BaseException as exc:
+                _track_published(rel)
+                raise
+
+        try:
+            bad = [
+                rel
+                for rel in done
+                if (root / rel).read_bytes() != staged[rel].encode()
+            ]
+        except Exception as exc:
+            raise RuntimeError(f"post-commit verification failed: {exc}") from exc
+        if bad:
+            raise RuntimeError(
+                "post-commit verification failed for " + ", ".join(bad)
+            )
+    except Exception as exc:
+        _rollback(done, str(exc))
+        sys.exit(1)
+    except BaseException as exc:
+        _rollback(done, f"transaction interrupted: {exc}")
+        raise
+
+    print(f"\nCommitted: {applied} hunk(s) across {len(done)} file(s).")
 
 if applied == 0 and skipped > 0:
     print("Patch already applied. No changes needed.")

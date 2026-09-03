@@ -1,0 +1,18 @@
+# Worker-only. Merged after docker-compose.dspark.yml when DSPARK_WORKER_HF_NFS=1.
+# Replaces the host HF bind with a read-only NFS volume of the head cache, and
+# overlays local writable JIT dirs (Triton / TileLang / vLLM / FlashInfer / CuTe / NCCL FR).
+# The named volume is created by start-deepseek-v4-flash-dspark.sh (nfs_ensure_worker_volume).
+services:
+  vllm-dspark:
+    volumes:
+      - dspark-hf:/cache/huggingface:ro
+      - ${DSPARK_JIT_CACHE}/triton-cache:/cache/huggingface/triton-cache
+      - ${DSPARK_JIT_CACHE}/tilelang-cache:/cache/huggingface/tilelang-cache
+      - ${DSPARK_JIT_CACHE}/vllm-cache:/cache/huggingface/vllm-cache
+      - ${DSPARK_JIT_CACHE}/flashinfer:/cache/huggingface/flashinfer
+      - ${DSPARK_JIT_CACHE}/b12x-cute-cache:/cache/huggingface/b12x-cute-cache
+      - ${DSPARK_JIT_CACHE}/nccl-fr:/cache/huggingface/nccl-fr
+
+volumes:
+  dspark-hf:
+    external: true

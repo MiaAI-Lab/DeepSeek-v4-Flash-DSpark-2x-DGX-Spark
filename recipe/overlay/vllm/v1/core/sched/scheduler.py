@@ -89,6 +89,8 @@ class Scheduler(SchedulerInterface):
             )
         self.structured_output_manager = structured_output_manager
         self.is_encoder_decoder = vllm_config.model_config.is_encoder_decoder
+        mm_config = vllm_config.model_config.multimodal_config
+        self.is_mm_encoder_only = bool(mm_config and mm_config.mm_encoder_only)
 
         # include_finished_set controls whether a separate set of finished
         # request ids should be included in the EngineCoreOutputs returned
@@ -1411,6 +1413,14 @@ class Scheduler(SchedulerInterface):
                 )
             elif request.pooling_params and pooler_output is not None:
                 # Pooling stops as soon as there is output.
+                request.status = RequestStatus.FINISHED_STOPPED
+                stopped = True
+            elif (
+                self.is_mm_encoder_only
+                and request.num_computed_tokens >= request.num_prompt_tokens
+            ):
+                # An encoder instance publishes embeddings instead of sampling.
+                # Once its prompt is consumed, every encoder item has run.
                 request.status = RequestStatus.FINISHED_STOPPED
                 stopped = True
 

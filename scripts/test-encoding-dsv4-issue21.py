@@ -94,6 +94,15 @@ class Issue21EncodingTest(unittest.TestCase):
         bad = encode({"name": "list_services", "arguments": {"kind": "airo"}})
         self.assertIn('name="arguments"', bad)
 
+    def test_cli_fails_when_patch_anchor_is_missing(self):
+        hotfix = _load_hotfix()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "encoding.py"
+            original = "# incompatible encoder\n"
+            path.write_text(original, encoding="utf-8")
+            self.assertEqual(hotfix.main(["hotfix", str(path)]), 1)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
 
 if __name__ == "__main__":
     unittest.main()
