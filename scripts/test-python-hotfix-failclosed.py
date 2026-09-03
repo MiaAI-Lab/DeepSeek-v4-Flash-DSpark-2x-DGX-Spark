@@ -97,6 +97,7 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         fail_step: str | None = None,
         env_extra: dict[str, str | None] | None = None,
         missing_encoding: bool = False,
+        after_command: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], list[str], bool]:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -115,6 +116,8 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
                 encoding.write_text("# fixture\n")
 
             command = line.replace("$$", "$")
+            if after_command is not None:
+                command += "\n" + after_command
             command += f'\nprintf x > "{reached}"\n'
             env = dict(os.environ)
             env.update(
@@ -284,19 +287,30 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
                     else {"VLLM_ENABLE_RESPONSES_API_STORE": value}
                 )
                 proc, invocations, reached = self._run_line(
-                    self.responses_store_line, env_extra=extra
+                    self.responses_store_line,
+                    env_extra=extra,
+                    after_command=(
+                        'printf "normalized=%s\\n" '
+                        '"$VLLM_ENABLE_RESPONSES_API_STORE"'
+                    ),
                 )
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                 self.assertEqual(invocations, [])
                 self.assertTrue(reached)
+                self.assertEqual(proc.stdout, "normalized=0\n")
 
         proc, invocations, reached = self._run_line(
             self.responses_store_line,
             env_extra={"VLLM_ENABLE_RESPONSES_API_STORE": "1"},
+            after_command=(
+                'printf "normalized=%s\\n" '
+                '"$VLLM_ENABLE_RESPONSES_API_STORE"'
+            ),
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(invocations, ["hotfix-dsv4-responses-store.py"])
         self.assertTrue(reached)
+        self.assertEqual(proc.stdout, "normalized=1\n")
 
         proc, invocations, reached = self._run_line(
             self.responses_store_line,

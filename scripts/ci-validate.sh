@@ -395,7 +395,8 @@ fi
 if grep -Fq 'hotfix-dsv4-responses-store.py}:/opt/hotfix-dsv4-responses-store.py:ro' docker-compose.dspark.yml \
   && grep -Fq 'VLLM_ENABLE_RESPONSES_API_STORE: "${VLLM_ENABLE_RESPONSES_API_STORE:-0}"' docker-compose.dspark.yml \
   && grep -Fq 'DSPARK_RESPONSES_STORE_MAX_ENTRIES: "${DSPARK_RESPONSES_STORE_MAX_ENTRIES:-256}"' docker-compose.dspark.yml \
-  && grep -Fq 'if [ "$${VLLM_ENABLE_RESPONSES_API_STORE:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-responses-store.py || exit 1; fi;' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${VLLM_ENABLE_RESPONSES_API_STORE:-0}" != "1" ]; then export VLLM_ENABLE_RESPONSES_API_STORE=0; fi;' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${VLLM_ENABLE_RESPONSES_API_STORE}" = "1" ]; then python3 /opt/hotfix-dsv4-responses-store.py || exit 1; fi;' docker-compose.dspark.yml \
   && grep -Fxq 'VLLM_ENABLE_RESPONSES_API_STORE=0' .env.dspark.example \
   && grep -Fxq 'DSPARK_RESPONSES_STORE_MAX_ENTRIES=256' .env.dspark.example \
   && grep -Fq '# Bounded Responses API store pre-flight (begin).' start-deepseek-v4-flash-dspark.sh \
