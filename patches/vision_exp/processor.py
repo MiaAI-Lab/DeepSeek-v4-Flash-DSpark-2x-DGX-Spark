@@ -88,7 +88,7 @@ def _collect_images(mm_data: Mapping[str, object]) -> list[Any]:
 
 class DeepseekV4VisionExpProcessingInfo(BaseProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, int | None]:
-        return {"image": 16}
+        return {"image": None}
 
     def get_hf_processor(self, **kwargs: object):
         raise RuntimeError(

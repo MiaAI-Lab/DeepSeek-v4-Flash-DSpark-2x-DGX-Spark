@@ -357,6 +357,13 @@ if grep -Fq 'LIMIT_MM_ARGS=(--limit-mm-per-prompt "$${LIMIT_MM_JSON}")' docker-c
 else
   bad "compose must not pass bare image=8 to --limit-mm-per-prompt (JSON only)"
 fi
+# The env example must document image=N (bare JSON loses quotes when sourced).
+if grep -Fq '# LIMIT_MM_PER_PROMPT=image=' .env.dspark.example \
+  && ! grep -Fq '# LIMIT_MM_PER_PROMPT={"image":8}' .env.dspark.example; then
+  ok "env example documents LIMIT_MM_PER_PROMPT in image=N form"
+else
+  bad "env example must keep '# LIMIT_MM_PER_PROMPT=image=N' (bare JSON loses quotes when sourced)"
+fi
 # Assistant-final continuation (#52/PR53): default OFF (stock renderer);
 # ON must be an exactly-1 gate with a fail-closed invocation.
 if grep -Fq 'DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "${DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX:-0}"' docker-compose.dspark.yml \
