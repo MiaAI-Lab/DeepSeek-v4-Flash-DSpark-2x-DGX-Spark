@@ -559,4 +559,18 @@ if grep -Fq 'DSPARK_ENABLE_DSPARK_BLOCK_K: "${DSPARK_ENABLE_DSPARK_BLOCK_K:-0}"'
 else
   bad "block-k unlock must be default-off, fail-closed, worker-synced and preflighted"
 fi
+# Launcher remote_compose/remote_compose2 must each be defined exactly once and
+# carry the full feature passthrough set (a stacked-merge conflict once dropped
+# block-k from the TP2 worker and issue191/async from the TP3 worker2).
+for fn in remote_compose remote_compose2; do
+  body=$(awk "/^$fn\(\) \{/,/^}/" start-deepseek-v4-flash-dspark.sh)
+  if [ "$(grep -c "^$fn() {" start-deepseek-v4-flash-dspark.sh)" = 1 ] \
+    && grep -Fq 'DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE' <<<"$body" \
+    && grep -Fq 'DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING' <<<"$body" \
+    && grep -Fq 'DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K' <<<"$body"; then
+    ok "$fn carries the full passthrough set exactly once"
+  else
+    bad "$fn must be defined exactly once and carry issue191/async/block-k passthroughs"
+  fi
+done
 echo "CI validate passed (CPU recipe gates only)."
