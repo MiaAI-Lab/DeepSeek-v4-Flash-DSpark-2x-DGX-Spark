@@ -77,6 +77,7 @@ py_files+=(
   scripts/test-dspark-block-k.py
   scripts/test-rope-swa-fix.py
   scripts/test-dspark-swa-prefix.py
+  scripts/test-dsml-recovery.py
   scripts/test-issue117-shm-ring-buffer.py
   scripts/verify-issue136-xgrammar-live.py
   scripts/test-empty-encoder-output-hotfix.py
@@ -145,6 +146,8 @@ python3 scripts/test-rope-swa-fix.py -q
 ok "test-rope-swa-fix"
 python3 scripts/test-dspark-swa-prefix.py -q
 ok "test-dspark-swa-prefix"
+python3 scripts/test-dsml-recovery.py -q
+ok "test-dsml-recovery"
 python3 scripts/test-issue117-shm-ring-buffer.py -q
 ok "test-issue117-shm-ring-buffer"
 python3 scripts/test-empty-encoder-output-hotfix.py -q
@@ -585,6 +588,16 @@ if grep -Fq 'DSPARK_ENABLE_DSPARK_SWA_PREFIX: "${DSPARK_ENABLE_DSPARK_SWA_PREFIX
 else
   bad "SWA prefix fix must be default-off, fail-closed, worker-synced and preflighted"
 fi
+# DSML recovery (vllm#52645): default OFF, identity-pinned/fail-closed, worker-synced, preflight.
+if grep -Fq 'DSPARK_ENABLE_DSML_RECOVERY: "${DSPARK_ENABLE_DSML_RECOVERY:-0}"' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${DSPARK_ENABLE_DSML_RECOVERY:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dsml-recovery.py || exit 1; fi;' docker-compose.dspark.yml \
+  && grep -Fq "DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py'" start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq '/opt/hotfix-vllm-dsml-recovery.py --check' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq 'DSPARK_ENABLE_DSML_RECOVERY=0' .env.dspark.example; then
+  ok "compose/launcher gate the DSML recovery"
+else
+  bad "DSML recovery must be default-off, fail-closed, worker-synced and preflighted"
+fi
 # Launcher remote_compose/remote_compose2 must each be defined exactly once and
 # carry the full feature passthrough set (a stacked-merge conflict once dropped
 # block-k from the TP2 worker and issue191/async from the TP3 worker2).
@@ -595,10 +608,11 @@ for fn in remote_compose remote_compose2; do
     && grep -Fq 'DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING' <<<"$body" \
     && grep -Fq 'DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K' <<<"$body" \
     && grep -Fq 'DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX' <<<"$body" \
-    && grep -Fq 'DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX' <<<"$body"; then
+    && grep -Fq 'DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX' <<<"$body" \
+    && grep -Fq 'DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY' <<<"$body"; then
     ok "$fn carries the full passthrough set exactly once"
   else
-    bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix passthroughs"
+    bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery passthroughs"
   fi
 done
 echo "CI validate passed (CPU recipe gates only)."
