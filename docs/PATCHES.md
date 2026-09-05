@@ -867,6 +867,45 @@ at either k (0.88/0.74/0.53/0.36/0.24), so the gain is the cheaper step.
 
 ---
 
+## DSpark draft SWA prefix fix — prefix-cache hits recompute the last draft window (default OFF)
+
+**Symptom.** With `--enable-prefix-caching`, re-sending an identical prompt
+(retries, cached tool-call prefixes, agent loops) returns a degenerate,
+truncated response (e.g. a 5-token `["json` + stop) instead of the full
+output; deterministic at temperature 0. Upstream report and fix:
+Anemll/dspark-vllm-gx10#2 (`4afc5e7eeb`).
+
+**Root cause.** The DSpark draft model attends over a sliding window of
+`sliding_window` (128) tokens populated from the target's hidden states via
+`precompute_and_store_context_kv`. On a prefix-cache hit the target skips
+recomputing the cached prefix, so only the non-cached suffix reaches the
+draft: its window cache is missing the prefix, the draft degenerates, and the
+verifier accepts the truncated output.
+
+**What the patcher does.** `patches/hotfix-vllm-dspark-swa-prefix.py` ports
+the upstream overlay verbatim (plus one `# [dspark-swa-prefix]` mark line per
+file): `v1/core/kv_cache_manager.py` (stock identity `be9c5091…`, patched
+`09f0e990…`, whole-file pinned — no other recipe hotfix touches it) gains a
+`dspark_window_size` parameter capping `max_cache_hit_length` to
+`num_tokens - 1 - dspark_window_size` in `get_computed_blocks`;
+`v1/core/sched/scheduler.py` (co-owned at boot by grammar-advance,
+empty-encoder-output and issue #27, so held to source-exact regions that must
+each occur exactly once; pure stock `e25d4c9a…` -> patched `69fc8118…` proven
+against fixtures) reads the draft's `hf_config.sliding_window` under
+`use_dspark()` and passes it to the `KVCacheManager`. Without DSpark the
+window stays `None` and cache-hit arithmetic is stock. Cost when active: a
+128-token recompute per prefix-cache hit. `DSPARK_ENABLE_DSPARK_SWA_PREFIX=1`
+gates it (mount, `--check` preflight worker then head, apply at container
+start, both targets preflighted before either atomic replace); the CPU suite
+is `python3 scripts/test-dspark-swa-prefix.py`.
+
+**Upstream validation (2×GB10, TP=2, 0731, K6 + probabilistic):** repeated
+json60 prompt 12.1 tok/s broken -> 86.5 fixed; count300/mult12/bst/story and
+8K/32K/100K prefill unchanged within noise. Local live gate still to run on
+the Vision-Exp abliterated lane: repeated-prompt output-quality A/B.
+
+---
+
 ## Issue #117 — bounded SHM dispatch-ring reader recovery
 
 ### Scope and upstream fix

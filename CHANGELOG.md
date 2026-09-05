@@ -1,3 +1,9 @@
+## 2026-09-05
+
+### Added
+
+- **DSpark draft SWA prefix fix (`DSPARK_ENABLE_DSPARK_SWA_PREFIX`, default 0)**: port of Anemll/dspark-vllm-gx10#2 (`4afc5e7eeb`). With prefix caching, a cache hit skips recomputing the cached prefix, the DSpark draft's 128-token sliding-window cache is never populated from the target's hidden states, and repeated identical prompts degenerate to a truncated response (deterministic at temperature 0). `patches/hotfix-vllm-dspark-swa-prefix.py` caps `max_cache_hit_length` to `num_tokens - 1 - sliding_window` in `kv_cache_manager.py` (whole-file pinned, stock `be9c5091…` -> patched `09f0e990…`) and wires the draft's `hf_config.sliding_window` through the scheduler (source-exact regions; scheduler.py is co-owned by the always-on boot patchers). Both targets preflight before either atomic replace; enabled starts `--check` worker then head. Fixtures and CPU suite: `scripts/test-dspark-swa-prefix.py`. Upstream A/B: repeated json60 12.1 tok/s (broken) -> 86.5; decode/prefill/concurrency unchanged. Local repeated-prompt output-quality A/B on the Vision-Exp lane still to run before enabling in production.
+
 ## 2026-09-04
 
 ### Changed
