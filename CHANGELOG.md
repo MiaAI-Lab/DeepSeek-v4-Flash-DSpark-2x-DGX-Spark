@@ -1,3 +1,8 @@
+## 2026-09-05
+
+### Added
+- **RoPE SWA fix (`DSPARK_ENABLE_ROPE_SWA_FIX`, default 0)**: `patches/hotfix-vllm-rope-swa-fix.py` ports merged upstream [vllm#54815](https://github.com/vllm-project/vllm/pull/54815) into the pinned `models/deepseek_v4/common/rope.py` (stock `0074271a…` → patched `6452ce2e…`; patched bytes minus the mark comment equal the upstream post-image). Stock promotes the checkpoint's `rope_scaling {type: yarn, factor: 16}` to `deepseek_yarn` for every layer; per the DeepSeek-V4 reference (`inference/model.py` L481-485, transformers#45892) YaRN belongs only to compressor layers, so the sparse-SWA layers (compress_ratio<=1: layers 0–1 plus the 3 DSpark drafter layers, window 128) must use plain RoPE — the port gives them identity scaling (`factor=1.0` over `max_position_embeddings`, theta 10000) on the same `deepseek_yarn` kernel path and stops mutating the shared rope dict; compressor layers resolve byte-identical parameters. Enabled starts preflight worker then head with `--check`; fixture from the pinned image, CPU suite `scripts/test-rope-swa-fix.py` (16 tests: pins, idempotency, fail-closed, stubbed-`get_rope` routing at ratios 1/4/128). Remaining live gate: 128K+ long-context quality A/B vs control before defaulting on.
+
 ## 2026-09-04
 
 ### Changed

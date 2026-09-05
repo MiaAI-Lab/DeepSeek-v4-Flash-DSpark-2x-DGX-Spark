@@ -75,6 +75,7 @@ py_files+=(
   scripts/test-issue136-xgrammar-termination.py
   scripts/test-issue191-toolcall-failclosed.py
   scripts/test-dspark-block-k.py
+  scripts/test-rope-swa-fix.py
   scripts/test-issue117-shm-ring-buffer.py
   scripts/verify-issue136-xgrammar-live.py
   scripts/test-empty-encoder-output-hotfix.py
@@ -139,6 +140,8 @@ python3 scripts/test-issue191-toolcall-failclosed.py -q
 ok "test-issue191-toolcall-failclosed"
 python3 scripts/test-dspark-block-k.py -q
 ok "test-dspark-block-k"
+python3 scripts/test-rope-swa-fix.py -q
+ok "test-rope-swa-fix"
 python3 scripts/test-issue117-shm-ring-buffer.py -q
 ok "test-issue117-shm-ring-buffer"
 python3 scripts/test-empty-encoder-output-hotfix.py -q
@@ -558,5 +561,15 @@ if grep -Fq 'DSPARK_ENABLE_DSPARK_BLOCK_K: "${DSPARK_ENABLE_DSPARK_BLOCK_K:-0}"'
   ok "compose/launcher gate the DSpark block-k unlock"
 else
   bad "block-k unlock must be default-off, fail-closed, worker-synced and preflighted"
+fi
+# RoPE SWA fix (vllm#54815): default OFF, exact-1/fail-closed, worker-synced, preflight.
+if grep -Fq 'DSPARK_ENABLE_ROPE_SWA_FIX: "${DSPARK_ENABLE_ROPE_SWA_FIX:-0}"' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${DSPARK_ENABLE_ROPE_SWA_FIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-rope-swa-fix.py || exit 1; fi;' docker-compose.dspark.yml \
+  && grep -Fq "DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py'" start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq '/opt/hotfix-vllm-rope-swa-fix.py --check' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq 'DSPARK_ENABLE_ROPE_SWA_FIX=0' .env.dspark.example; then
+  ok "compose/launcher gate the RoPE SWA fix"
+else
+  bad "rope-swa fix must be default-off, fail-closed, worker-synced and preflighted"
 fi
 echo "CI validate passed (CPU recipe gates only)."
