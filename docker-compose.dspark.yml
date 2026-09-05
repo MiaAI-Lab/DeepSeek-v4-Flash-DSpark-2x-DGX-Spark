@@ -39,6 +39,14 @@ services:
 
     volumes:
       - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      # Disk backed KV cache (kv-disk-tier).
+      - ${KV_SRC:-/opt/dsv4-kv}/dsv4_kv_disk_tier.py:/usr/local/lib/python3.12/dist-packages/dsv4_kv_disk_tier.py:ro
+      - ${KV_SRC:-/opt/dsv4-kv}/dsv4_shard_tier.py:/usr/local/lib/python3.12/dist-packages/dsv4_shard_tier.py:ro
+      - ${KV_SRC:-/opt/dsv4-kv}/dsv4_vllm_patches.py:/usr/local/lib/python3.12/dist-packages/dsv4_vllm_patches.py:ro
+      - ${KV_SRC:-/opt/dsv4-kv}/dsv4_sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro
+      - ${KV_SRC:-/opt/dsv4-kv}/libdsv4_batch_copy.so:/usr/local/lib/libdsv4_batch_copy.so:ro
+      - ${KV_SRC:-/opt/dsv4-kv}/libdsv4_host_kv.so:/usr/local/lib/libdsv4_host_kv.so:ro
+      - ${KVDISK_DIR:-${HOME}/kvdisk}:/kvdisk
       # Optional Stage-C overlay: host proposer only when path exists on the
       # Anemll layout (vLLM ships DSpark under v1/worker/gpu/spec_decode).
       # GB10 hybrid plugin tree for ENABLE_VLLM_GB10_PATCH=1 only.
@@ -171,6 +179,21 @@ services:
       # wedge on TP=2). 1800s rides out a worst-case compile; a true hang
       # just surfaces later. Override to 300 to restore stock.
       VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800}"
+      # Disk backed KV cache (kv-disk-tier). Off unless DSPARK_ENABLE_DISK_TIER=1.
+      DSPARK_ENABLE_DISK_TIER: "${DSPARK_ENABLE_DISK_TIER:-0}"
+      KV_CPU_BYTES: "${KV_CPU_BYTES:-4294967296}"
+      KV_DISK_BYTES: "${KV_DISK_BYTES:-150000000000}"
+      VLLM_ENGINE_READY_TIMEOUT_S: "${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
+      VLLM_SKIP_INIT_MEMORY_CHECK: "${VLLM_SKIP_INIT_MEMORY_CHECK:-1}"
+      DSV4_SHARD_HEAD: "${DSV4_SHARD_HEAD:-tcp://${MASTER_ADDR:-10.0.0.1}:${DSV4_SHARD_PORT:-25055}}"
+      DSV4_SHARD_PORT: "${DSV4_SHARD_PORT:-25055}"
+      DSV4_SG_THRESHOLD: "${DSV4_SG_THRESHOLD:-20000}"
+      DSV4_SG_SO: "${DSV4_SG_SO:-/usr/local/lib/libdsv4_batch_copy.so}"
+      DSV4_MAX_COPIES_PER_BATCH: "${DSV4_MAX_COPIES_PER_BATCH:-8192}"
+      DSV4_MAX_OFFLOAD_BLOCKS_PER_REQUEST: "${DSV4_MAX_OFFLOAD_BLOCKS_PER_REQUEST:-0}"
+      DSV4_HOST_KV: "${DSV4_HOST_KV:-0}"
+      DSV4_HOST_KV_SO: "${DSV4_HOST_KV_SO:-/usr/local/lib/libdsv4_host_kv.so}"
+      DSV4_ALLOW_EXPANDABLE_SEGMENTS: "${DSV4_ALLOW_EXPANDABLE_SEGMENTS:-1}"
 
       VLLM_USE_B12X_MOE: "${VLLM_USE_B12X_MOE:-1}"
       VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM: "${VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM:-0}"
@@ -467,6 +490,19 @@ services:
         esac;
         REVISION_ARGS="";
         if [ -n "$${DSPARK_REVISION:-}" ]; then REVISION_ARGS="--revision $${DSPARK_REVISION}"; fi;
+        KVXFER_ARGS=();
+        if [ "$${DSPARK_ENABLE_DISK_TIER:-0}" = "1" ]; then
+          for _f in dsv4_kv_disk_tier.py dsv4_shard_tier.py dsv4_vllm_patches.py; do
+            [ -f "/usr/local/lib/python3.12/dist-packages/$${_f}" ] || { echo "FATAL: missing $${_f} (stage kv-disk-tier modules on both nodes)" >&2; exit 1; };
+          done;
+          [ -f "/usr/local/lib/libdsv4_batch_copy.so" ] || { echo "FATAL: missing libdsv4_batch_copy.so (run kv-disk-tier/build.sh)" >&2; exit 1; };
+          KVXFER_JSON="{\"kv_connector\":\"OffloadingConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"spec_name\":\"MultiGroupTieringOffloadingSpec\",\"spec_module_path\":\"dsv4_kv_disk_tier\",\"cpu_bytes_to_use\":$${KV_CPU_BYTES:-4294967296},\"dsv4_block_size_factor\":4,\"eviction_policy\":\"lru\",\"secondary_tiers\":[{\"type\":\"shard_dist\",\"root_dir\":\"/kvdisk\",\"max_bytes\":$${KV_DISK_BYTES:-150000000000},\"port\":$${DSV4_SHARD_PORT:-25055}}]}}";
+          KVXFER_ARGS=(--kv-transfer-config "$${KVXFER_JSON}");
+          export PYTHONHASHSEED=0;
+          if [ "$${DSV4_ALLOW_EXPANDABLE_SEGMENTS:-1}" != "1" ]; then
+            unset PYTORCH_CUDA_ALLOC_CONF;
+          fi;
+        fi;
         LIMIT_MM_RAW='${LIMIT_MM_PER_PROMPT:-image=8}'; case "$${LIMIT_MM_RAW}" in image=*) _lim_n="$${LIMIT_MM_RAW#image=}"; case "$${_lim_n}" in ''|*[!0-9]*) echo "error: LIMIT_MM_PER_PROMPT image=N needs an integer (Anemll --limit-mm-per-prompt requires JSON)" >&2; exit 2 ;; esac; LIMIT_MM_JSON="{\"image\":$${_lim_n}}" ;; *) LIMIT_MM_JSON="$${LIMIT_MM_RAW}" ;; esac; LIMIT_MM_ARGS=(--limit-mm-per-prompt "$${LIMIT_MM_JSON}");
         exec /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}
         $${REVISION_ARGS}
@@ -479,6 +515,7 @@ services:
         --tensor-parallel-size ${TP_SIZE:-2}
         --pipeline-parallel-size 1
         --kv-cache-dtype nvfp4_ds_mla
+        "$${KVXFER_ARGS[@]}"
         --block-size 256
         --max-model-len ${MAX_MODEL_LEN:-1048576}
         --max-num-seqs ${MAX_NUM_SEQS:-6}

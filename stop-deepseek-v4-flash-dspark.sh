@@ -195,6 +195,24 @@ stop_main_worker() {
   " || stop_warn "main DSpark worker stop failed on ${host}"
 }
 
+# The offload staging region is a root-owned /dev/shm mmap that is NOT unlinked
+# on an unclean shutdown (docker rm -f / SIGKILL skips the cleanup path). Each
+# leaked file is ~3.8 GB and they accumulate across restarts until the host
+# OOM-kills the worker on the next boot ("VLLM::Worker_TP ... Out of memory").
+# Remove them on every stop: best-effort (plain rm first for anything we own,
+# then sudo for the root-owned ones), and never fail the stop on cleanup.
+cleanup_shmem() {
+  local where="$1" host="${2:-}"
+  local cmd='rm -f /dev/shm/vllm_offload_*.mmap 2>/dev/null; sudo -n rm -f /dev/shm/vllm_offload_*.mmap 2>/dev/null; true'
+  if [ "$where" = "local" ]; then
+    bash -c "$cmd" || true
+  elif [ "$where" = "remote" ] && [ "${WORKER_REACHABLE:-0}" = "1" ]; then
+    ssh "$host" "$cmd" || stop_warn "shmem cleanup on ${host} failed"
+  elif [ "$where" = "remote2" ] && [ -n "$host" ] && [ "${WORKER2_REACHABLE:-0}" = "1" ]; then
+    ssh "$host" "$cmd" || stop_warn "shmem cleanup on ${host} failed"
+  fi
+}
+
 stop_project() {
   local project="$1"
 
@@ -217,6 +235,14 @@ stop_project() {
 stop_project "$PROJECT_NAME"
 if [ "$LEGACY_PROJECT_NAME" != "$PROJECT_NAME" ]; then
   stop_project "$LEGACY_PROJECT_NAME"
+fi
+
+# Always clean leaked /dev/shm offload-staging mmaps after stopping, on every
+# node (see cleanup_shmem above for why this is required).
+cleanup_shmem local
+cleanup_shmem remote "$WORKER_HOST"
+if [ -n "$WORKER2_HOST" ]; then
+  cleanup_shmem remote2 "$WORKER2_HOST"
 fi
 
 if [ "$STOP_NFS" = "1" ]; then

@@ -65,6 +65,17 @@ PY
 | `VLLM_PREFIX_CACHE_RETENTION_INTERVAL` | Issue #26: sparsify SWA prefix-cache checkpoints (default 4096). This is the warm-hit fix; the coordinator must still let SWA shrink the common hit (hotfix v2, issue #36). |
 | `VLLM_ENABLE_RESPONSES_API_STORE` | Native vLLM Responses state switch, normalized to exact `1`; default `0` keeps stock `serving.py` bytes. Enabled starts source-check and apply the bounded-store backport fail-closed on every rank. Stored state is lost on any process restart. Recreate every rank when changing it; a Docker restart preserves patched writable-layer bytes, not state. |
 | `DSPARK_RESPONSES_STORE_MAX_ENTRIES` | Terminal Responses bundle cap, default **256**. Positive decimal when the store is enabled; invalid values fail before remote side effects. Eviction removes response/message/background-event state together and LRU-touches retrieval/continuation. Queued, in-progress, pinned continuation, and tracked producer state may temporarily exceed the entry cap; this is not a retained-byte limit. |
+| `DSPARK_ENABLE_DISK_TIER` | Opt-in NVMe-backed KV cache (default **0**). `1` adds `--kv-transfer-config` (OffloadingConnector + per-node sharded tier), exports `PYTHONHASHSEED=0`, and unsets `PYTORCH_CUDA_ALLOC_CONF`. See `kv-disk-tier/`. |
+| `KV_CPU_BYTES` | Pinned CPU staging tier, default **4294967296**; caps the largest restorable prompt. |
+| `KV_DISK_BYTES` | Per-node NVMe quota, default **150000000000**. |
+| `KV_SRC` | Host dir with the disk-tier modules + built `.so` (default `/opt/dsv4-kv`, both nodes). |
+| `KVDISK_DIR` | Per-node disk cache dir, default `${HOME}/kvdisk`. |
+| `DSV4_SG_THRESHOLD` | Descriptors at/above which a copy uses the scatter-gather `.so` instead of `cuMemcpyBatchAsync` (the driver segfaults above ~23k). Default **20000**; smaller copies use the faster driver path. |
+| `DSV4_SG_SO` | Path to the scatter-gather kernel, default `/usr/local/lib/libdsv4_batch_copy.so`. |
+| `DSV4_MAX_COPIES_PER_BATCH` | Bound on copies per driver/SG launch; slices with a per-slice stream sync so a huge restore can't submit one unbounded batch. Default **8192**. |
+| `DSV4_MAX_OFFLOAD_BLOCKS_PER_REQUEST` | Cap on offload keys a single request may store; `0` = unlimited. Stops an in-GPU prompt from spilling its whole prefix to disk. Default **0**. |
+| `DSV4_HOST_KV` | **Experimental.** Allocate the KV cache from `cudaHostAlloc` so the disk tier can DMA straight into it. Default **0**; requires `libdsv4_host_kv.so` built on each node (`kv-disk-tier/build.sh`). |
+| `DSV4_ALLOW_EXPANDABLE_SEGMENTS` | Keep `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` with the disk tier (default **1**). vLLM rejects the combination for every KV connector, but the `OffloadingConnector` here does not pin KV memory (no RDMA), so a `sitecustomize` hook exempts it. Keeping expandable segments on collapses per-allocation memdesc pressure during large prefills (resolves the NVRM OOM). Set **0** to restore the old unset behaviour. |
 | `VLLM_CACHE_ROOT` | vLLM cache root (compose sets path) |
 | `CUTE_DSL_ARCH` | **Not** `VLLM_*` — CuTeDSL/b12x compile target (`sm_121a` on GB10) |
 | `TILELANG_CACHE_DIR` | **Not** `VLLM_*`. Compose default `/cache/huggingface/tilelang-cache` (HF volume). Issue #65: in-image `~/.tilelang/cache` dies on container recreate. |
