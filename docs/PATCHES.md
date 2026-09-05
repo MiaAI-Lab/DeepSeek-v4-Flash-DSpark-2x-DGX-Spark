@@ -867,6 +867,41 @@ at either k (0.88/0.74/0.53/0.36/0.24), so the gain is the cheaper step.
 
 ---
 
+## RoPE SWA fix — sparse-SWA layers use plain RoPE, not YaRN (default OFF)
+
+**Symptom.** `models/deepseek_v4/common/rope.py::build_deepseek_v4_rope`
+promotes the checkpoint's rope type to `deepseek_yarn` whenever it is not
+`"default"` — for every layer. The served Vision-Exp abliterated checkpoint
+ships a flat `rope_scaling = {type: yarn, factor: 16,
+original_max_position_embeddings: 65536}` with `sliding_window=128`, so its
+sparse-SWA layers — 0 and 1 (`compress_ratios[i]=0` → `compress_ratio=1`) plus
+the three DSpark drafter layers past `num_hidden_layers` — run YaRN factor=16
+over a 128-token window. Per the DeepSeek-V4 reference (`inference/model.py`
+L481-485) and transformers#45892, YaRN belongs only to compressor (CSA/HCA)
+layers; sliding-window layers must use plain RoPE.
+
+**What the patcher does.** `patches/hotfix-vllm-rope-swa-fix.py` ports merged
+upstream [vllm#54815](https://github.com/vllm-project/vllm/pull/54815)
+source-exact (stock identity `0074271a…` → patched `6452ce2e…`; the patched
+bytes minus the one mark comment equal the upstream post-image byte-for-byte):
+each call works on a per-layer dict copy (nested `{"main","compress"}`
+checkpoints route by layer type), the YaRN promotion additionally requires
+`compress_ratio > 1`, and every other layer takes `deepseek_yarn` with
+`factor=1.0` over `max_position_embeddings` — identity scaling, i.e. plain
+RoPE on the same kernel path. Compressor layers resolve byte-identical
+parameters to stock (`deepseek_yarn`, factor=16, theta=160000), and the
+shared `config.rope_parameters` dict is no longer mutated across layers.
+`DSPARK_ENABLE_ROPE_SWA_FIX=1` gates it (mount, `--check` preflight worker
+then head, apply at container start, atomic replace); the CPU suite is
+`python3 scripts/test-rope-swa-fix.py` (pins, idempotency, fail-closed CLI,
+and stubbed-`get_rope` routing for compress_ratio 1/4/128 with the served
+checkpoint's real rope values).
+
+**Live gate before defaulting on.** Positions ≤128 sit where the YaRN ramp is
+near-identity, so short-context output should be indistinguishable; the
+abliterated checkpoint may nevertheless have adapted to the served embedding.
+Run the 128K+ long-context quality A/B vs control (same seeds, gate26
+harness) before flipping the default.
 ## DSpark draft SWA prefix fix — prefix-cache hits recompute the last draft window (default OFF)
 
 **Symptom.** With `--enable-prefix-caching`, re-sending an identical prompt
