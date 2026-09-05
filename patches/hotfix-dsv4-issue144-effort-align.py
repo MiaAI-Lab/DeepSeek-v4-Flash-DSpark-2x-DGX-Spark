@@ -163,12 +163,19 @@ def _verify_self() -> None:
         raise HotfixError("REGION_NEW does not match its pinned sha256")
 
 
+def _real_file(path: Path) -> Path | None:
+    """Classify a candidate: HF hub snapshots symlink into blobs/, and inspect()
+    only accepts regular files, so resolve to the real file (read-only preflight;
+    apply still writes PRODUCTION_TARGET, never the hub blob)."""
+    return path.resolve() if path.is_file() else None
+
+
 def resolve_encoding_source(environ=os.environ) -> Path | None:
     """Mirror the compose entrypoint's ENCODING_SOURCE resolution."""
     explicit = environ.get("DSPARK_ENCODING_FILE")
     if explicit:
         p = Path(explicit)
-        return p if p.is_file() else None
+        return _real_file(p)
     model = environ.get("DSPARK_MODEL", "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp")
     hub_dir = model.replace("/", "--")
     revision = environ.get("DSPARK_REVISION")
@@ -177,16 +184,16 @@ def resolve_encoding_source(environ=os.environ) -> Path | None:
             f"/cache/huggingface/hub/models--{hub_dir}/snapshots/{revision}/encoding/encoding_dsv4.py"
         )
         if p.is_file():
-            return p
+            return p.resolve()
     for pattern in (
         f"/cache/huggingface/hub/models--{hub_dir}/snapshots/*/encoding/encoding_dsv4.py",
         "/cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731/snapshots/*/encoding/encoding_dsv4.py",
     ):
         for candidate in sorted(glob.glob(pattern)):
             if Path(candidate).is_file():
-                return Path(candidate)
+                return Path(candidate).resolve()
     fallback = Path("/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py")
-    return fallback if fallback.is_file() else None
+    return _real_file(fallback)
 
 
 def inspect_bytes(data: bytes) -> str:
