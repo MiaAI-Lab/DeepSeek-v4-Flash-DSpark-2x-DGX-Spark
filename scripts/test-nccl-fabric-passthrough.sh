@@ -26,7 +26,7 @@ COMPOSE="$ROOT/docker-compose.dspark.yml"
 QUIET=0
 [ "${1:-}" = "-q" ] && QUIET=1
 
-KNOBS=(NCCL_IB_MERGE_NICS NCCL_IB_SUBNET_AWARE_ROUTING NCCL_IB_SUBNET_PREFIX_LEN NCCL_NET_GDR_LEVEL NCCL_NET_GDR_READ NCCL_DMABUF_ENABLE NCCL_IB_GID_INDEX)
+KNOBS=(NCCL_IB_MERGE_NICS NCCL_IB_SUBNET_AWARE_ROUTING NCCL_IB_SUBNET_PREFIX_LEN NCCL_NET_GDR_LEVEL NCCL_NET_GDR_READ NCCL_DMABUF_ENABLE NCCL_GIN_ENABLE NCCL_IB_GID_INDEX)
 
 pass=0
 fail=0
@@ -36,8 +36,8 @@ bad() { fail=$((fail + 1)); printf '  FAIL %s\n' "$*" >&2; }
 
 # Extract the shipped normalization block (entrypoint text uses $$ for $).
 fragment="$(sed -n '/if \[ -z "\$\${NCCL_IB_MERGE_NICS/,/unset NCCL_IB_GID_INDEX; fi;$/p' "$COMPOSE" | sed 's/\$\$/$/g')"
-if [ "$(printf '%s\n' "$fragment" | grep -c 'unset NCCL_')" -ne 7 ]; then
-  echo "FAIL could not extract the 7-knob unset normalization from $COMPOSE" >&2
+if [ "$(printf '%s\n' "$fragment" | grep -c 'unset NCCL_')" -ne 8 ]; then
+  echo "FAIL could not extract the 8-knob unset normalization from $COMPOSE" >&2
   exit 1
 fi
 
@@ -54,7 +54,7 @@ trap 'rm -rf "$tmp"' EXIT
 # Direction 1: empty is normalized to absent. Defined-but-empty is exactly what
 # compose injects when .env leaves the knob unconfigured; it must end up unset,
 # never forwarded as an empty setting.
-out="$(env NCCL_IB_MERGE_NICS='' NCCL_IB_SUBNET_AWARE_ROUTING='' NCCL_IB_SUBNET_PREFIX_LEN='' NCCL_NET_GDR_LEVEL='' NCCL_NET_GDR_READ='' NCCL_DMABUF_ENABLE='' NCCL_IB_GID_INDEX='' bash "$tmp/fragment.sh")"
+out="$(env NCCL_IB_MERGE_NICS='' NCCL_IB_SUBNET_AWARE_ROUTING='' NCCL_IB_SUBNET_PREFIX_LEN='' NCCL_NET_GDR_LEVEL='' NCCL_NET_GDR_READ='' NCCL_DMABUF_ENABLE='' NCCL_GIN_ENABLE='' NCCL_IB_GID_INDEX='' bash "$tmp/fragment.sh")"
 want="$(printf '%s absent\n' "${KNOBS[@]}")"
 if [ "$out" = "$want" ]; then
   ok "empty is normalized to absent (defined-empty from compose becomes truly unset)"
@@ -63,8 +63,8 @@ else
 fi
 
 # Direction 2: configured non-empty values pass through byte-identical.
-out="$(env NCCL_IB_MERGE_NICS='0' NCCL_IB_SUBNET_AWARE_ROUTING='1' NCCL_IB_SUBNET_PREFIX_LEN='24' NCCL_NET_GDR_LEVEL='SYS' NCCL_NET_GDR_READ='1' NCCL_DMABUF_ENABLE='0' NCCL_IB_GID_INDEX='3' bash "$tmp/fragment.sh")"
-want="$(printf '%s\n' 'NCCL_IB_MERGE_NICS=0' 'NCCL_IB_SUBNET_AWARE_ROUTING=1' 'NCCL_IB_SUBNET_PREFIX_LEN=24' 'NCCL_NET_GDR_LEVEL=SYS' 'NCCL_NET_GDR_READ=1' 'NCCL_DMABUF_ENABLE=0' 'NCCL_IB_GID_INDEX=3')"
+out="$(env NCCL_IB_MERGE_NICS='0' NCCL_IB_SUBNET_AWARE_ROUTING='1' NCCL_IB_SUBNET_PREFIX_LEN='24' NCCL_NET_GDR_LEVEL='SYS' NCCL_NET_GDR_READ='1' NCCL_DMABUF_ENABLE='0' NCCL_GIN_ENABLE='0' NCCL_IB_GID_INDEX='3' bash "$tmp/fragment.sh")"
+want="$(printf '%s\n' 'NCCL_IB_MERGE_NICS=0' 'NCCL_IB_SUBNET_AWARE_ROUTING=1' 'NCCL_IB_SUBNET_PREFIX_LEN=24' 'NCCL_NET_GDR_LEVEL=SYS' 'NCCL_NET_GDR_READ=1' 'NCCL_DMABUF_ENABLE=0' 'NCCL_GIN_ENABLE=0' 'NCCL_IB_GID_INDEX=3')"
 if [ "$out" = "$want" ]; then
   ok "configured non-empty values pass through unchanged"
 else
@@ -74,8 +74,8 @@ fi
 # Contract boundary: only *empty* is normalized. A value that is non-empty but
 # unusual (whitespace, punctuation, mixed case) is still a configured value and
 # must reach NCCL byte-identical rather than being trimmed or dropped.
-out="$(env NCCL_IB_MERGE_NICS=' ' NCCL_IB_SUBNET_AWARE_ROUTING='1' NCCL_IB_SUBNET_PREFIX_LEN='24' NCCL_NET_GDR_LEVEL='PHB ' NCCL_NET_GDR_READ='0' NCCL_DMABUF_ENABLE='Yes' NCCL_IB_GID_INDEX=' ' bash "$tmp/fragment.sh")"
-want="$(printf '%s\n' 'NCCL_IB_MERGE_NICS= ' 'NCCL_IB_SUBNET_AWARE_ROUTING=1' 'NCCL_IB_SUBNET_PREFIX_LEN=24' 'NCCL_NET_GDR_LEVEL=PHB ' 'NCCL_NET_GDR_READ=0' 'NCCL_DMABUF_ENABLE=Yes' 'NCCL_IB_GID_INDEX= ')"
+out="$(env NCCL_IB_MERGE_NICS=' ' NCCL_IB_SUBNET_AWARE_ROUTING='1' NCCL_IB_SUBNET_PREFIX_LEN='24' NCCL_NET_GDR_LEVEL='PHB ' NCCL_NET_GDR_READ='0' NCCL_DMABUF_ENABLE='Yes' NCCL_GIN_ENABLE='1' NCCL_IB_GID_INDEX=' ' bash "$tmp/fragment.sh")"
+want="$(printf '%s\n' 'NCCL_IB_MERGE_NICS= ' 'NCCL_IB_SUBNET_AWARE_ROUTING=1' 'NCCL_IB_SUBNET_PREFIX_LEN=24' 'NCCL_NET_GDR_LEVEL=PHB ' 'NCCL_NET_GDR_READ=0' 'NCCL_DMABUF_ENABLE=Yes' 'NCCL_GIN_ENABLE=1' 'NCCL_IB_GID_INDEX= ')"
 if [ "$out" = "$want" ]; then
   ok "non-empty boundary values (whitespace/case preserved) pass through unchanged"
 else
@@ -83,8 +83,8 @@ else
 fi
 
 # Mixed: one configured, six unconfigured.
-out="$(env NCCL_IB_MERGE_NICS='' NCCL_IB_SUBNET_AWARE_ROUTING='' NCCL_IB_SUBNET_PREFIX_LEN='' NCCL_NET_GDR_LEVEL='LOC' NCCL_NET_GDR_READ='' NCCL_DMABUF_ENABLE='' NCCL_IB_GID_INDEX='' bash "$tmp/fragment.sh")"
-want="$(printf '%s\n' 'NCCL_IB_MERGE_NICS absent' 'NCCL_IB_SUBNET_AWARE_ROUTING absent' 'NCCL_IB_SUBNET_PREFIX_LEN absent' 'NCCL_NET_GDR_LEVEL=LOC' 'NCCL_NET_GDR_READ absent' 'NCCL_DMABUF_ENABLE absent' 'NCCL_IB_GID_INDEX absent')"
+out="$(env NCCL_IB_MERGE_NICS='' NCCL_IB_SUBNET_AWARE_ROUTING='' NCCL_IB_SUBNET_PREFIX_LEN='' NCCL_NET_GDR_LEVEL='LOC' NCCL_NET_GDR_READ='' NCCL_DMABUF_ENABLE='' NCCL_GIN_ENABLE='' NCCL_IB_GID_INDEX='' bash "$tmp/fragment.sh")"
+want="$(printf '%s\n' 'NCCL_IB_MERGE_NICS absent' 'NCCL_IB_SUBNET_AWARE_ROUTING absent' 'NCCL_IB_SUBNET_PREFIX_LEN absent' 'NCCL_NET_GDR_LEVEL=LOC' 'NCCL_NET_GDR_READ absent' 'NCCL_DMABUF_ENABLE absent' 'NCCL_GIN_ENABLE absent' 'NCCL_IB_GID_INDEX absent')"
 if [ "$out" = "$want" ]; then
   ok "mixed configuration: set stays set, unset stays absent"
 else
@@ -99,7 +99,7 @@ for k in "${KNOBS[@]}"; do
   grep -Fq "$k: \"\${$k:-}\"" "$COMPOSE" || wiring_missing="$wiring_missing $k"
 done
 if [ -z "$wiring_missing" ]; then
-  ok "compose declares all seven knobs in the environment map"
+  ok "compose declares all eight knobs in the environment map"
 else
   bad "compose environment map missing:$wiring_missing"
 fi

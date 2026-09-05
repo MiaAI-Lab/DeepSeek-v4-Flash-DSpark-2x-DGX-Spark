@@ -266,6 +266,10 @@ services:
       NCCL_NET_GDR_LEVEL: "${NCCL_NET_GDR_LEVEL:-}"
       NCCL_NET_GDR_READ: "${NCCL_NET_GDR_READ:-}"
       NCCL_DMABUF_ENABLE: "${NCCL_DMABUF_ENABLE:-}"
+      # GPU-initiated networking (GIN). Empty = absent = NCCL default (enabled).
+      # Exact 0 = CPU-driven comm-init: ~10x faster bootstrap while the serve
+      # holds ~97% GPU memory (measured 2026-09-05; bandwidth unchanged).
+      NCCL_GIN_ENABLE: "${NCCL_GIN_ENABLE:-}"
 
       NODE_RANK: "${NODE_RANK}"
       HEADLESS: "${HEADLESS:-}"
@@ -379,6 +383,7 @@ services:
         if [ -z "$${NCCL_NET_GDR_LEVEL:-}" ]; then unset NCCL_NET_GDR_LEVEL; fi;
         if [ -z "$${NCCL_NET_GDR_READ:-}" ]; then unset NCCL_NET_GDR_READ; fi;
         if [ -z "$${NCCL_DMABUF_ENABLE:-}" ]; then unset NCCL_DMABUF_ENABLE; fi;
+        if [ -z "$${NCCL_GIN_ENABLE:-}" ]; then unset NCCL_GIN_ENABLE; fi;
         if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then unset NCCL_IB_GID_INDEX; fi;
         if [ -n "$${TORCH_FR_DUMP_TEMP_FILE:-}" ]; then mkdir -p "$$(dirname "$${TORCH_FR_DUMP_TEMP_FILE}")" || echo "warn: cannot create flight-recorder dump dir; dumps will be lost (boot continues)" >&2; fi;
         ENCODING_SOURCE="$${DSPARK_ENCODING_FILE:-}";
