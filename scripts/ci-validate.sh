@@ -80,6 +80,7 @@ py_files+=(
   scripts/test-dsml-recovery.py
   scripts/test-issue144-effort-align.py
   patches/hotfix-dsv4-issue144-effort-align.py
+  scripts/test-mxfp4-indexer-cache.py
   scripts/test-issue117-shm-ring-buffer.py
   scripts/verify-issue136-xgrammar-live.py
   scripts/test-empty-encoder-output-hotfix.py
@@ -152,6 +153,8 @@ python3 scripts/test-dsml-recovery.py -q
 ok "test-dsml-recovery"
 python3 scripts/test-issue144-effort-align.py -q
 ok "test-issue144-effort-align"
+python3 scripts/test-mxfp4-indexer-cache.py -q
+ok "test-mxfp4-indexer-cache"
 python3 scripts/test-issue117-shm-ring-buffer.py -q
 ok "test-issue117-shm-ring-buffer"
 python3 scripts/test-empty-encoder-output-hotfix.py -q
@@ -613,6 +616,17 @@ else
   bad "issue #144 effort alignment must be default-off, fail-closed, worker-synced and preflighted"
 fi
 
+# MXFP4 indexer K cache (item8 §3): default OFF, exact-1/fail-closed, worker-synced, preflight, alias-coupled.
+if grep -Fq 'DSPARK_ENABLE_MXFP4_INDEXER_CACHE: "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}"' docker-compose.dspark.yml \
+  && grep -Fq 'if [ "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ]; then python3 /opt/hotfix-vllm-mxfp4-indexer-cache.py || exit 1; fi;' docker-compose.dspark.yml \
+  && grep -Fq "DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py'" start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq '/opt/hotfix-vllm-mxfp4-indexer-cache.py --check' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq 'requires DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS=1' start-deepseek-v4-flash-dspark.sh \
+  && grep -Fq 'DSPARK_ENABLE_MXFP4_INDEXER_CACHE=0' .env.dspark.example; then
+  ok "compose/launcher gate the MXFP4 indexer K cache"
+else
+  bad "MXFP4 indexer cache must be default-off, fail-closed, worker-synced, preflighted and alias-coupled"
+fi
 # Launcher remote_compose/remote_compose2 must each be defined exactly once and
 # carry the full feature passthrough set (a stacked-merge conflict once dropped
 # block-k from the TP2 worker and issue191/async from the TP3 worker2).
@@ -629,6 +643,10 @@ for fn in remote_compose remote_compose2; do
     ok "$fn carries the full passthrough set exactly once"
   else
     bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery/issue144 passthroughs"
+    && grep -Fq 'DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER' <<<"$body"; then
+    ok "$fn carries the full passthrough set exactly once"
+  else
+    bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery/mxfp4-indexer passthroughs"
   fi
 done
 echo "CI validate passed (CPU recipe gates only)."

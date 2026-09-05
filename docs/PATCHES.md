@@ -1214,3 +1214,47 @@ miss — fresh volume, new cache root, new index head count, the fp4 indexer pat
 (`#include <deep_gemm/impls/sm120_X.cuh>` + `#define sm121_X sm120_X`) for the
 fp8/fp4 × contiguous/paged mqa-logits kernels. Idempotent; `--status` reports.
 Details: `docs/CLAUDE/item8-fp4-kv-design.md` §5.
+
+## MXFP4 indexer K cache — relax the fp4 indexer gate to sm_12x (default OFF)
+
+**What ships in the image.** The pinned vLLM carries a complete MXFP4
+Lightning-indexer K cache behind `AttentionConfig.use_fp4_indexer_cache`: the
+indexer insert writes packed FP4 K (`use_fp4_cache=` / `use_fp4=` plumbing in
+`models/deepseek_v4/attention.py`), the DeepGEMM `fp8_fp4_*_mqa_logits`
+kernels consume it, and the vendored DeepGEMM ships
+`sm120_fp4_mqa_logits.cuh` / `sm120_fp4_paged_mqa_logits.cuh`. The metadata
+builder nevertheless asserts Blackwell *datacenter* only
+(`v1/attention/backends/mla/indexer.py:274-285`, "use_fp4_indexer_cache
+requires Blackwell datacenter GPUs (sm_10x)"), while the decode flattening
+rule directly below already covers every non-SM100 family via the shared
+`smxx_fp8_fp4_paged_mqa_logits` contract (k=5 flattens either way) — the gate
+is conservative, not a kernel limit (item8 design §3).
+
+**What the patcher does.** `patches/hotfix-vllm-mxfp4-indexer-cache.py`
+(source-exact, stock identity `02505c6c…` → patched `bfb0376d…`) widens that
+one assert with `or current_platform.is_device_capability_family(120)` and
+rewords its message; nothing else changes, and pre-Blackwell architectures
+still fail closed. Enablement is separate: the Compose gate passes
+`--attention-config {"use_fp4_indexer_cache":true}` on both ranks only when
+`DSPARK_ENABLE_MXFP4_INDEXER_CACHE=1`, which also applies the patcher at boot
+(mount, `--check` preflight worker then head, apply at container start,
+atomic replace). The launcher refuses the flag without
+`DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS=1`: the fp4 logits kernels are not in the
+persisted DeepGEMM JIT cache, and a GB10 compile emits `sm121_*` includes
+that exist only as the §5 alias headers. CPU suite:
+`python3 scripts/test-mxfp4-indexer-cache.py` (pins, idempotency, fail-closed
+CLI, exec-level gate semantics on the real region bytes, wiring).
+
+**Expected effect.** The pinned writer keeps the FP8-size 132 B/row indexer K
+allocation and uses the first half for FP4 (`attention.py` NOTE), so the flag
+halves indexer K *read* bytes per scored key today — the indexer is
+replicated across both TP ranks and its O(queries × keys) logits reads
+dominate long-context score traffic. The item8 §3 headline (−0.35 KB/token ≈
+−9 % of physical KV bytes) additionally needs the spec-side half-row
+allocation follow-up. The first enabled boot JIT-compiles the fp4 logits
+kernels (~minutes; persisted in `VLLM_CACHE_ROOT/deep_gemm`).
+
+**Live gate before defaulting on.** MXFP4 (e2m1 values, per-32 UE8M0 scales)
+quantizes indexer *scores* — top-k selection, never attention values — so the
+risk is selection drift at depth: run ruler-lite 32K/131K, the context-garble
+sweep to 900K, and the 128K TTFT A/B vs control before flipping the default.
