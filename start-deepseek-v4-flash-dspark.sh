@@ -413,6 +413,12 @@ if [ "${DSPARK_ENABLE_DSML_RECOVERY:-0}" = "1" ] && { [ ! -f "$DSPARK_DSML_RECOV
   exit 1
 fi
 export DSPARK_DSML_RECOVERY_HOTFIX DSPARK_ENABLE_DSML_RECOVERY
+DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX="${DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue144-effort-align.py}"
+if [ "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}" = "1" ] && { [ ! -f "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" ] || [ -L "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" ]; }; then
+  echo "Issue #144 effort alignment is enabled but its local patcher is missing or not a regular file: $DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" >&2
+  exit 1
+fi
+export DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN
 # MXFP4 indexer K cache (opt-in, item8 design §3): gate relaxation + enablement arg.
 DSPARK_MXFP4_INDEXER_CACHE_HOTFIX="${DSPARK_MXFP4_INDEXER_CACHE_HOTFIX:-$SCRIPT_DIR/patches/hotfix-vllm-mxfp4-indexer-cache.py}"
 if [ "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ] && { [ ! -f "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" ] || [ -L "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" ]; }; then
@@ -514,6 +520,7 @@ REMOTE_DSPARK_BLOCK_K="$(printf '%q' "${DSPARK_ENABLE_DSPARK_BLOCK_K:-0}")"
 REMOTE_ROPE_SWA_FIX="$(printf '%q' "${DSPARK_ENABLE_ROPE_SWA_FIX:-0}")"
 REMOTE_DSPARK_SWA_PREFIX="$(printf '%q' "${DSPARK_ENABLE_DSPARK_SWA_PREFIX:-0}")"
 REMOTE_DSML_RECOVERY="$(printf '%q' "${DSPARK_ENABLE_DSML_RECOVERY:-0}")"
+REMOTE_ISSUE144_EFFORT_ALIGN="$(printf '%q' "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}")"
 REMOTE_MXFP4_INDEXER="$(printf '%q' "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}")"
 REMOTE_COMPOSE="cd $REMOTE_WORKER_DIR && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS COMPOSE_DISABLE_ENV_FILE=1"
 STARTUP_LOG_SINCE=""
@@ -1087,6 +1094,7 @@ print_resolved_profile() {
   echo "  rope swa fix (vllm#54815): ${DSPARK_ENABLE_ROPE_SWA_FIX:-0} (0=stock YaRN on sparse-SWA / 1=plain RoPE on sparse-SWA layers)"
   echo "  dsml recovery (vllm#52645): ${DSPARK_ENABLE_DSML_RECOVERY:-0} (0=stock, malformed-wrapper invokes leak as content / 1=recover declared-tool DSML invokes)"
   echo "  issue144 effort alignment: ${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0} (0=stock front-inserted effort directive / 1=directive at system-region tail, cross-bucket prefix-cache sharing)"
+  echo "  mxfp4 indexer K cache (item8 §3): ${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0} (0=stock fp8 indexer K / 1=MXFP4 indexer K, halved logits reads; requires sm121 alias headers)"
   echo "  default thinking: $DEFAULT_THINKING (off/low/high/max)"
   echo "  issue31 GPU thinking_token_budget hotfix: ${DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0} (0=stock V2 / 1=apply)"
   if [ "$VLLM_ENABLE_RESPONSES_API_STORE" = "1" ]; then
@@ -1512,6 +1520,11 @@ if [ -f "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" ] && [ ! -L "$DSPARK_ISSUE144_EFF
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   scp "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue144-effort-align.py"
 fi
+if [ -f "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" ] && [ ! -L "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" ]; then
+  echo "Syncing MXFP4 indexer K cache hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  scp "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-mxfp4-indexer-cache.py"
+fi
 # Compose always bind-mounts patches/tp3. Create it on the worker even for
 # TP=2 so Docker does not invent a root-owned empty dir (or fail the mount).
 ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches/tp3'"
@@ -1737,6 +1750,16 @@ if [ "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}" = "1" ]; then
   fi
   echo "Checking Issue #144 effort alignment compatibility on the head before either rank starts..."
   compose_base 0 "" run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-issue144-effort-align.py --check
+fi
+if [ "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ]; then
+  echo "Checking MXFP4 indexer K cache compatibility on the worker before either rank starts..."
+  remote_compose "NODE_RANK=1 HEADLESS=1 $WORKER_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-mxfp4-indexer-cache.py --check"
+  if [ "$DSPARK_TP3" = "1" ]; then
+    echo "Checking MXFP4 indexer K cache compatibility on worker2 before ranks start..."
+    remote_compose2 "NODE_RANK=2 HEADLESS=1 $WORKER2_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER2_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER2_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-mxfp4-indexer-cache.py --check"
+  fi
+  echo "Checking MXFP4 indexer K cache compatibility on the head before either rank starts..."
+  compose_base 0 "" run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-mxfp4-indexer-cache.py --check
 fi
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."

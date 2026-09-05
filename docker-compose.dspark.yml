@@ -365,10 +365,6 @@ services:
       # into content instead of a structured tool call; exact 1 recovers it
       # when the request declared the tool. Default 0 = stock.
       DSPARK_ENABLE_DSML_RECOVERY: "${DSPARK_ENABLE_DSML_RECOVERY:-0}"
-      # Issue #144: exact 1 relocates the reasoning-effort directive to the end
-      # of the leading system region so prefix-cache blocks are shared across
-      # effort buckets (fail-closed encoder patch). Default 0 = stock renderer.
-      DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN: "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}"
       # MXFP4 indexer K cache (item8 design §3): exact 1 relaxes the
       # datacenter-only gate in v1/attention/backends/mla/indexer.py and passes
       # --attention-config {"use_fp4_indexer_cache":true}, so the Lightning
@@ -376,6 +372,10 @@ services:
       # bytes per key. The launcher requires DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS=1
       # with it (fp4 kernels are not in the persisted JIT cache). Default 0 = stock.
       DSPARK_ENABLE_MXFP4_INDEXER_CACHE: "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}"
+      # Issue #144: exact 1 relocates the reasoning-effort directive to the end
+      # of the leading system region so prefix-cache blocks are shared across
+      # effort buckets (fail-closed encoder patch). Default 0 = stock renderer.
+      DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN: "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}"
       # Issue #66: GPU V2 thinking_token_budget hotfix. 0 (default) = stock
       # sampler (HTTP 400 if a client sends the field). 1 = apply at boot
       # (fail-closed) so explicit thinking_token_budget works. Omit-field
