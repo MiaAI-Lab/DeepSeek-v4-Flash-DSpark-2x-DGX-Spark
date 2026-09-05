@@ -1003,6 +1003,81 @@ parser suite + issue #191 tool-call contract stay green in CI).
 
 ---
 
+## Issue #144 — effort-directive prefix-cache alignment (default OFF)
+
+**Symptom.** The checkpoint encoder (`encoding/encoding_dsv4.py`, installed at
+boot as `vllm/tokenizers/deepseek_v4_encoding.py`) front-inserts the
+reasoning-effort directive immediately after BOS and before all system content
+whenever `thinking_mode == "thinking"`. The directive is a static,
+non-256-aligned segment: BOS+directive is 93 tokens for `max`/`xhigh`, 80 for
+`high` (and the live `DEFAULT_THINKING=high` default), 0 extra tokens for
+`low`/`off`/`medium` (empty directive; the compose wrapper mapping folds
+`medium` and every other value into `low`, and only
+`chat_template_kwargs.reasoning_effort` reaches the encoder — the top-level
+OpenAI `reasoning_effort` field is ignored). vLLM v1 prefix caching hashes
+256-token blocks chained on the parent block hash, so requests that differ
+only in effort diverge at block 0 and share **zero** blocks. Measured on the
+live 2×GB10 lane: cross-bucket hit rate exactly 0, intra-bucket 96–98%; the
+cache is partitioned into `{low,off,medium}` / `{high,DEFAULT}` /
+`{max,xhigh}`.
+
+**What the patcher does.** `patches/hotfix-dsv4-issue144-effort-align.py`
+replaces one anchored region of `render_message` (the effort prefix plus the
+system branch; the region constants are sha256-pinned in the patcher) so the
+directive renders at the **end of the leading run of system messages** instead
+of in front of it:
+
+```
+stock:   BOS + directive + system-region + rest
+aligned: BOS + system-region + "\n\n" + directive + rest
+```
+
+`low` renders (empty directive), chat-mode renders, context continuations and
+conversations with no leading system message stay byte-identical to stock.
+The bytes of BOS + system prompt + tools are then identical for every effort,
+so all their full 256-token blocks hash identically across buckets; only the
+0/~80/~93-token directive tail plus the junction block diverges. Measured with
+the live tokenizer on a 4646-token agent-shaped prompt: stock shares 0 full
+blocks across buckets; aligned shares 18/18 cacheable blocks (shared token
+prefix 4630 of 4646; the BPE junction merge costs exactly 1 token).
+
+**Fail-closed operation.** The compose gate runs the patcher after the encoder
+copy and after the other encoder co-patchers (issue #21, Vision-Exp,
+assistant-final; the anchored region is disjoint from all three and accepted
+in both assistant-final pre-states). A missing or duplicated anchor aborts the
+boot; known whole-file identities (snapshot `b4bbb74b…` 36,707 B, live chain
+`07432ce4…` 39,960 B, and their patched forms `f99de710…` / `a976ae86…`) are
+recognized and reported, while an unrecognized file with an intact anchor is
+still patchable because the encoder is co-owned by gated patchers and
+`DSPARK_REVISION` is unpinned by default. After writing (same-directory atomic
+replace), a render self-check re-proves relocation and byte parity or the
+original bytes are restored and the boot fails. `--status` classifies the
+served copy; `--check` classifies the bytes the next boot will copy
+(env-resolved snapshot source, mirroring the entrypoint), which is what the
+launcher preflights on the worker(s) and head before either rank starts.
+
+**Wiring.** `DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=1` gates it (mount, worker
+sync, `--check` preflight worker→head, `scripts/ci-validate.sh` locks). The
+CPU suite is `python3 scripts/test-issue144-effort-align.py`: fixture/transform
+identity pins for both pre-states, exact-byte relocation and parity matrices,
+a chained-block-hash simulation proving stock shares zero cross-bucket blocks
+while aligned shares every full block of the shared prefix (deterministic
+surrogate tokenizer; set `DSPARK_I144_TOKENIZER_JSON` to the checkpoint's
+`tokenizer.json` to rerun the proof with real BPE), patcher
+fail-closed/idempotency, and wiring locks.
+
+**Live gate before defaulting on.** (1) Cache effectiveness: replay a
+repeated-prefix mixed-effort trace and compare
+`vllm:prefix_cache_hits`/`queries` plus TTFT cross-bucket (expect ≈0% → shared
+region hit; reporter's claim on repeated-prefix high/max traffic is 2.3–2.7×
+TTFT). (2) Output-quality parity: the directive moves from before to after the
+system prompt, so completions at `high`/`max` (temperature 0, fixed seeds,
+agent-shaped prompts with tools) must match stock in reasoning-length
+distribution and task outcomes within run-to-run noise; `low`/`off`/`medium`
+is byte-identical by construction and needs no gate.
+
+---
+
 ## Issue #117 — bounded SHM dispatch-ring reader recovery
 
 ### Scope and upstream fix
