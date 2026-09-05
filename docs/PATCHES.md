@@ -941,6 +941,68 @@ the Vision-Exp abliterated lane: repeated-prompt output-quality A/B.
 
 ---
 
+## DSML recovery — malformed-wrapper DeepSeek V4 tool calls recover instead of leaking (default OFF)
+
+**Symptom.** DeepSeek V4 intermittently emits an otherwise complete DSML
+`<invoke name="...">` block while the outer `tool_calls` opener is missing or
+malformed — one observed DeepSeek-V4-Flash-0731 variant emits `toolcalls`
+(upstream vllm#51914). The pinned parser only enters the tool-call state
+machine on the exact outer opener, so the whole invoke leaks verbatim into
+user-visible content (or stays in reasoning) and the structured tool call is
+lost; agent traffic sees DSML markup as prose instead of a tool call.
+
+**What the patcher does.** `patches/hotfix-vllm-dsml-recovery.py` ports open
+upstream [vllm#52645](https://github.com/vllm-project/vllm/pull/52645) (head
+`3df9776b0d`, the current-main DeepSeek V4 extraction of the #49117
+orphan-invoke recovery direction) onto the pinned parser engine, adapted to
+the pinned engine's pre-`token_count` API. Six files, all sole-owned by this
+hotfix and pinned by whole-file stock+patched identity:
+
+- `parser/engine/parser_engine_config.py` (stock `0854bd50…` → `76ed8f12…`):
+  `Transition` gains opt-in `provisional_tool_call` /
+  `commit_provisional_tool_call` markers; `ParserState` gains
+  `FOREIGN_BLOCK` / `FOREIGN_REASONING_BLOCK`.
+- `parser/engine/streaming_parser_engine.py` (`4ac9135e…` → `cd7d8778…`): a
+  provisional transition buffers its semantic events and raw text; the
+  completed name is validated through a parser-owned callback; only the
+  configured `INVOKE_END` transition commits (returning to CONTENT and
+  absorbing one optional outer closer); every other exit — truncation, an
+  outer `TOOL_END` without `INVOKE_END`, a rejected name, `finish()` — puts
+  the raw text back in its original content or reasoning state. Parser-level
+  drop tokens (EOS) never enter the buffers; name buffering aborts past 256
+  chars or a newline so quoted markers cannot stall a response.
+- `parser/deepseek_v4.py` (`97d7cd3c…` → `2cc89a1b…`): provisional
+  transitions for a bare `INVOKE_PREFIX` from CONTENT/REASONING; V3.2
+  `function_calls` wrappers become verbatim passthrough states (their inner
+  invokes are never recovered); the recovery validator accepts only names
+  declared by the live request and nothing under `tool_choice="none"`.
+- `parser/engine/adapters.py` (`dc1c1317…` → `9d743734…`),
+  `parser/abstract_parser.py` (`fd4eb7a6…` → `e11c1b78…`),
+  `parser/engine/parser_engine.py` (`886bf629…` → `f8f403ad…`): the request's
+  tools and `tool_choice` are mirrored into the reasoning-side engine before
+  recovery validation (non-streaming and per-delta), and a rolled-back
+  candidate parked in deferred reasoning is flushed at stream end.
+
+Misspelled wrappers are deliberately not normalized: recovery anchors on the
+inner invoke structure, so missing and corrupted openers share one
+conservative path and unrecognized wrapper text is preserved as content.
+`DSPARK_ENABLE_DSML_RECOVERY=1` gates it (mount, `--check` preflight worker
+then head, apply at container start; all six targets preflight before any
+write, one atomic replace per file, files already written roll back to stock
+if a later file fails). The CPU suite is `python3 scripts/test-dsml-recovery.py`:
+fixture/transform pins, patcher fail-closed/idempotency/rollback, the
+upstream #52645 regression matrix (16 engine + 5 serving-style delegating
+scenarios) replayed against the pinned fixtures, and a 16-case stock/patched
+parity matrix proving normal wrapped DSML, reasoning, streaming, and
+`tool_choice` handling are byte-identical in behavior.
+
+**Live gate before defaulting on.** Recovery only fires on traffic the stock
+parser already fails to execute, but the lane contract is agent tool-call
+acceptance parity vs the 42.3% C1 baseline on live agent traffic (existing
+parser suite + issue #191 tool-call contract stay green in CI).
+
+---
+
 ## Issue #117 — bounded SHM dispatch-ring reader recovery
 
 ### Scope and upstream fix
