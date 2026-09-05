@@ -84,6 +84,8 @@ services:
       - ${DSPARK_DSPARK_SWA_PREFIX_HOTFIX:-./patches/hotfix-vllm-dspark-swa-prefix.py}:/opt/hotfix-vllm-dspark-swa-prefix.py:ro
       # Upstream vllm#52645: recover DeepSeek V4 tool calls with malformed DSML wrappers (opt-in).
       - ${DSPARK_DSML_RECOVERY_HOTFIX:-./patches/hotfix-vllm-dsml-recovery.py}:/opt/hotfix-vllm-dsml-recovery.py:ro
+      # MXFP4 indexer K cache: relax the fp4 indexer datacenter-only gate for sm_12x (opt-in).
+      - ${DSPARK_MXFP4_INDEXER_CACHE_HOTFIX:-./patches/hotfix-vllm-mxfp4-indexer-cache.py}:/opt/hotfix-vllm-mxfp4-indexer-cache.py:ro
       # Client stop strings stay dormant until </think> (Tony/Capicua25x Patch 5).
       - ${DSPARK_SUPPRESS_STOPS_HOTFIX:-./patches/hotfix-dsv4-suppress-stops-in-reasoning.py}:/opt/hotfix-dsv4-suppress-stops-in-reasoning.py:ro
       # A request ending with an assistant message must still get a generation
@@ -359,6 +361,13 @@ services:
       # into content instead of a structured tool call; exact 1 recovers it
       # when the request declared the tool. Default 0 = stock.
       DSPARK_ENABLE_DSML_RECOVERY: "${DSPARK_ENABLE_DSML_RECOVERY:-0}"
+      # MXFP4 indexer K cache (item8 design §3): exact 1 relaxes the
+      # datacenter-only gate in v1/attention/backends/mla/indexer.py and passes
+      # --attention-config {"use_fp4_indexer_cache":true}, so the Lightning
+      # indexer writes packed MXFP4 K and the logits kernels read half the
+      # bytes per key. The launcher requires DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS=1
+      # with it (fp4 kernels are not in the persisted JIT cache). Default 0 = stock.
+      DSPARK_ENABLE_MXFP4_INDEXER_CACHE: "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}"
       # Issue #66: GPU V2 thinking_token_budget hotfix. 0 (default) = stock
       # sampler (HTTP 400 if a client sends the field). 1 = apply at boot
       # (fail-closed) so explicit thinking_token_budget works. Omit-field
@@ -420,10 +429,12 @@ services:
         if [ "$${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-issue136-xgrammar-termination.py || exit 1; fi;
         if [ "$${DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED:-0}" = "1" ]; then python3 /opt/hotfix-vllm-issue191-toolcall-failclosed.py || exit 1; fi;
         case "$${DSPARK_ASYNC_SCHEDULING:-1}" in 1) ASYNC_SCHEDULING_ARGS="--async-scheduling" ;; 0) ASYNC_SCHEDULING_ARGS="" ;; *) echo "DSPARK_ASYNC_SCHEDULING must be 0 or 1 (got $${DSPARK_ASYNC_SCHEDULING})" >&2; exit 1 ;; esac;
+        case "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" in 1) MXFP4_INDEXER_ARGS="--attention-config {\"use_fp4_indexer_cache\":true}" ;; 0) MXFP4_INDEXER_ARGS="" ;; *) echo "DSPARK_ENABLE_MXFP4_INDEXER_CACHE must be 0 or 1 (got $${DSPARK_ENABLE_MXFP4_INDEXER_CACHE})" >&2; exit 1 ;; esac;
         if [ "$${DSPARK_ENABLE_DSPARK_BLOCK_K:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dspark-block-k.py || exit 1; fi;
         if [ "$${DSPARK_ENABLE_ROPE_SWA_FIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-rope-swa-fix.py || exit 1; fi;
         if [ "$${DSPARK_ENABLE_DSPARK_SWA_PREFIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dspark-swa-prefix.py || exit 1; fi;
         if [ "$${DSPARK_ENABLE_DSML_RECOVERY:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dsml-recovery.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ]; then python3 /opt/hotfix-vllm-mxfp4-indexer-cache.py || exit 1; fi;
         if [ "$${ENABLE_VLLM_GB10_PATCH:-0}" = "1" ]; then
           python3 -m pip install -e /opt/vllm-gb10-hybrid-nvfp4 --no-deps;
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";
@@ -469,6 +480,7 @@ services:
         --enable-prefix-caching
         --enable-prompt-tokens-details
         $${ASYNC_SCHEDULING_ARGS}
+        $${MXFP4_INDEXER_ARGS}
         --enable-chunked-prefill
         --speculative-config "$${SPECULATIVE_CONFIG}"
         --tokenizer-mode deepseek_v4
