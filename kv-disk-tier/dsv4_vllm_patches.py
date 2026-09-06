@@ -1407,7 +1407,7 @@ def apply_all() -> None:
     if _flag("KV_DISK_CACHE_PATCH_BUG2_KEEPALIVE", "1"):
         apply_bug2_keepalive()
     # Opt-in: off by default until proven under the real MLA/DSpark kernels.
-    if _flag("KV_DISK_CACHE_HOST_KV", "0"):
+    if _flag("KV_DISK_CACHE_DIRECT_IO", "0"):
         apply_host_kv_alloc()
         try:
             apply_host_kv_alloc_v2()
@@ -1455,7 +1455,7 @@ def apply_all() -> None:
 _HOST_KV_POOL = None  # module-level: the pool must outlive every tensor from it
 _HOST_KV_ALLOC = None
 
-_HOST_KV_SO = os.environ.get("KV_DISK_CACHE_HOST_KV_SO", "/usr/local/lib/libdsv4_host_kv.so")
+_HOST_KV_SO = os.environ.get("KV_DISK_CACHE_DIRECT_IO_SO", "/usr/local/lib/libdsv4_host_kv.so")
 
 
 def _build_host_kv_pool():
@@ -1467,7 +1467,7 @@ def _build_host_kv_pool():
 
     if not os.path.exists(_HOST_KV_SO):
         raise RuntimeError(
-            f"dsv4-patch: KV_DISK_CACHE_HOST_KV=1 but {_HOST_KV_SO} is missing. Build it with:\n"
+            f"dsv4-patch: KV_DISK_CACHE_DIRECT_IO=1 but {_HOST_KV_SO} is missing. Build it with:\n"
             "  nvcc -O3 -arch=sm_121a -shared -Xcompiler -fPIC "
             "-o /usr/local/lib/libdsv4_host_kv.so dsv4_host_kv_alloc.cu"
         )
@@ -1772,7 +1772,7 @@ def apply_host_kv_direct_map() -> None:
 def apply_host_kv_direct_skip() -> None:
     """Skip the staging<->KV copy where the direct path replaces it.
 
-    With KV_DISK_CACHE_HOST_KV=1 the STORE direction writes host-KV straight to NVMe
+    With KV_DISK_CACHE_DIRECT_IO=1 the STORE direction writes host-KV straight to NVMe
     inside the copy handler (transfer_async -> swap_blocks_batch interception),
     while the GPU blocks are still pinned -- so the GPU->staging copy is
     redundant and is skipped. The LOAD direction is written straight into

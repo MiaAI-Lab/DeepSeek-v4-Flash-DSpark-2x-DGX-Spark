@@ -12,7 +12,7 @@ KV_DISK_CACHE_SRC=/opt/dsv4-kv ./build.sh   # builds libdsv4_batch_copy.so + lib
 
 `libdsv4_batch_copy.so` is the scatter-gather copy kernel that replaces
 `cuMemcpyBatchAsync` for large copies, which segfaults in the driver above ~23k
-descriptors. `libdsv4_host_kv.so` backs the experimental `KV_DISK_CACHE_HOST_KV=1` path.
+descriptors. `libdsv4_host_kv.so` backs the experimental `KV_DISK_CACHE_DIRECT_IO=1` path.
 `build.sh` needs an image with `nvcc` — the serving image
 (`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`) has none, so a separate build image is
 used (`IMG`).
@@ -74,7 +74,7 @@ removes the stale container, clears leftover `/dev/shm` staging, and waits for
 restore tier. It is mandatory (vLLM's `OffloadingConnector` requires a primary
 tier), and it determines how many evicted blocks stay in CPU RAM and restore
 without touching NVMe versus spilling to disk. Blocks beyond this budget cascade
-to the NVMe tier. Under `KV_DISK_CACHE_HOST_KV=1` the primary tier is still
+to the NVMe tier. Under `KV_DISK_CACHE_DIRECT_IO=1` the primary tier is still
 allocated (the connector requires it) but its staging copy is bypassed.
 
 ## Disable
@@ -91,9 +91,9 @@ quota (`KV_DISK_CACHE_BYTES=150000000000`) holds **~35,185 blocks ≈ 36M tokens
 of the main group — comfortably past a full 1M-token context. Raise
 `KV_DISK_CACHE_BYTES` (with matching NVMe free space) to retain more.
 
-## Direct host-KV I/O (experimental)
+## Direct I/O (experimental)
 
-`KV_DISK_CACHE_HOST_KV=1` allocates the KV cache from `cudaHostAlloc` so the
+`KV_DISK_CACHE_DIRECT_IO=1` allocates the KV cache from `cudaHostAlloc` so the
 disk tier can DMA straight into it, skipping the GPU↔CPU staging copy on store
 and load. **It trades prefill throughput for a faster large-restore path.**
 Measured (2026-09-05, 2× DGX Spark): **~8–20% slower prefill** (KV writes land
@@ -146,13 +146,13 @@ default). Cold prefill and decode via
 
 | config | prefill tok/s @ 2K / 8K / 32K / 64K | decode tok/s |
 | --- | --- | --- |
-| `KV_DISK_CACHE_HOST_KV=0` | 1612 / 1714 / 1777 / 1752 | 63 / 66 / 46 / 55 |
-| `KV_DISK_CACHE_HOST_KV=1` | 1485 / 1586 / 1599 / 1394 | 63 / 58 / 58 / 58 |
+| `KV_DISK_CACHE_DIRECT_IO=0` | 1612 / 1714 / 1777 / 1752 | 63 / 66 / 46 / 55 |
+| `KV_DISK_CACHE_DIRECT_IO=1` | 1485 / 1586 / 1599 / 1394 | 63 / 58 / 58 / 58 |
 
 Restore vs cold fill (same prompt, evicted between): a 12k-token prefix restores
 from NVMe in ~1.9 s TTFT versus ~19 s cold fill; a buried needle is recalled
 byte-identically on restore (`/tmp/recall_test.py`), and
-`KV_DISK_CACHE_DIRECT_VERIFY=1` byte-checks each direct host-KV cell. These
+`KV_DISK_CACHE_DIRECT_VERIFY=1` byte-checks each direct-I/O cell. These
 prompts fit the CPU tier; the disk tier itself is exercised by the large-context
 fills above (~750K-token fill → ~2.3 s restore), consistent with the
 ~36M-token disk capacity in [Capacity](#capacity).

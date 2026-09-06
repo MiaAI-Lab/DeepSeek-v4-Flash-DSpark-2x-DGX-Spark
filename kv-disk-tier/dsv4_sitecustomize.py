@@ -12,7 +12,7 @@ finishes loading, which is the earliest point the patch subject exists and still
 well before any KV cache is allocated or any config object is constructed.
 
 Two patches, both a no-op unless the master switch is on:
-  * KV_DISK_CACHE_HOST_KV=1 -- route the KV cache through cudaHostAlloc (see apply_host_kv_alloc).
+  * KV_DISK_CACHE_DIRECT_IO=1 -- route the KV cache through cudaHostAlloc (see apply_host_kv_alloc).
   * always -- exempt the OffloadingConnector from vLLM's expandable_segments
     rejection (the disk tier requires expandable segments; see below).
 """
@@ -85,7 +85,7 @@ def _apply_expandable_segments_exempt():
     VllmConfig._verify_kv_transfer_compat = _patched
 
 
-if _ENABLED and os.environ.get("KV_DISK_CACHE_HOST_KV") == "1":
+if _ENABLED and os.environ.get("KV_DISK_CACHE_DIRECT_IO") == "1":
     _HOOKS.append(("vllm.v1.worker.gpu_model_runner", _apply_host_kv))
     _HOOKS.append(("vllm.v1.worker.gpu.model_runner", _apply_host_kv_v2))
 
