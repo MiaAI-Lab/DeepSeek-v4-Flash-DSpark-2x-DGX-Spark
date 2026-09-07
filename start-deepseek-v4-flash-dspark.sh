@@ -1449,22 +1449,40 @@ if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n 
   exit 1
 fi
 
-if ssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME (head is not up — likely a stale rank after a head-only reboot). Stop it first.' >&2; exit 1; fi"; then
-  :
-else
-  worker_rc=$?
-  echo "Cannot start: worker check on $WORKER_HOST failed (ssh exit $worker_rc)." >&2
-  exit "$worker_rc"
-fi
+# A stale worker rank means the cluster is effectively already up — the same
+# already-running contract as the head check above: exit 3 (not 1), so a
+# supervisor configured per the README (SuccessExitStatus=3) does not treat a
+# healthy pair as a failed start. The remote probe answers with sentinel 42
+# when the container exists, which keeps "stale rank" distinct from an
+# ssh/connectivity failure (255) — the latter is a hard error (exit 1).
+worker_rc=0
+ssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME (head is not up — likely a stale rank after a head-only reboot). Stop it first.' >&2; exit 42; fi" || worker_rc=$?
+case "$worker_rc" in
+  0) : ;;
+  42)
+    already_running_hint
+    exit 3
+    ;;
+  *)
+    echo "Cannot start: worker check on $WORKER_HOST failed (ssh exit $worker_rc)." >&2
+    exit 1
+    ;;
+esac
 
 if [ "$DSPARK_TP3" = "1" ]; then
-  if ssh "$WORKER2_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker2 container already exists for project $PROJECT_NAME. Stop it first.' >&2; exit 1; fi"; then
-    :
-  else
-    worker_rc=$?
-    echo "Cannot start: worker2 check on $WORKER2_HOST failed (ssh exit $worker_rc)." >&2
-    exit "$worker_rc"
-  fi
+  worker2_rc=0
+  ssh "$WORKER2_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker2 container already exists for project $PROJECT_NAME. Stop it first.' >&2; exit 42; fi" || worker2_rc=$?
+  case "$worker2_rc" in
+    0) : ;;
+    42)
+      already_running_hint
+      exit 3
+      ;;
+    *)
+      echo "Cannot start: worker2 check on $WORKER2_HOST failed (ssh exit $worker2_rc)." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # Pairwise CX /24s are fine for RoCE but not for Gloo/NCCL TCP bootstrap.
