@@ -33,6 +33,7 @@ for f in \
   scripts/validate_tp3.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
+  scripts/bench-baseline-issue22-only.sh \
   scripts/test-lmcache-compose-gate.sh \
   scripts/selftest-runtime-ablation.sh \
   patches/*.sh
@@ -140,6 +141,8 @@ python3 scripts/test-served-model-alias.py -q
 ok "test-served-model-alias"
 python3 scripts/test-dspark-api-keys.py -q
 ok "test-dspark-api-keys"
+python3 scripts/test-bench-baseline-hotfix-paths.py -q
+ok "test-bench-baseline-hotfix-paths"
 python3 scripts/test-redact-api-key-log.py -q
 ok "test-redact-api-key-log"
 python3 scripts/test-hotfix-atomic-transaction.py -q
