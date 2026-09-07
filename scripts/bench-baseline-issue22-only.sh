@@ -70,10 +70,10 @@ docker exec deepseek-v4-flash-vllm-dspark-1 bash /tmp/hotfix-nvfp4-ds-mla-issue2
 echo "  Verifying patch state..."
 VLLM="/usr/local/lib/python3.12/dist-packages/vllm"
 CHECKS=$(docker exec deepseek-v4-flash-vllm-dspark-1 bash -c "
-  c22=\$(grep -c 'nvfp4_ds_mla' '$VLLM/models/deepseek_v4/sparse_mla.py' 2>/dev/null || echo 0)
-  c49=\$(grep -c 'PORT #49486' '$VLLM/models/deepseek_v4/attention.py' 2>/dev/null || echo 0)
-  c50=\$(grep -c 'needs_mtp_hidden_states' '$VLLM/models/deepseek_v4/nvidia/model.py' 2>/dev/null || echo 0)
-  c07=\$(grep -c 'dense_mha_metadata_layer_name' '$VLLM/model_executor/layers/sparse_attn_indexer.py' 2>/dev/null || echo 0)
+  c22=\$(grep -c 'nvfp4_ds_mla' '$VLLM/models/deepseek_v4/sparse_mla.py' 2>/dev/null || true); c22=\${c22:-0}
+  c49=\$(grep -c 'PORT #49486' '$VLLM/models/deepseek_v4/attention.py' 2>/dev/null || true); c49=\${c49:-0}
+  c50=\$(grep -c 'needs_mtp_hidden_states' '$VLLM/models/deepseek_v4/nvidia/model.py' 2>/dev/null || true); c50=\${c50:-0}
+  c07=\$(grep -c 'dense_mha_metadata_layer_name' '$VLLM/model_executor/layers/sparse_attn_indexer.py' 2>/dev/null || true); c07=\${c07:-0}
   echo \$c22 \$c49 \$c50 \$c07
 " 2>/dev/null)
 echo "  Issue #22:$(echo $CHECKS | cut -d' ' -f1)  #49486:$(echo $CHECKS | cut -d' ' -f2)  #50312:$(echo $CHECKS | cut -d' ' -f3)  #48407:$(echo $CHECKS | cut -d' ' -f4)"

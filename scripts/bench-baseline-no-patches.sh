@@ -64,10 +64,10 @@ done
 echo "  Verifying no patches..."
 VLLM="/usr/local/lib/python3.12/dist-packages/vllm"
 CHECKS=$(docker exec deepseek-v4-flash-vllm-dspark-1 bash -c "
-  c1=\$(grep -c 'PORT #49486' '$VLLM/models/deepseek_v4/attention.py' 2>/dev/null || echo 0)
-  c2=\$(grep -c 'needs_mtp_hidden_states' '$VLLM/models/deepseek_v4/nvidia/model.py' 2>/dev/null || echo 0)
-  c3=\$(grep -c 'active_topk_width' '$VLLM/models/deepseek_v4/sparse_mla.py' 2>/dev/null || echo 0)
-  c4=\$(grep -c 'dense_mha_metadata_layer_name' '$VLLM/model_executor/layers/sparse_attn_indexer.py' 2>/dev/null || echo 0)
+  c1=\$(grep -c 'PORT #49486' '$VLLM/models/deepseek_v4/attention.py' 2>/dev/null || true); c1=\${c1:-0}
+  c2=\$(grep -c 'needs_mtp_hidden_states' '$VLLM/models/deepseek_v4/nvidia/model.py' 2>/dev/null || true); c2=\${c2:-0}
+  c3=\$(grep -c 'active_topk_width' '$VLLM/models/deepseek_v4/sparse_mla.py' 2>/dev/null || true); c3=\${c3:-0}
+  c4=\$(grep -c 'dense_mha_metadata_layer_name' '$VLLM/model_executor/layers/sparse_attn_indexer.py' 2>/dev/null || true); c4=\${c4:-0}
   echo \$c1 \$c2 \$c3 \$c4
 " 2>/dev/null)
 echo "  Patch check (should be 0 0 0 0): $CHECKS"
