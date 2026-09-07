@@ -13,6 +13,14 @@ DSPARK_PROPOSER_FILE="${DSPARK_PROPOSER_FILE:-$SCRIPT_DIR/recipe/vllm/v1/spec_de
 CLI_VLLM_HOST=""
 CLI_VLLM_PORT=""
 
+# Every ssh/scp in this launcher goes through these wrappers: BatchMode (never
+# prompt — passwordless keys are a documented prerequisite) and ConnectTimeout
+# (a worker that drops or stalls mid-start must fail fast instead of hanging
+# the launch on TCP retransmits, which reads as a "slow" start). Only the two
+# preflight probes used to carry these options; apply them everywhere.
+dssh() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$@"; }
+dscp() { scp -o BatchMode=yes -o ConnectTimeout=10 "$@"; }
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [--host HOST] [--port PORT]
@@ -756,7 +764,7 @@ iface_ipv4() {
     bash -c "$cmd"
   else
     # shellcheck disable=SC2029
-    ssh "$ssh_target" "$cmd"
+    dssh "$ssh_target" "$cmd"
   fi
 }
 
@@ -1014,7 +1022,7 @@ $NCCL_HCA_RESOLVER_BODY"
     bash -c "$remote"
   else
     # shellcheck disable=SC2029
-    ssh "$ssh_target" "bash -s" <<<"$remote"
+    dssh "$ssh_target" "bash -s" <<<"$remote"
   fi
 }
 
@@ -1196,11 +1204,11 @@ remote_nccl_env2() {
 remote_compose() {
   # The head may use an absolute local mount override; the worker always uses
   # the canonical synced relative path.
-  ssh "$WORKER_HOST" "$REMOTE_COMPOSE DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env) $*"
+  dssh "$WORKER_HOST" "$REMOTE_COMPOSE DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env) $*"
 }
 
 remote_compose2() {
-  ssh "$WORKER2_HOST" "$REMOTE_COMPOSE2 DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env2) $*"
+  dssh "$WORKER2_HOST" "$REMOTE_COMPOSE2 DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env2) $*"
 }
 
 log_since() {
@@ -1411,23 +1419,23 @@ docker image inspect "$DSPARK_VLLM_IMAGE" >/dev/null || {
   exit 1
 }
 
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "true" >/dev/null || {
+dssh "$WORKER_HOST" "true" >/dev/null || {
   echo "Cannot reach worker with passwordless SSH: $WORKER_HOST" >&2
   exit 1
 }
 
-ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
+dssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
   echo "Missing worker Docker image $DSPARK_VLLM_IMAGE." >&2
   echo "Pull it on the worker (e.g. docker pull $DSPARK_VLLM_IMAGE) or run ./build-dspark-vllm-runtime.sh." >&2
   exit 1
 }
 
 if [ "$DSPARK_TP3" = "1" ]; then
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER2_HOST" "true" >/dev/null || {
+  dssh "$WORKER2_HOST" "true" >/dev/null || {
     echo "Cannot reach worker2 with passwordless SSH: $WORKER2_HOST" >&2
     exit 1
   }
-  ssh "$WORKER2_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
+  dssh "$WORKER2_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' >/dev/null" || {
     echo "Missing worker2 Docker image $DSPARK_VLLM_IMAGE." >&2
     echo "Pull it on worker2 (e.g. docker pull $DSPARK_VLLM_IMAGE)." >&2
     exit 1
@@ -1449,7 +1457,7 @@ if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n 
   exit 1
 fi
 
-if ssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME (head is not up — likely a stale rank after a head-only reboot). Stop it first.' >&2; exit 1; fi"; then
+if dssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME (head is not up — likely a stale rank after a head-only reboot). Stop it first.' >&2; exit 1; fi"; then
   :
 else
   worker_rc=$?
@@ -1458,7 +1466,7 @@ else
 fi
 
 if [ "$DSPARK_TP3" = "1" ]; then
-  if ssh "$WORKER2_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker2 container already exists for project $PROJECT_NAME. Stop it first.' >&2; exit 1; fi"; then
+  if dssh "$WORKER2_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker2 container already exists for project $PROJECT_NAME. Stop it first.' >&2; exit 1; fi"; then
     :
   else
     worker_rc=$?
@@ -1511,14 +1519,14 @@ trap on_error ERR
 print_resolved_profile
 
 echo "Syncing DSpark deployment files to ${WORKER_HOST}:${WORKER_DIR}"
-ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR"
-scp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_COMPOSE_FILE}"
+dssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR"
+dscp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_COMPOSE_FILE}"
 if [ "$DSPARK_WORKER_HF_NFS" = "1" ]; then
   [ -f "$NFS_OVERRIDE_FILE" ] || { echo "Missing NFS compose override: $NFS_OVERRIDE_FILE" >&2; exit 1; }
-  scp "$NFS_OVERRIDE_FILE" "${WORKER_HOST}:${REMOTE_NFS_OVERRIDE_FILE}"
+  dscp "$NFS_OVERRIDE_FILE" "${WORKER_HOST}:${REMOTE_NFS_OVERRIDE_FILE}"
 fi
 # Stream into a private sibling, then atomically replace the worker env file.
-ssh "$WORKER_HOST" "
+dssh "$WORKER_HOST" "
   set -euo pipefail
   _env_final=$REMOTE_ENV_FILE
   _env_tmp=\"\${_env_final}.tmp.\$\$\"
@@ -1534,112 +1542,112 @@ ssh "$WORKER_HOST" "
   _env_tmp=
   trap - EXIT HUP INT TERM
 " < "$COMPOSE_ENV_FILE"
-ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
-scp "$DSPARK_PROPOSER_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
+dssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
+dscp "$DSPARK_PROPOSER_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
 DSPARK_HOTFIX_FILE="$SCRIPT_DIR/patches/hotfix-nvfp4-ds-mla-issue22.sh"
 if [ -f "$DSPARK_HOTFIX_FILE" ]; then
   echo "Syncing Issue #22 hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_HOTFIX_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-nvfp4-ds-mla-issue22.sh"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_HOTFIX_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-nvfp4-ds-mla-issue22.sh"
 fi
 DSPARK_SPIN_WAIT_HOTFIX="${DSPARK_SPIN_WAIT_HOTFIX:-$SCRIPT_DIR/patches/hotfix-gb10-spin-wait.sh}"
 if [ -f "$DSPARK_SPIN_WAIT_HOTFIX" ]; then
   echo "Syncing GB10 shm spin-wait hotfix (#79) to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_SPIN_WAIT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-gb10-spin-wait.sh"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_SPIN_WAIT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-gb10-spin-wait.sh"
 fi
 if [ -f "$DSPARK_ISSUE117_HOTFIX" ] && [ ! -L "$DSPARK_ISSUE117_HOTFIX" ]; then
   echo "Syncing Issue #117 SHM ring hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE117_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue117-shm-ring-buffer.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE117_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue117-shm-ring-buffer.py"
 fi
 # DSV4 v0.27 .sh hotfixes — entrypoint applies them before exec vllm (issue #38).
 for _hf_sync in hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh hotfix-vllm-redact-api-key-log.sh; do
   if [ -f "$SCRIPT_DIR/patches/$_hf_sync" ]; then
     echo "Syncing $_hf_sync to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-    ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-    scp "$SCRIPT_DIR/patches/$_hf_sync" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/$_hf_sync"
+    dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+    dscp "$SCRIPT_DIR/patches/$_hf_sync" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/$_hf_sync"
   fi
 done
 DSPARK_ENCODING_ISSUE21_HOTFIX="${DSPARK_ENCODING_ISSUE21_HOTFIX:-$SCRIPT_DIR/patches/hotfix-encoding-dsv4-issue21.py}"
 if [ -f "$DSPARK_ENCODING_ISSUE21_HOTFIX" ]; then
   echo "Syncing Issue #21 encoding hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ENCODING_ISSUE21_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-encoding-dsv4-issue21.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ENCODING_ISSUE21_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-encoding-dsv4-issue21.py"
 fi
 DSPARK_ISSUE31_GPU_HOTFIX="${DSPARK_ISSUE31_GPU_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py}"
 if [ -f "$DSPARK_ISSUE31_GPU_HOTFIX" ]; then
   echo "Syncing GPU-resident V2 thinking-budget hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE31_GPU_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE31_GPU_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py"
 fi
 DSPARK_ISSUE55_HOTFIX="${DSPARK_ISSUE55_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue55-tool-truncation.py}"
 if [ -f "$DSPARK_ISSUE55_HOTFIX" ]; then
   echo "Syncing Issue #55 tool-call truncation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE55_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue55-tool-truncation.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE55_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue55-tool-truncation.py"
 fi
 if [ -f "$DSPARK_RESPONSES_STORE_HOTFIX" ]; then
   echo "Syncing bounded Responses store hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_RESPONSES_STORE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-responses-store.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_RESPONSES_STORE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-responses-store.py"
 fi
 DSPARK_EMPTY_ENCODER_OUTPUT_HOTFIX="${DSPARK_EMPTY_ENCODER_OUTPUT_HOTFIX:-$SCRIPT_DIR/patches/hotfix-vllm-empty-encoder-output.py}"
 if [ -f "$DSPARK_EMPTY_ENCODER_OUTPUT_HOTFIX" ]; then
   echo "Syncing Issue #109 empty-encoder-output hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_EMPTY_ENCODER_OUTPUT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-empty-encoder-output.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_EMPTY_ENCODER_OUTPUT_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-empty-encoder-output.py"
 fi
 DSPARK_ISSUE27_HOTFIX="${DSPARK_ISSUE27_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py}"
 if [ -f "$DSPARK_ISSUE27_HOTFIX" ]; then
   echo "Syncing Issue #27 partial-prefill hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE27_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE27_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py"
 fi
 DSPARK_ADAPTIVE_CHUNK_HOTFIX="${DSPARK_ADAPTIVE_CHUNK_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-adaptive-prefill-chunk.py}"
 if [ -f "$DSPARK_ADAPTIVE_CHUNK_HOTFIX" ]; then
   echo "Syncing adaptive prefill-chunk hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ADAPTIVE_CHUNK_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-adaptive-prefill-chunk.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ADAPTIVE_CHUNK_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-adaptive-prefill-chunk.py"
 fi
 DSPARK_REPLICATE_MARKOV_HOTFIX="${DSPARK_REPLICATE_MARKOV_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-replicate-markov-head.py}"
 if [ -f "$DSPARK_REPLICATE_MARKOV_HOTFIX" ]; then
   echo "Syncing replicate-Markov-head hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_REPLICATE_MARKOV_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-replicate-markov-head.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_REPLICATE_MARKOV_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-replicate-markov-head.py"
 fi
 DSPARK_ISSUE43_HOTFIX="${DSPARK_ISSUE43_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue43-decode-fairness-and-diag.py}"
 if [ -f "$DSPARK_ISSUE43_HOTFIX" ]; then
   echo "Syncing Issue #43 decode-fairness hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE43_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue43-decode-fairness-and-diag.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE43_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue43-decode-fairness-and-diag.py"
 fi
 DSPARK_ISSUE26_HOTFIX="${DSPARK_ISSUE26_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue26-hybrid-swa-min.py}"
 if [ -f "$DSPARK_ISSUE26_HOTFIX" ]; then
   echo "Syncing Issue #26 hybrid-SWA-min hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE26_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue26-hybrid-swa-min.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE26_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue26-hybrid-swa-min.py"
 fi
 DSPARK_ISSUE133_HOTFIX="${DSPARK_ISSUE133_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-issue133-triton-specialization.py}"
 if [ -f "$DSPARK_ISSUE133_HOTFIX" ]; then
   echo "Syncing Issue #133 Triton specialization hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE133_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue133-triton-specialization.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE133_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue133-triton-specialization.py"
 fi
 if [ -f "$DSPARK_ISSUE141_HOTFIX" ]; then
   echo "Syncing Issue #141 sparse-MLA decode workaround to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE141_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE141_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py"
 fi
 if [ -f "$DSPARK_SP_INDEXER_HOTFIX" ]; then
   echo "Syncing SP indexer prefill hotfix (item 6) to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_SP_INDEXER_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-sp-indexer-prefill.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_SP_INDEXER_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-sp-indexer-prefill.py"
 fi
 if [ -f "$DSPARK_DEEPGEMM_ALIAS_HOTFIX" ]; then
   echo "Syncing DeepGEMM sm121 header alias hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_DEEPGEMM_ALIAS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-deepgemm-sm121-mqa-header-alias.sh"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_DEEPGEMM_ALIAS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-deepgemm-sm121-mqa-header-alias.sh"
 fi
 DSPARK_ABLATION_HOTFIX="${DSPARK_ABLATION_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-runtime-ablation.py}"
 if [ -f "$DSPARK_ABLATION_HOTFIX" ]; then
@@ -1653,90 +1661,90 @@ fi
 DSPARK_SUPPRESS_STOPS_HOTFIX="${DSPARK_SUPPRESS_STOPS_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-suppress-stops-in-reasoning.py}"
 if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
   echo "Syncing suppress-stops-in-reasoning hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
   # A leftover directory with this name (root-owned) would make scp fail.
-  ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-suppress-stops-in-reasoning.py; fi"
-  scp "$DSPARK_SUPPRESS_STOPS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py"
+  dssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-suppress-stops-in-reasoning.py; fi"
+  dscp "$DSPARK_SUPPRESS_STOPS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py"
 fi
 DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-assistant-final-continuation.py}"
 if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
   echo "Syncing assistant-final continuation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ASSISTANT_FINAL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-assistant-final-continuation.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ASSISTANT_FINAL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-assistant-final-continuation.py"
 fi
 DSPARK_VISION_EXP_HOTFIX="${DSPARK_VISION_EXP_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-vision-exp.py}"
 if [ -f "$DSPARK_VISION_EXP_HOTFIX" ]; then
   echo "Syncing Vision-Exp native image hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_VISION_EXP_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-vision-exp.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_VISION_EXP_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-vision-exp.py"
 fi
 if [ -d "$SCRIPT_DIR/patches/vision_exp" ]; then
   echo "Syncing patches/vision_exp/ to ${WORKER_HOST}:${WORKER_DIR}/patches/vision_exp/"
-  # Replace the dest dir. `scp -r vision_exp patches/` nests into
+  # Replace the dest dir. `dscp -r vision_exp patches/` nests into
   # patches/vision_exp/vision_exp when the dest already exists.
-  ssh "$WORKER_HOST" "rm -rf '${REMOTE_WORKER_DIR}/patches/vision_exp' && mkdir -p '${REMOTE_WORKER_DIR}/patches/vision_exp'"
-  scp -r "$SCRIPT_DIR/patches/vision_exp/." "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/vision_exp/"
+  dssh "$WORKER_HOST" "rm -rf '${REMOTE_WORKER_DIR}/patches/vision_exp' && mkdir -p '${REMOTE_WORKER_DIR}/patches/vision_exp'"
+  dscp -r "$SCRIPT_DIR/patches/vision_exp/." "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/vision_exp/"
 fi
 if [ -f "$DSPARK_ISSUE138_HOTFIX" ]; then
   echo "Syncing issue #138 Responses history compatibility patcher to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE138_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue138-responses-history.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE138_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue138-responses-history.py"
 fi
 if [ -f "$DSPARK_CODEX_AGENT_MESSAGE_HOTFIX" ]; then
   echo "Syncing Codex agent_message compatibility patcher to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_CODEX_AGENT_MESSAGE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-codex-agent-message.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_CODEX_AGENT_MESSAGE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-codex-agent-message.py"
 fi
 if [ -f "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" ] && [ ! -L "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" ]; then
   echo "Syncing Issue #136 XGrammar termination hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue136-xgrammar-termination.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue136-xgrammar-termination.py"
 fi
 if [ -f "$DSPARK_ISSUE191_TOOLCALL_HOTFIX" ] && [ ! -L "$DSPARK_ISSUE191_TOOLCALL_HOTFIX" ]; then
   echo "Syncing Issue #191 tool-call fail-closed hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE191_TOOLCALL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue191-toolcall-failclosed.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE191_TOOLCALL_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-issue191-toolcall-failclosed.py"
 fi
 if [ -f "$DSPARK_DSPARK_BLOCK_K_HOTFIX" ] && [ ! -L "$DSPARK_DSPARK_BLOCK_K_HOTFIX" ]; then
   echo "Syncing DSpark block-k unlock hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_DSPARK_BLOCK_K_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-dspark-block-k.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_DSPARK_BLOCK_K_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-dspark-block-k.py"
 fi
 if [ -f "$DSPARK_ROPE_SWA_FIX_HOTFIX" ] && [ ! -L "$DSPARK_ROPE_SWA_FIX_HOTFIX" ]; then
   echo "Syncing RoPE SWA fix hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ROPE_SWA_FIX_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-rope-swa-fix.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ROPE_SWA_FIX_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-rope-swa-fix.py"
 fi
 if [ -f "$DSPARK_DSPARK_SWA_PREFIX_HOTFIX" ] && [ ! -L "$DSPARK_DSPARK_SWA_PREFIX_HOTFIX" ]; then
   echo "Syncing DSpark SWA prefix hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_DSPARK_SWA_PREFIX_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-dspark-swa-prefix.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_DSPARK_SWA_PREFIX_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-dspark-swa-prefix.py"
 fi
 if [ -f "$DSPARK_DSML_RECOVERY_HOTFIX" ] && [ ! -L "$DSPARK_DSML_RECOVERY_HOTFIX" ]; then
   echo "Syncing DSML recovery hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_DSML_RECOVERY_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-dsml-recovery.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_DSML_RECOVERY_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-dsml-recovery.py"
 fi
 if [ -f "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" ] && [ ! -L "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" ]; then
   echo "Syncing Issue #144 effort alignment hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue144-effort-align.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-issue144-effort-align.py"
 fi
 if [ -f "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" ] && [ ! -L "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" ]; then
   echo "Syncing MXFP4 indexer K cache hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-mxfp4-indexer-cache.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_MXFP4_INDEXER_CACHE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-mxfp4-indexer-cache.py"
 fi
 if [ -f "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ] && [ ! -L "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ]; then
   echo "Syncing C128A prefill cache hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-c128a-prefill-cache.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-vllm-c128a-prefill-cache.py"
 fi
 # Compose always bind-mounts patches/tp3. Create it on the worker even for
 # TP=2 so Docker does not invent a root-owned empty dir (or fail the mount).
-ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches/tp3'"
+dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches/tp3'"
 if [ -f "$SCRIPT_DIR/patches/tp3/apply_tp3_patch.py" ]; then
-  scp "$SCRIPT_DIR/patches/tp3/apply_tp3_patch.py" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/tp3/apply_tp3_patch.py"
+  dscp "$SCRIPT_DIR/patches/tp3/apply_tp3_patch.py" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/tp3/apply_tp3_patch.py"
 fi
 if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
   echo "Syncing GB10 vLLM patch to ${WORKER_HOST}:${WORKER_DIR}/vllm_patch_gb10"
@@ -1744,23 +1752,23 @@ if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
     --exclude='*.egg-info' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
-    -cf - . | ssh "$WORKER_HOST" "mkdir -p $REMOTE_VLLM_GB10_PATCH_DIR && tar -C $REMOTE_VLLM_GB10_PATCH_DIR --no-overwrite-dir -xf -"
+    -cf - . | dssh "$WORKER_HOST" "mkdir -p $REMOTE_VLLM_GB10_PATCH_DIR && tar -C $REMOTE_VLLM_GB10_PATCH_DIR --no-overwrite-dir -xf -"
 fi
 
 sync_tp3_patch_dir() {
   local host="$1"
   local dest_q="$2"
   echo "Syncing patches/tp3 to ${host} (refuse boot if this fails)"
-  ssh "$host" "mkdir -p ${dest_q}/patches/tp3" || {
+  dssh "$host" "mkdir -p ${dest_q}/patches/tp3" || {
     echo "FATAL: failed to mkdir patches/tp3 on ${host}" >&2
     exit 1
   }
-  scp "$SCRIPT_DIR/patches/tp3/apply_tp3_patch.py" "${host}:${dest_q}/patches/tp3/apply_tp3_patch.py" || {
+  dscp "$SCRIPT_DIR/patches/tp3/apply_tp3_patch.py" "${host}:${dest_q}/patches/tp3/apply_tp3_patch.py" || {
     echo "FATAL: failed to sync apply_tp3_patch.py to ${host} -- refusing to boot TP=3." >&2
     exit 1
   }
   if [ -f "$SCRIPT_DIR/patches/dsv4_tp_pad.py" ]; then
-    scp "$SCRIPT_DIR/patches/dsv4_tp_pad.py" "${host}:${dest_q}/patches/dsv4_tp_pad.py" || {
+    dscp "$SCRIPT_DIR/patches/dsv4_tp_pad.py" "${host}:${dest_q}/patches/dsv4_tp_pad.py" || {
       echo "FATAL: failed to sync dsv4_tp_pad.py to ${host}" >&2
       exit 1
     }
@@ -1770,7 +1778,7 @@ sync_tp3_patch_dir() {
 push_compose_env_file() {
   local host="$1"
   local remote_env_q="$2"
-  ssh "$host" "
+  dssh "$host" "
     set -euo pipefail
     _env_final=$remote_env_q
     _env_tmp=\"\${_env_final}.tmp.\$\$\"
@@ -1791,30 +1799,30 @@ push_compose_env_file() {
 if [ "$DSPARK_TP3" = "1" ]; then
   sync_tp3_patch_dir "$WORKER_HOST" "$REMOTE_WORKER_DIR"
   echo "Syncing DSpark deployment files to ${WORKER2_HOST}:${WORKER2_DIR}"
-  ssh "$WORKER2_HOST" "mkdir -p $REMOTE_WORKER2_DIR $REMOTE_WORKER2_DIR/recipe/vllm/v1/spec_decode $REMOTE_WORKER2_DIR/patches"
-  scp "$COMPOSE_FILE" "${WORKER2_HOST}:${REMOTE_COMPOSE_FILE2}"
+  dssh "$WORKER2_HOST" "mkdir -p $REMOTE_WORKER2_DIR $REMOTE_WORKER2_DIR/recipe/vllm/v1/spec_decode $REMOTE_WORKER2_DIR/patches"
+  dscp "$COMPOSE_FILE" "${WORKER2_HOST}:${REMOTE_COMPOSE_FILE2}"
   if [ "$DSPARK_WORKER_HF_NFS" = "1" ]; then
     [ -f "$NFS_OVERRIDE_FILE" ] || { echo "Missing NFS compose override: $NFS_OVERRIDE_FILE" >&2; exit 1; }
-    scp "$NFS_OVERRIDE_FILE" "${WORKER2_HOST}:${REMOTE_NFS_OVERRIDE_FILE2}"
+    dscp "$NFS_OVERRIDE_FILE" "${WORKER2_HOST}:${REMOTE_NFS_OVERRIDE_FILE2}"
   fi
   push_compose_env_file "$WORKER2_HOST" "$REMOTE_ENV_FILE2"
-  scp "$DSPARK_PROPOSER_FILE" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
+  dscp "$DSPARK_PROPOSER_FILE" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
   tar -C "$SCRIPT_DIR" \
     --exclude='patches/__pycache__' \
     --exclude='patches/*/__pycache__' \
-    -cf - patches | ssh "$WORKER2_HOST" "tar -C $REMOTE_WORKER2_DIR --no-overwrite-dir -xf -" || {
+    -cf - patches | dssh "$WORKER2_HOST" "tar -C $REMOTE_WORKER2_DIR --no-overwrite-dir -xf -" || {
     echo "FATAL: failed to sync patches/ to ${WORKER2_HOST} -- refusing to boot TP=3." >&2
     exit 1
   }
   if [ -f "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ] && [ ! -L "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ]; then
-    scp "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/patches/hotfix-vllm-c128a-prefill-cache.py"
+    dscp "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/patches/hotfix-vllm-c128a-prefill-cache.py"
   fi
   if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
     tar -C "$VLLM_GB10_PATCH_DIR" \
       --exclude='*.egg-info' \
       --exclude='__pycache__' \
       --exclude='*.pyc' \
-      -cf - . | ssh "$WORKER2_HOST" "mkdir -p $REMOTE_VLLM_GB10_PATCH_DIR2 && tar -C $REMOTE_VLLM_GB10_PATCH_DIR2 --no-overwrite-dir -xf -"
+      -cf - . | dssh "$WORKER2_HOST" "mkdir -p $REMOTE_VLLM_GB10_PATCH_DIR2 && tar -C $REMOTE_VLLM_GB10_PATCH_DIR2 --no-overwrite-dir -xf -"
   fi
   sync_tp3_patch_dir "$WORKER2_HOST" "$REMOTE_WORKER2_DIR"
 fi
@@ -1823,7 +1831,7 @@ if [ "$DSPARK_WORKER_HF_NFS" = "1" ]; then
   echo "Sharing head HF cache over NFS for the worker (no local checkpoint copy)..."
   nfs_ensure_server
   if [ -z "$WORKER_HF_CACHE" ] || [ "$WORKER_HF_CACHE" = "${HF_CACHE:-}" ]; then
-    WORKER_HF_CACHE="$(ssh "$WORKER_HOST" 'printf %s "$HOME/.cache/huggingface"')"
+    WORKER_HF_CACHE="$(dssh "$WORKER_HOST" 'printf %s "$HOME/.cache/huggingface"')"
     [ -n "$WORKER_HF_CACHE" ] || { echo "Could not resolve worker HOME for JIT cache overlays." >&2; exit 1; }
     WORKER_HF_COMPOSE_ENV="HF_CACHE='$NFS_VOLUME' DSPARK_JIT_CACHE='$WORKER_HF_CACHE'"
     echo "Worker JIT cache defaulted to $WORKER_HF_CACHE"
@@ -1840,12 +1848,12 @@ if [ "$DSPARK_WORKER_HF_NFS" = "1" ]; then
   fi
   if [ "$DSPARK_TP3" = "1" ]; then
     if [ -z "$WORKER2_HF_CACHE" ] || [ "$WORKER2_HF_CACHE" = "${HF_CACHE:-}" ]; then
-      WORKER2_HF_CACHE="$(ssh "$WORKER2_HOST" 'printf %s "$HOME/.cache/huggingface"')"
+      WORKER2_HF_CACHE="$(dssh "$WORKER2_HOST" 'printf %s "$HOME/.cache/huggingface"')"
       [ -n "$WORKER2_HF_CACHE" ] || { echo "Could not resolve worker2 HOME for JIT cache overlays." >&2; exit 1; }
       WORKER2_HF_COMPOSE_ENV="HF_CACHE='$NFS_VOLUME' DSPARK_JIT_CACHE='$WORKER2_HF_CACHE'"
       echo "Worker2 JIT cache defaulted to $WORKER2_HF_CACHE"
     fi
-    ssh "$WORKER2_HOST" "mkdir -p $(for d in $(nfs_jit_subdirs); do printf '%s/%s ' "$WORKER2_HF_CACHE" "$d"; done)"
+    dssh "$WORKER2_HOST" "mkdir -p $(for d in $(nfs_jit_subdirs); do printf '%s/%s ' "$WORKER2_HF_CACHE" "$d"; done)"
     # 3-node ring: worker2 is on a different CX /24 than worker1. Do not reuse
     # NFS_SERVER_IP from NCCL_SOCKET_IFNAME (spark1↔spark2). Pick a head CX
     # IPv4 worker2 can ping, or WORKER2_NFS_SERVER_IP.
@@ -1861,7 +1869,7 @@ if [ "$DSPARK_WORKER_HF_NFS" = "1" ]; then
     fi
     nfs_grant_subnet "$(nfs_subnet24 "$WORKER2_NFS_SERVER_IP")"
     nfs_ensure_host_volume "$WORKER2_HOST" "$WORKER2_NFS_SERVER_IP"
-    if timeout 45 ssh "$WORKER2_HOST" "docker run --rm -v '${NFS_VOLUME}:/hf:ro' alpine:latest test -d '/hf/${_nfs_model_rel}'" >/dev/null 2>&1; then
+    if timeout 45 dssh "$WORKER2_HOST" "docker run --rm -v '${NFS_VOLUME}:/hf:ro' alpine:latest test -d '/hf/${_nfs_model_rel}'" >/dev/null 2>&1; then
       echo "Worker2 sees $_nfs_model_rel over NFS ($NFS_VOLUME @ $WORKER2_NFS_SERVER_IP)."
     else
       echo "WORKER2 cannot see $_nfs_model_rel over NFS at ${WORKER2_NFS_SERVER_IP}." >&2

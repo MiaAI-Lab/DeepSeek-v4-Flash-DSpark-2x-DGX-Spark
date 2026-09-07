@@ -108,6 +108,8 @@ python3 scripts/test-issue31-thinking-budget-gpu.py -q
 ok "test-issue31-thinking-budget-gpu"
 python3 scripts/test-issue55-tool-truncation.py -q
 ok "test-issue55-tool-truncation"
+python3 scripts/test-start-ssh-wrappers.py -q
+ok "test-start-ssh-wrappers"
 python3 scripts/test-responses-store-hotfix.py -q
 ok "test-responses-store-hotfix"
 python3 scripts/test-responses-api-live.py -q
