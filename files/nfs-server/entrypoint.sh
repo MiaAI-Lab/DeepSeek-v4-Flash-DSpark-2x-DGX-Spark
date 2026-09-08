@@ -3,8 +3,23 @@
 set -euo pipefail
 
 EXPORT_DIR="${EXPORT_DIR:-/export}"
-CLIENTS="${NFS_CLIENTS:-*}"
-NFS_OPTS="${NFS_OPTS:-ro,sync,no_subtree_check,no_root_squash,insecure,fsid=0}"
+
+# Fail closed on an empty client list: the previous `${NFS_CLIENTS:-*}` default
+# wrote a world-readable /etc/exports on a privileged, host-networked server.
+if [ -z "${NFS_CLIENTS:-}" ]; then
+    echo "FATAL: NFS_CLIENTS is empty; refusing to export to '*'." >&2
+    echo "Set NFS_CLIENTS to a comma-separated client list (e.g. 10.0.22.2,10.0.22.0/24)." >&2
+    exit 1
+fi
+CLIENTS="$NFS_CLIENTS"
+
+# root_squash is deliberate: the exported tree is the HF cache root, which also
+# holds the 0600 `huggingface-cli` token file. With no_root_squash a client-side
+# root read it regardless of its mode; with root_squash remote root maps to
+# nobody, and world-readable cache blobs remain readable while the token is not.
+# `insecure` is dropped for the same reason (clients must mount from privileged
+# ports, which the kernel NFS client in the worker's docker volume does).
+NFS_OPTS="${NFS_OPTS:-ro,sync,no_subtree_check,root_squash,fsid=0}"
 
 mkdir -p "$EXPORT_DIR" /var/lib/nfs/v4recovery /var/lib/nfs/rpc_pipefs
 mountpoint -q /proc/fs/nfsd || mount -t nfsd nfsd /proc/fs/nfsd

@@ -118,6 +118,8 @@ python3 scripts/test-issue138-responses-history-live.py -q
 ok "test-issue138-responses-history-live"
 python3 scripts/test-codex-agent-message-compat.py -q
 ok "test-codex-agent-message-compat"
+python3 scripts/test-nfs-hardening.py -q
+ok "test-nfs-hardening"
 python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q
