@@ -467,6 +467,17 @@ else
   bad "start missing already-running exit 3 (#72)"
 fi
 
+# The ENVS.md -> PATCHES.md #136 anchor must match the actual heading slug.
+if grep -q 'issue-136--xgrammar-accepts-speculative-tokens-after-termination' docs/ENVS.md; then
+  bad "ENVS.md links the retired #136 anchor"
+elif ! grep -q 'issues-136--210--xgrammar-termination-and-post-reasoning-fsm-chain' docs/ENVS.md; then
+  bad "ENVS.md -> PATCHES.md #136+#210 anchor missing"
+elif grep -q '](vl-nvfp4-coexist-2026-08-11.md)' results/RESULTS-2026-08-14.md; then
+  bad "RESULTS links a file that is not in the repo"
+else
+  ok "no broken doc anchors/links"
+fi
+
 # Mounted hotfix files must exist.
 for p in \
   patches/hotfix-encoding-dsv4-issue21.py \
