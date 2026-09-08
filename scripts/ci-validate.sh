@@ -158,6 +158,8 @@ python3 scripts/test-build-rsync-guard.py -q
 ok "test-build-rsync-guard"
 python3 scripts/test-issue191-toolcall-failclosed.py -q
 ok "test-issue191-toolcall-failclosed"
+python3 scripts/test-env-perms-open-bind.py -q
+ok "test-env-perms-open-bind"
 python3 scripts/test-dspark-block-k.py -q
 ok "test-dspark-block-k"
 python3 scripts/test-rope-swa-fix.py -q
