@@ -8,7 +8,7 @@
 #   Phase 4  Tool calling       — scripts/tool-battery.py (incl. issue55 truncation at depth)
 #   Phase 5  Garble sweep       — scripts/context-garble-sweep.py (cold prefill, tokenize-verified)
 #
-# Usage: bash scripts/run-audit.sh [--base-url http://127.0.0.1:8888/v1] [--model deepseek-v4-flash-0731]
+# Usage: bash scripts/run-audit.sh [--base-url http://127.0.0.1:8888/v1] [--model deepseek-v4-flash-vision-exp]
 #        [--lengths 8192,32768,131072,262144] [--tool-lengths 32768,131072] [--garble-lengths 2048,32768,131072]
 #        [--request-timeout SECONDS]
 # Exit 0 = all phases pass, 1 = any failure.
@@ -18,7 +18,7 @@
 # pair it with any --lengths value near the 1M ceiling. Unset = script default.
 set -u
 BASE_URL="${BASE_URL:-http://127.0.0.1:8888/v1}"
-MODEL="${MODEL:-deepseek-v4-flash-0731}"
+MODEL="${MODEL:-deepseek-v4-flash-vision-exp}"
 LENGTHS="${LENGTHS:-8192,32768,131072,262144}"
 TOOL_LENGTHS="${TOOL_LENGTHS:-32768,131072}"
 GARBLE_LENGTHS="${GARBLE_LENGTHS:-2048,32768,131072}"
