@@ -1,0 +1,13 @@
+# Disk-backed KV cache volumes. Included by start-deepseek-v4-flash-dspark.sh
+# ONLY when KV_DISK_CACHE_ENABLE=1, so a default-off launch never mounts
+# (or requires) a staged KV_DISK_CACHE_SRC and leaves sitecustomize untouched.
+services:
+  vllm-dspark:
+    volumes:
+      - ${KV_DISK_CACHE_SRC:-/opt/dsv4-kv}/dsv4_kv_disk_tier.py:/usr/local/lib/python3.12/dist-packages/dsv4_kv_disk_tier.py:ro
+      - ${KV_DISK_CACHE_SRC:-/opt/dsv4-kv}/dsv4_shard_tier.py:/usr/local/lib/python3.12/dist-packages/dsv4_shard_tier.py:ro
+      - ${KV_DISK_CACHE_SRC:-/opt/dsv4-kv}/dsv4_vllm_patches.py:/usr/local/lib/python3.12/dist-packages/dsv4_vllm_patches.py:ro
+      - ${KV_DISK_CACHE_SRC:-/opt/dsv4-kv}/dsv4_sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro
+      - ${KV_DISK_CACHE_SRC:-/opt/dsv4-kv}/libdsv4_batch_copy.so:/usr/local/lib/libdsv4_batch_copy.so:ro
+      - ${KV_DISK_CACHE_SRC:-/opt/dsv4-kv}/libdsv4_host_kv.so:/usr/local/lib/libdsv4_host_kv.so:ro
+      - ${KV_DISK_CACHE_DIR:-${HOME}/kvdisk}:/kvdisk
