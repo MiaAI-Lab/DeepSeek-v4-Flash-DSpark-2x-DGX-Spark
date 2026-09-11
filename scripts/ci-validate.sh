@@ -148,6 +148,8 @@ python3 scripts/test-python-hotfix-failclosed.py -q
 ok "test-python-hotfix-failclosed"
 python3 scripts/test-gb10-install-failclosed.py -q
 ok "test-gb10-install-failclosed"
+python3 scripts/test-status-logs-probes.py -q
+ok "test-status-logs-probes"
 python3 scripts/test-dsv4-vision-exp-hotfix.py -q
 ok "test-dsv4-vision-exp-hotfix"
 python3 scripts/test-issue141-sparse-mla-decode-chunk.py -q
