@@ -64,7 +64,12 @@ done
 # ── Step 3: Apply ONLY Issue #22 ──────────────────────────────────────────
 echo ""
 echo "Step 3/5: Applying Issue #22 only..."
-docker exec deepseek-v4-flash-vllm-dspark-1 bash /tmp/hotfix-nvfp4-ds-mla-issue22.sh 2>&1 | tail -5
+# The hotfix ships at /opt/dspark-patches/ inside the container (compose mounts
+# ${DSPARK_PATCHES_DIR:-./patches} there read-only); nothing exists at /tmp.
+# DSPARK_SKIP_HOTFIX=1 does NOT gate issue22 (only DSPARK_SKIP_ISSUE22_HOTFIX
+# does), so the Step-2 boot already applied it — this re-run is an idempotent
+# ensure ("Safe to re-run" per the hotfix header), followed by the state check.
+docker exec deepseek-v4-flash-vllm-dspark-1 bash /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh 2>&1 | tail -5
 
 # Verify: Issue #22 applied, others NOT
 echo "  Verifying patch state..."
