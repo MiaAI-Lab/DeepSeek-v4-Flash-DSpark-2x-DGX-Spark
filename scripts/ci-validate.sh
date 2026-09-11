@@ -144,6 +144,8 @@ python3 scripts/test-redact-api-key-log.py -q
 ok "test-redact-api-key-log"
 python3 scripts/test-hotfix-atomic-transaction.py -q
 ok "test-hotfix-atomic-transaction"
+python3 scripts/test-bench-baseline-patch-counters.py -q
+ok "test-bench-baseline-patch-counters"
 python3 scripts/test-python-hotfix-failclosed.py -q
 ok "test-python-hotfix-failclosed"
 python3 scripts/test-gb10-install-failclosed.py -q
