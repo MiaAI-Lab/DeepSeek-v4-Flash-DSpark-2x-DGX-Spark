@@ -186,8 +186,10 @@ nfs_grant_subnet() {
 nfs_ensure_host_volume() {
   local host="$1"
   local server_ip="$2"
-  ssh "$host" "docker volume rm '$NFS_VOLUME' >/dev/null 2>&1 || true"
-  ssh "$host" "docker volume create --driver local \
+  # Explicit hardening here (not the launcher's dssh): this file is also
+  # sourced by the stop script, which defines no dssh/dscp wrappers.
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "docker volume rm '$NFS_VOLUME' >/dev/null 2>&1 || true"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "docker volume create --driver local \
     --opt type=nfs \
     --opt o=addr=${server_ip},nfsvers=4.2,ro,nconnect=8,rsize=1048576,wsize=1048576,hard,timeo=600 \
     --opt device=:/ \

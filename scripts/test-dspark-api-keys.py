@@ -139,13 +139,27 @@ def find_auth_block(text: str) -> str:
     return block
 
 
+def ssh_wrappers() -> str:
+    """The launcher's dssh/dscp definitions; the sync loop calls them."""
+    text = START.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines()
+             if ln.startswith("dssh() {") or ln.startswith("dscp() {")]
+    if len(lines) != 2:
+        raise AssertionError("dssh/dscp wrappers not found in start script")
+    return "\n".join(lines)
+
+
 def worker_sync_loop() -> str:
-    """The start script's `_hf_sync` worker patch sync loop, extracted verbatim."""
+    """The start script's `_hf_sync` worker patch sync loop, extracted verbatim.
+
+    Prefixed with the shipped dssh/dscp wrappers: the loop routes ssh/scp
+    through them, and the harness runs the chunk outside the launcher.
+    """
     text = START.read_text(encoding="utf-8")
     m = re.search(r'(for _hf_sync in [\s\S]*?^\s*done$)', text, re.MULTILINE)
     if not m:
         raise AssertionError("_hf_sync loop not found in start script")
-    return m.group(1)
+    return ssh_wrappers() + "\n" + m.group(1)
 
 
 def entrypoint_auth_block() -> str:
