@@ -349,6 +349,47 @@ elif [ "$_dspark_keys_set" = "1" ]; then
 fi
 # DSPARK_API_KEYS auth (end)
 
+# Open-API warning (begin)
+# Wildcard bind with no key configured: say so loudly. The default example
+# intentionally ships this way for bring-up, but a quiet operator should not
+# discover the open endpoint from a scanner. Warnings only — the bind itself
+# is the operator's documented choice.
+case "$VLLM_HOST" in
+  0.0.0.0|::|\[::\])
+    if [ "$_dspark_keys_set" != "1" ] && [ -z "${VLLM_API_KEY:-}" ]; then
+      echo "WARN: serving an UNAUTHENTICATED API on $VLLM_HOST:$VLLM_PORT (host network)." >&2
+      echo "      Anyone who can route to this address gets full inference. Set VLLM_API_KEY or" >&2
+      echo "      DSPARK_API_KEYS in $ENV_FILE — and note /invocations, /tokenize, /metrics stay" >&2
+      echo "      keyless on the pinned runtime, so restrict the port at the network layer too —" >&2
+      echo "      or bind 127.0.0.1 for head-only access. See .env.dspark.example (VLLM_API_KEY)." >&2
+    fi
+    ;;
+esac
+# Open-API warning (end)
+
+# Secret-file permission check (begin)
+# .env.dspark is only ever sourced, so nothing enforces its mode. Warn when it
+# is group/other-readable while carrying secrets; never fail (a group-shared
+# file can be a deliberate choice).
+_dspark_secrets_set=0
+[ -n "${VLLM_API_KEY:-}" ] && _dspark_secrets_set=1
+[ "$_dspark_keys_set" = "1" ] && _dspark_secrets_set=1
+[ -n "${HF_TOKEN:-}" ] && _dspark_secrets_set=1
+if [ "$_dspark_secrets_set" = "1" ] && [ -f "$ENV_FILE" ] && command -v stat >/dev/null 2>&1; then
+  _dspark_env_mode="$(stat -c %a "$ENV_FILE" 2>/dev/null || echo '')"
+  case "$_dspark_env_mode" in
+    ''|*[!0-9]*) : ;;
+    *)
+      if (( 8#$_dspark_env_mode & 8#077 )); then
+        echo "WARN: $ENV_FILE is mode $_dspark_env_mode (group/other-readable) and carries secrets" >&2
+        echo "      (VLLM_API_KEY / DSPARK_API_KEYS / HF_TOKEN). Tighten it: chmod 600 $ENV_FILE" >&2
+      fi
+      ;;
+  esac
+fi
+unset _dspark_secrets_set _dspark_env_mode
+# Secret-file permission check (end)
+
 # DSPARK redaction pre-flight (begin)
 if { [ "$_dspark_keys_set" = "1" ] || [ -n "${VLLM_API_KEY:-}" ]; } && [ ! -f "$SCRIPT_DIR/patches/hotfix-vllm-redact-api-key-log.sh" ]; then
   echo "error: API keys are configured but patches/hotfix-vllm-redact-api-key-log.sh is missing; keyed starts require the startup-log redaction hotfix" >&2
