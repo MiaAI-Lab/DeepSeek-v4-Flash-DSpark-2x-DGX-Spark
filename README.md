@@ -210,6 +210,15 @@ FlashInfer, CuTe, and NCCL-FR caches stay on the worker host as overlays
 under `WORKER_HF_CACHE`. `./stop-deepseek-v4-flash-dspark.sh --nfs` tears
 down only `dspark-nfs`, not Qwen's share.
 
+The export is **read-only and root_squashed** (`root_squash`, no `insecure`):
+worker root maps to nobody, so the cache files must be world-readable
+(standard `hf download` modes are 0644) while the 0600 HF `token` at the
+cache root becomes unreadable from the worker. An empty client list now fails
+the launch instead of exporting to `*`. Run
+`bash scripts/check-nfs-export-compat.sh` on the head node to prove both
+properties against a populated cache before serving; `NFS_OPTS` overrides the
+DSpark-owned exporter's options if a non-standard cache needs it.
+
 ```env
 DSPARK_WORKER_HF_NFS=1
 # NFS_SERVER_IP=10.0.22.1   # optional; default is IPv4 on NCCL_SOCKET_IFNAME

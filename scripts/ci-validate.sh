@@ -31,6 +31,7 @@ for f in \
   scripts/boot-shape-warmup.sh \
   scripts/test-boot-shape-warmup.sh \
   scripts/validate_tp3.sh \
+  scripts/check-nfs-export-compat.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
@@ -118,6 +119,8 @@ python3 scripts/test-issue138-responses-history-live.py -q
 ok "test-issue138-responses-history-live"
 python3 scripts/test-codex-agent-message-compat.py -q
 ok "test-codex-agent-message-compat"
+python3 scripts/test-nfs-hardening.py -q
+ok "test-nfs-hardening"
 python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q

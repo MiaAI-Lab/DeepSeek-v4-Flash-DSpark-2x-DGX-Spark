@@ -46,8 +46,12 @@ nfs_clients() {
     else
       echo "${net}"
     fi
+  elif [ -n "$worker_ip" ]; then
+    echo "${worker_ip}"
   else
-    echo "${worker_ip:-*}"
+    # Never fall back to '*': a world export on a privileged, host-networked
+    # nfsd is worse than no export. Fail the launch instead.
+    nfs_err "Cannot determine NFS clients: no CIDR on IFACE=$IFACE and neither WORKER_IP nor a resolvable WORKER_HOST. Refusing to export to '*'."
   fi
 }
 
@@ -167,7 +171,9 @@ nfs_subnet24() {
 nfs_grant_subnet() {
   local subnet="$1"
   local c opts line
-  opts="${NFS_OPTS:-ro,sync,no_subtree_check,no_root_squash,insecure,fsid=0}"
+  # Keep in lockstep with files/nfs-server/entrypoint.sh: root_squash protects
+  # the 0600 HF token file at the export root; no `insecure` mounts.
+  opts="${NFS_OPTS:-ro,sync,no_subtree_check,root_squash,fsid=0}"
   for c in vllm-fn-nfs "${NFS_CONTAINER:-dspark-nfs}"; do
     [ -n "$(docker ps -q --filter "name=^/${c}$")" ] || continue
     line="/export ${subnet}(${opts})"
