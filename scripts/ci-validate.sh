@@ -35,6 +35,7 @@ for f in \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
   scripts/selftest-runtime-ablation.sh \
+  scripts/bench-baseline-no-patches.sh \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -142,6 +143,8 @@ python3 scripts/test-dspark-api-keys.py -q
 ok "test-dspark-api-keys"
 python3 scripts/test-redact-api-key-log.py -q
 ok "test-redact-api-key-log"
+python3 scripts/test-bench-baseline-lifecycle.py -q
+ok "test-bench-baseline-lifecycle"
 python3 scripts/test-hotfix-atomic-transaction.py -q
 ok "test-hotfix-atomic-transaction"
 python3 scripts/test-python-hotfix-failclosed.py -q

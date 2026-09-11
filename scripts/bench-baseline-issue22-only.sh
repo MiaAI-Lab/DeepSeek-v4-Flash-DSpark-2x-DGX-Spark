@@ -37,29 +37,21 @@ fi
 
 # ── Step 1: Stop current containers ────────────────────────────────────────
 echo ""
-echo "Step 1/5: Stopping current containers..."
-env -u NODE_RANK -u HEADLESS COMPOSE_DISABLE_ENV_FILE=1 \
-  docker compose -p deepseek-v4-flash --env-file .env.dspark \
-  -f docker-compose.dspark.yml down 2>/dev/null || true
+echo "Step 1/5: Stopping current containers (head + worker)..."
+# Go through the stop script: a head-only `docker compose down` leaves the
+# worker rank serving, the Step-2 start then fails its worker precheck, and
+# the old code noticed none of that behind a backgrounded launcher.
+bash "$SCRIPT_DIR/stop-deepseek-v4-flash-dspark.sh"
 sleep 3
 echo "  ✓ Containers stopped"
 
 # ── Step 2: Start WITHOUT hotfixes ────────────────────────────────────────
 echo ""
 echo "Step 2/5: Starting server WITHOUT patches (DSPARK_SKIP_HOTFIX=1)..."
-DSPARK_SKIP_HOTFIX=1 bash "$SCRIPT_DIR/start-deepseek-v4-flash-dspark.sh" &
-START_PID=$!
-
-# Wait for API to be ready
-echo -n "  Waiting for API..."
-for i in $(seq 1 60); do
-  sleep 10
-  if curl -fsS --max-time 3 http://127.0.0.1:8888/v1/models 2>/dev/null | grep -q "deepseek"; then
-    echo " READY (${i}0s)"
-    break
-  fi
-  echo -n "."
-done
+# The launcher blocks until the API is up (or exits non-zero), so run it in
+# the foreground: no local wait loop, no START_PID bookkeeping, and a failed
+# start aborts the bench here instead of surfacing as a 10-minute dead wait.
+DSPARK_SKIP_HOTFIX=1 bash "$SCRIPT_DIR/start-deepseek-v4-flash-dspark.sh"
 
 # ── Step 3: Apply ONLY Issue #22 ──────────────────────────────────────────
 echo ""
@@ -90,24 +82,11 @@ python3 "$SCRIPT_DIR/scripts/bench-ttft.py" \
 # ── Step 5: Restart with all patches ──────────────────────────────────────
 echo ""
 echo "Step 5/5: Restarting server WITH all patches..."
-kill $START_PID 2>/dev/null || true
-env -u NODE_RANK -u HEADLESS COMPOSE_DISABLE_ENV_FILE=1 \
-  docker compose -p deepseek-v4-flash --env-file .env.dspark \
-  -f docker-compose.dspark.yml down 2>/dev/null || true
+# Same two-node teardown, then a foreground blocking start. (No `kill` of a
+# long-dead background launcher PID — the PID may have been recycled by now.)
+bash "$SCRIPT_DIR/stop-deepseek-v4-flash-dspark.sh"
 sleep 3
-
-bash "$SCRIPT_DIR/start-deepseek-v4-flash-dspark.sh" &
-START_PID2=$!
-
-echo -n "  Waiting for API..."
-for i in $(seq 1 60); do
-  sleep 10
-  if curl -fsS --max-time 3 http://127.0.0.1:8888/v1/models 2>/dev/null | grep -q "deepseek"; then
-    echo " READY (${i}0s)"
-    break
-  fi
-  echo -n "."
-done
+bash "$SCRIPT_DIR/start-deepseek-v4-flash-dspark.sh"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
