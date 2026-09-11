@@ -47,6 +47,17 @@ class Wrappers(unittest.TestCase):
                     bare.append(ln.strip())
         self.assertEqual(bare, [])
 
+    def test_nfs_share_ssh_sites_are_hardened(self):
+        # nfs-share.sh is also sourced by the stop script (no dssh there), so
+        # it hardens inline: every ssh invocation must carry the -o options
+        # (the ssh_worker helper does, and callers use that name, not `ssh`).
+        share = (ROOT / "files" / "nfs-share.sh").read_text()
+        for ln in share.splitlines():
+            if ln.strip().startswith("#"):
+                continue
+            if re.search(r"(?<![\w])ssh (?!-o )", ln):
+                self.fail(f"ssh without hardening options in nfs-share.sh: {ln.strip()}")
+
     def test_preflight_probes_use_wrappers(self):
         self.assertIn('dssh "$WORKER_HOST" "true"', SOURCE)
         self.assertIn('dssh "$WORKER2_HOST" "true"', SOURCE)

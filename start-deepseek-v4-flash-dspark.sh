@@ -663,7 +663,7 @@ _stage_ablation_direction_remote() {
   printf -v remote_dir_q '%q' "$remote_dir"
   printf -v remote_target_q '%q' "$remote_target"
   printf -v expected_q '%q' "$expected"
-  if ! ssh "$host" "
+  if ! dssh "$host" "
     set -euo pipefail
     _dir=$remote_dir_q
     _target=$remote_target_q
@@ -1652,8 +1652,8 @@ fi
 DSPARK_ABLATION_HOTFIX="${DSPARK_ABLATION_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-runtime-ablation.py}"
 if [ -f "$DSPARK_ABLATION_HOTFIX" ]; then
   echo "Syncing runtime-ablation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
-  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
-  scp "$DSPARK_ABLATION_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-runtime-ablation.py"
+  dssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  dscp "$DSPARK_ABLATION_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-runtime-ablation.py"
 elif [ "$ABLATE" = "1" ]; then
   echo "Missing required runtime-ablation hotfix: $DSPARK_ABLATION_HOTFIX" >&2
   exit 1
