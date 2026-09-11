@@ -31,6 +31,7 @@ for f in \
   scripts/boot-shape-warmup.sh \
   scripts/test-boot-shape-warmup.sh \
   scripts/validate_tp3.sh \
+  scripts/check-nfs-export-compat.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
