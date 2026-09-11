@@ -152,6 +152,8 @@ python3 scripts/test-dsv4-vision-exp-hotfix.py -q
 ok "test-dsv4-vision-exp-hotfix"
 python3 scripts/test-issue141-sparse-mla-decode-chunk.py -q
 ok "test-issue141-sparse-mla-decode-chunk"
+python3 scripts/test-start-port-recheck.py -q
+ok "test-start-port-recheck"
 python3 scripts/test-issue136-xgrammar-termination.py -q
 ok "test-issue136-xgrammar-termination"
 python3 scripts/test-build-rsync-guard.py -q

@@ -1444,10 +1444,21 @@ if docker ps --format '{{.Names}}' | grep -qx "${PROJECT_NAME}-vllm-dspark-1"; t
   exit 3
 fi
 
-if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n +2 | grep -q .; then
-  echo "Port $VLLM_PORT is already listening on the head node. Stop the conflicting service first." >&2
-  exit 1
-fi
+# The port check and the head bind are minutes apart (file syncs, GID resolve,
+# worker `up -d` all intervene), so a single early check is a TOCTOU window:
+# a process that takes the port in between surfaces only as a failed bind at
+# `up -d`, after worker ranks have already started. Check early (fail fast
+# before the expensive sync) and re-check immediately before the head `up -d`
+# to narrow the window to the bind itself.
+assert_head_port_free() {
+  if command -v ss >/dev/null 2>&1 && ss -ltn "( sport = :$VLLM_PORT )" | tail -n +2 | grep -q .; then
+    echo "Port $VLLM_PORT is already listening on the head node. Stop the conflicting service first." >&2
+    return 1
+  fi
+  return 0
+}
+
+assert_head_port_free || exit 1
 
 if ssh "$WORKER_HOST" "if docker ps --format '{{.Names}}' | grep -qx '${PROJECT_NAME}-vllm-dspark-1'; then echo 'DSpark worker container already exists for project $PROJECT_NAME (head is not up — likely a stale rank after a head-only reboot). Stop it first.' >&2; exit 1; fi"; then
   :
@@ -1989,6 +2000,13 @@ if [ "$DSPARK_TP3" = "1" ]; then
 fi
 
 echo "Starting DSpark head..."
+# Late re-check: if something took the port since the early precheck, say so
+# here — the worker ranks are already up, so the operator needs ./stop-… to
+# clean up before retrying.
+assert_head_port_free || {
+  echo "The port was taken after the worker ranks started. Run ./stop-deepseek-v4-flash-dspark.sh to tear them down, then free port $VLLM_PORT and retry." >&2
+  exit 1
+}
 compose_base 0 "" up -d
 
 if [ "${DSPARK_SKIP_HOTFIX:-0}" = "1" ]; then
