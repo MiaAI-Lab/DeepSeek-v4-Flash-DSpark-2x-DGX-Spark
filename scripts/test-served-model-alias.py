@@ -98,7 +98,7 @@ class LauncherWiringTest(unittest.TestCase):
         :]
 
         self.assertIn(
-            'read -r MODEL _ <<< "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"',
+            'read -r MODEL _ <<< "${SERVED_MODEL_NAME:-deepseek-v4-flash-vision-exp}"',
             SMOKE_SOURCE[start : SMOKE_SOURCE.index(SMOKE_SELECTION_END, start)],
         )
         self.assertNotIn("${SERVED_MODEL_NAME", after_selection)
