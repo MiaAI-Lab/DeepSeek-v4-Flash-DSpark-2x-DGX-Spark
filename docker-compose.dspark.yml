@@ -334,11 +334,11 @@ services:
       # Exact 1 applies the source patch at boot (fail-closed); default 0
       # changes no bytes. Decode and short chunks always use the stock path.
       # Replicated DSpark Markov head (drops 12 serialized TP collectives per
-      # decode step). Default 1 = apply; 0 = stock sharded head. Kept gated so
+      # decode step). Default 0 = stock sharded head; exact 1 applies. Kept gated so
       # draft acceptance can be A/B'd (2026-09-02: natural-prose acceptance
       # measured 27% / pos0 0.69 with it on; stock comparison pending).
       # Adaptive long-prefill chunk cap (1024 only while decode lanes run).
-      # Default 1 = apply; 0 = stock static cap. Gated for A/B.
+      # Default 0 = stock static cap; exact 1 applies. Gated for A/B.
       DSPARK_ENABLE_ADAPTIVE_CHUNK: "${DSPARK_ENABLE_ADAPTIVE_CHUNK:-0}"
       DSPARK_ENABLE_REPLICATE_MARKOV: "${DSPARK_ENABLE_REPLICATE_MARKOV:-0}"
       DSPARK_ENABLE_SP_INDEXER: "${DSPARK_ENABLE_SP_INDEXER:-0}"
@@ -504,7 +504,7 @@ services:
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
         --long-prefill-token-threshold ${LONG_PREFILL_TOKEN_THRESHOLD:-1024}
         --max-cudagraph-capture-size $$(( ( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-6} + 1) + 7 ) / 8 * 8 ))
-        --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
+        --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.835}
         --enable-prefix-caching
         --enable-prompt-tokens-details
         $${ASYNC_SCHEDULING_ARGS}

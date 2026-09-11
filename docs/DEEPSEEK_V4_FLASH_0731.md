@@ -5,18 +5,19 @@
 ## Checkpoint
 
 - Repository: `deepseek-ai/DeepSeek-V4-Flash-0731`
-- Tested revision: `9e165c30e2704aec5d9d593cce3eebd58bbef1cb` (default `DSPARK_REVISION` in `.env.dspark.example`; prepare + `vllm serve --revision` both honor it)
+- Tested revision: `9e165c30e2704aec5d9d593cce3eebd58bbef1cb` (**0731-lane** pin; the current lane pins the Vision-Exp revision in `.env.dspark.example` — this document describes the text-only 0731 checkpoint the recipe served before Vision-Exp)
 - Context: `1048576`
 - DSpark block size: `5`
 - Quantization metadata: FP8 weights
 - Architecture: text-only causal language model
 
 The published checkpoint has no vision processor, projector, or vision tower.
-This recipe serves **text-only** 0731 on `:8888`.
+The 0731 lane served **text-only** on `:8888`; the current lane serves the
+Vision-Exp checkpoint with native image support.
 
 ## Serving Profile
 
-The default two-Spark profile uses MTP-5 probabilistic speculation, NVFP4 MLA KV cache, prefix caching, chunked prefill, asynchronous scheduling, CUDA graphs, and the `deepseek_v4` tokenizer, reasoning parser, and tool-call parser.
+The 0731 two-Spark profile used MTP-5 probabilistic speculation, NVFP4 MLA KV cache, prefix caching, chunked prefill, asynchronous scheduling, CUDA graphs, and the `deepseek_v4` tokenizer, reasoning parser, and tool-call parser.
 
 The model card does not ship a Jinja chat template. It includes an `encoding` package that defines message encoding and output parsing, including `low`, `high`, and `max` reasoning effort. Validate multi-turn role boundaries, reasoning separation, and tool calls after runtime upgrades because successful weight loading alone does not prove encoding compatibility.
 

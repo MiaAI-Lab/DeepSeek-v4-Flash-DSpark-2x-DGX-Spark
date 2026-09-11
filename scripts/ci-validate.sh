@@ -467,6 +467,19 @@ else
   bad "start missing already-running exit 3 (#72)"
 fi
 
+# Docs/ops lane facts must not regress to the retired 0731 lane.
+if grep -q 'deepseek-v4-flash-0731' AUDIT.md scripts/run-audit.sh smoke-deepseek-v4-flash-dspark.sh; then
+  bad "0731 served-model name returned in AUDIT.md / run-audit.sh / smoke script"
+elif ! grep -q 'SERVED_MODEL_NAME:-deepseek-v4-flash-vision-exp' smoke-deepseek-v4-flash-dspark.sh; then
+  bad "smoke script served-name fallback is not the Vision-Exp lane"
+elif grep -q '0731 hub snapshot' README.md; then
+  bad "README troubleshooting references the 0731 snapshot again"
+elif grep -q '36 rows (N=6, k=5)' .env.dspark.example; then
+  bad ".env.dspark.example again claims the shipped default is 36 rows (k=5)"
+else
+  ok "no stale 0731-lane facts in docs/ops surface"
+fi
+
 # Mounted hotfix files must exist.
 for p in \
   patches/hotfix-encoding-dsv4-issue21.py \
