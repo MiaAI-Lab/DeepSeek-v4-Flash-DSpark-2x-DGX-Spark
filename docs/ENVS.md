@@ -191,10 +191,18 @@ Preparation and serving run as `DSPARK_RUNTIME_UID:DSPARK_RUNTIME_GID`
 `HF_CACHE` plus the `/tmp` bind (`DSPARK_TMP_HOST`) to be writable by that
 identity, and both fail closed instead of adopting a path they cannot write. An
 install whose caches were created by an earlier root run hands them over once,
-as root:
+as root, in an explicitly authorized maintenance window. Before using `sudo`,
+set `HF_CACHE` and `DSPARK_TMP_HOST` in the script's `.env.dspark` to the
+intended **absolute host paths for the runtime user**, and set the intended
+numeric `DSPARK_RUNTIME_UID` and `DSPARK_RUNTIME_GID`. Do not leave these paths
+dependent on `$HOME` or `~`: `sudo` may resolve them under root's home, and this
+script sources the env file after inherited environment assignments.
+
+First inspect the root-context plan and verify every target against those
+intended paths; only then, with maintenance authorization, remove `--dry-run`:
 
 ```bash
-sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership
+sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership --dry-run
 ```
 
 Exactly what that changes:

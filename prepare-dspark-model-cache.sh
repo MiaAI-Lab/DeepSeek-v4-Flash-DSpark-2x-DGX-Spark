@@ -31,6 +31,11 @@ Existing installs only — one-time ownership migration (run as root):
   --dry-run       With the migration flag only: print the plan, and any refusal,
                   without changing ownership (allowed as a non-root user).
 
+Before sudo, set HF_CACHE and DSPARK_TMP_HOST in the env file to the intended
+absolute runtime-user host paths and confirm DSPARK_RUNTIME_UID:GID.
+Do not rely on HOME/~ under sudo. Inspect every target with --dry-run in the
+root context before an explicitly authorized maintenance-window migration.
+
 The migration never recurses into the checkpoint tree (HF_CACHE/hub): serving
 mounts it read-only, and every recursive target that would overlap that tree —
 inside it, or containing it — is refused before the first scan. Only a weight

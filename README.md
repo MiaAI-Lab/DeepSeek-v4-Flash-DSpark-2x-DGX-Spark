@@ -89,10 +89,14 @@ Qwen3.8-Flash-vLLM).
    `DSPARK_RUNTIME_UID:GID` (default `1000:1000`). The prepare script creates
    the persistent JIT/cache and `/tmp` bind paths under that identity and
    refuses legacy root-owned paths. An install whose caches were created by an
-   earlier root run hands them over once, as root:
+   earlier root run hands them over once, as root, in an authorized maintenance
+   window. First set `HF_CACHE` and `DSPARK_TMP_HOST` in `.env.dspark` to the
+   intended absolute runtime-user host paths, not `$HOME` or `~` (which `sudo`
+   may resolve under root), and confirm the numeric runtime UID/GID.
+   Inspect every target in the root-context dry-run before removing `--dry-run`:
 
    ```bash
-   sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership
+   sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership --dry-run
    ```
 
    Only the seven named runtime/JIT caches plus `DSPARK_TMP_HOST` (and the
