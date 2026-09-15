@@ -31,11 +31,14 @@ for f in \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
   scripts/boot-shape-warmup.sh \
   scripts/test-boot-shape-warmup.sh \
+  scripts/ab-measure.sh \
+  scripts/run-audit.sh \
   scripts/validate_tp3.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
   scripts/bench-baseline-issue22-only.sh \
   scripts/test-lmcache-compose-gate.sh \
+  scripts/test-ci-validate-failclosed.sh \
   scripts/selftest-runtime-ablation.sh \
   scripts/bench-baseline-no-patches.sh \
   patches/*.sh
@@ -44,6 +47,18 @@ do
   bash -n "$f" || bad "bash -n $f"
   ok "bash -n $f"
 done
+
+echo "== compose render =="
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  docker compose -f docker-compose.dspark.yml config -q >/dev/null 2>&1 \
+    && ok "compose config (base)" || bad "docker-compose.dspark.yml no longer renders"
+  docker compose -f docker-compose.dspark.yml -f docker-compose.dspark-nfs.override.yml config -q >/dev/null 2>&1 \
+    && ok "compose config (nfs override)" || bad "nfs override combo no longer renders"
+  docker compose -f docker-compose.dspark.yml -f docker-compose.stage-c.override.yml config -q >/dev/null 2>&1 \
+    && ok "compose config (stage-c override)" || bad "stage-c override combo no longer renders"
+else
+  bad "docker compose plugin not available (preinstalled on ubuntu-24.04 runners) — render gate cannot run"
+fi
 
 if "$ROOT/build-dspark-vllm-runtime.sh" --tag-selftest; then
   ok "build-dspark-vllm-runtime digest is not a docker -t (issue #173)"
@@ -100,6 +115,9 @@ py_files+=(
   tests/test_dspark_stacked_mapping.py
   tests/test_issue133_triton_specialization.py
   lmcache/patch-compose-lmcache.py
+  tests/test_issue43_patchapply.py
+  tests/sim/test_issue43_scheduler_sim.py
+  tests/test_issue175_routing_kind_once.py
 )
 python3 -m py_compile "${py_files[@]}"
 ok "py_compile ${#py_files[@]} files"
@@ -195,6 +213,8 @@ python3 scripts/test-runtime-ablation.py -q
 ok "test-runtime-ablation"
 python3 tests/test_issue27_inflight_cap.py -q
 ok "test_issue27_inflight_cap"
+python3 tests/sim/test_issue43_scheduler_sim.py
+ok "test_issue43_scheduler_sim"
 python3 tests/test_adaptive_prefill_chunk.py -q
 ok "test_adaptive_prefill_chunk"
 python3 tests/test_replicate_markov_head.py
@@ -219,6 +239,8 @@ bash scripts/test-nccl-ib-hca-gid-resolve.sh -q
 ok "test-nccl-ib-hca-gid-resolve"
 bash scripts/test-lmcache-compose-gate.sh -q
 ok "test-lmcache-compose-gate"
+bash scripts/test-ci-validate-failclosed.sh -q
+ok "test-ci-validate-failclosed"
 
 echo "== recipe guards (do not re-ship known regressions) =="
 
@@ -506,36 +528,43 @@ else
   ok "no stale 0731-lane facts in docs/ops surface"
 fi
 
-# Mounted hotfix files must exist.
-for p in \
-  patches/hotfix-encoding-dsv4-issue21.py \
-  patches/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py \
-  patches/hotfix-dsv4-issue55-tool-truncation.py \
-  patches/hotfix-dsv4-responses-store.py \
-  patches/hotfix-dsv4-issue26-hybrid-swa-min.py \
-  patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py \
-  patches/hotfix-dsv4-adaptive-prefill-chunk.py \
-  patches/hotfix-dsv4-replicate-markov-head.py \
-  patches/hotfix-dsv4-issue133-triton-specialization.py \
-  patches/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py \
-  patches/hotfix-dsv4-runtime-ablation.py \
-  patches/hotfix-vllm-empty-encoder-output.py \
-  patches/hotfix-dsv4-vision-exp.py \
-  patches/hotfix-vllm-issue136-xgrammar-termination.py \
-  patches/hotfix-nvfp4-ds-mla-issue22.sh \
-  patches/hotfix-gb10-spin-wait.sh \
-  patches/hotfix-dsv4-suppress-stops-in-reasoning.py \
-  patches/hotfix-dsv4-assistant-final-continuation.py \
-  patches/hotfix-vllm-issue138-responses-history.py \
-  patches/hotfix-vllm-codex-agent-message.py \
-  patches/hotfix-vllm-redact-api-key-log.sh
-do
-  if [ -f "$p" ]; then
-    ok "present $p"
+# Hotfix files referenced by the compose mount list / boot command or the
+# launcher's worker sync must exist. Derive the list from the references
+# themselves: a curated list silently drifted behind the compose/start
+# references (issue #43's always-on patch among them).
+hotfix_seen="$(grep -hoE 'hotfix-[A-Za-z0-9._-]+\.(py|sh)' docker-compose.dspark.yml start-deepseek-v4-flash-dspark.sh | sort -u)"
+hotfix_missing=0
+for p in $hotfix_seen; do
+  if [ -f "patches/$p" ]; then
+    :
   else
-    bad "missing required $p"
+    echo "  missing patches/$p" >&2
+    hotfix_missing=1
   fi
 done
+# Unconditionally-applied boot patches must stay in the derived set: losing
+# the compose/start reference would silently drop their existence check.
+# (hotfix-dsv4-runtime-ablation.py joined the curated list on main while this
+# PR was open; pinning the required subset keeps that coverage.)
+for req in \
+  hotfix-encoding-dsv4-issue21.py \
+  hotfix-dsv4-issue43-decode-fairness-and-diag.py \
+  hotfix-dsv4-runtime-ablation.py \
+  hotfix-dsv4-vision-exp.py \
+  hotfix-vllm-empty-encoder-output.py
+do
+  if printf '%s\n' "$hotfix_seen" | grep -qx "$req"; then
+    :
+  else
+    echo "  derived hotfix set lost required $req" >&2
+    hotfix_missing=1
+  fi
+done
+if [ "$hotfix_missing" = "0" ]; then
+  ok "all referenced hotfix files exist ($(printf '%s\n' "$hotfix_seen" | wc -l | tr -d ' ') referenced)"
+else
+  bad "referenced hotfix files missing from patches/"
+fi
 
 # Multi-key auth: keyed starts apply and verify redaction fail-closed outside
 # the optional performance-hotfix loop, while the worker sync keeps shipping it.
@@ -580,11 +609,6 @@ if [ -f patches/tp3/apply_tp3_patch.py ] && [ -f patches/dsv4_tp_pad.py ] && [ -
   ok "TP=3 pad + validate_tp3.sh present"
 else
   bad "missing patches/tp3/apply_tp3_patch.py, patches/dsv4_tp_pad.py, or scripts/validate_tp3.sh"
-fi
-
-if [ "$fail" -ne 0 ]; then
-  echo "CI validate FAILED" >&2
-  exit 1
 fi
 
 # Healthcheck present, worker-gated, and probing the compose-time VLLM_HOST
@@ -712,4 +736,13 @@ for fn in remote_compose remote_compose2; do
     bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery/mxfp4-indexer/issue144 passthroughs"
   fi
 done
+
+# Accumulated failure is only final once every guard above has run. This check
+# used to sit before the healthcheck/TP=3/issue191/passthrough tail, so a
+# failure there still printed the success line and exited 0.
+if [ "$fail" -ne 0 ]; then
+  echo "CI validate FAILED" >&2
+  exit 1
+fi
+
 echo "CI validate passed (CPU recipe gates only)."

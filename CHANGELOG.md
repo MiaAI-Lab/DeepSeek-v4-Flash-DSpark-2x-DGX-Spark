@@ -1,3 +1,8 @@
+## 2026-09-15
+
+### Fixed
+- **`ci-validate.sh` fails closed after every guard**: the accumulated `$fail` check sat above the healthcheck / TP=3 / issue191 / hotfix-passthrough tail, so a guard failing there still printed `CI validate passed (CPU recipe gates only).` and exited 0 — a green process for a failed recipe gate. The check now runs after the last guard and before the success line, and keeps every earlier `FAIL` line instead of filtering output. `scripts/test-ci-validate-failclosed.sh`, registered in the unit section, checks pristine exit 0 and breaks one late-guard target at a time (the compose healthcheck host and the `DSPARK_ENABLE_ROPE_SWA_FIX` launcher passthrough) in a sandbox copy of the tree, asserting exit 1 without pinning diagnostic wording. `docker`/`python3`/`bash` are stubbed inside that sandbox so the external test commands cannot decide the exit status; this is an exit-code regression test, not a substitute for CI.
+
 ## 2026-09-08
 
 ### Security
@@ -33,6 +38,11 @@
 
 ### Fixed
 - **Broken doc references repaired**: `results/RESULTS-2026-08-14.md` linked `vl-nvfp4-coexist-2026-08-11.md`, which is not in the repo (the link is now plain text with a not-in-checkout note); `docs/ENVS.md`'s #136 anchor into `PATCHES.md` died when the heading was renamed for the #210 consolidation (now `issues-136--210--xgrammar-termination-and-post-reasoning-fsm-chain`); `docs/GLM-NEW-REPORT.md` pointed its methodology at a `benchmarks/` tree that does not exist in this checkout (now points at `scripts/benchmark-0731.py`, with the original named as not-in-checkout) and its "default lane" scope line is framed as of its source commit; `docs/SETUP.md` carries a historical banner (it describes the retired 0731 preview-lane A/B replica pair; nothing links to it); `docs/CLAUDE/README.md` (new) marks the working-notes directory and lists which referenced artifacts are uncommitted. Two ci-validate guards pin the anchor and the RESULTS link form.
+
+## 2026-09-08
+
+### Fixed
+- **CI closes three coverage gaps**: (1) `docker compose config -q` now renders all three compose combos (base, NFS override, Stage-C override) in `ci-validate.sh` — every compose gate used to be a text grep, so a compose file that no longer rendered passed CI as long as the grepped substrings survived; the gate hard-requires the docker compose plugin (preinstalled on ubuntu-24.04 runners). (2) The always-on, fail-closed issue #43 scheduler patch had zero CI coverage: `tests/sim/test_issue43_scheduler_sim.py` (pure-CPU simulator, exits 1 on violated bounded-service/budget invariants) now runs in the unit-test section, and `tests/test_issue43_patchapply.py` + `tests/test_issue175_routing_kind_once.py` join the py_compile gate (the patchapply test additionally needs the pinned image, so it stays out of the CPU run, like the live verifiers). (3) The mounted-hotfix existence list had silently drifted 12 files behind the compose mount list (issue #43's patch among them) — the check now derives the list from the `hotfix-*` references in `docker-compose.dspark.yml` + `start-deepseek-v4-flash-dspark.sh` (38 today), so future additions cannot drift. `scripts/ab-measure.sh` and `scripts/run-audit.sh` join the `bash -n` gate (the last ungated shell scripts).
 
 ## 2026-09-08
 
