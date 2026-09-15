@@ -32,8 +32,10 @@ Existing installs only — one-time ownership migration (run as root):
                   without changing ownership (allowed as a non-root user).
 
 The migration never recurses into the checkpoint tree (HF_CACHE/hub): serving
-mounts it read-only. Only a weight (re)download needs it writable by the
-runtime identity — docs/ENVS.md, "Migrating an existing install".
+mounts it read-only, and every recursive target that would overlap that tree —
+inside it, or containing it — is refused before the first scan. Only a weight
+(re)download needs it writable by the runtime identity — docs/ENVS.md,
+"Migrating an existing install".
 
 Official downloads default to DSPARK_REVISION=86f746b3… (Vision-Exp pin). Override
 via DSPARK_REVISION in .env.dspark, or clear it to follow tip of main.
@@ -250,8 +252,9 @@ verify_worker_image() {
 # root, so the runtime/JIT cache directories the serve container binds writable
 # are root-owned and the fail-closed preflight below refuses them. Migration is
 # explicit, privileged and one-time: it is never part of a normal prepare, it
-# refuses anything it cannot prove is a named cache directory, and it never
-# walks into the checkpoint tree (HF_CACHE/hub).
+# refuses anything it cannot prove is a named cache directory, and no recursive
+# target may overlap the checkpoint tree (HF_CACHE/hub) — inside it, or
+# containing it.
 
 # The seven named caches docker-compose.dspark.yml exposes as writable binds.
 # Keep in step with the compose mount list.
@@ -269,6 +272,7 @@ runtime_cache_names=(
 # substitution: a refusal must abort the script, not a subshell).
 MIGRATION_CANONICAL=""
 MIGRATION_ROOT=""
+MIGRATION_HUB=""
 MIGRATION_RECURSIVE=()
 MIGRATION_ABSENT=()
 
@@ -306,7 +310,40 @@ migration_resolve_dir() {
   MIGRATION_CANONICAL="$canonical"
 }
 
-# Validate every target and build the plan before changing anything.
+# Canonical path of the checkpoint tree (HF_CACHE/hub) that no recursive chown
+# may overlap. A symlinked hub resolves to its real target, which is where the
+# checkpoints actually are; a missing, dangling or unreadable one keeps the
+# literal path — the parent is already canonical, so the comparison stays
+# sound and the function never fails a strict-mode caller.
+migration_set_checkpoint_subtree() {
+  local canonical
+  MIGRATION_HUB="$MIGRATION_ROOT/hub"
+  if [ -d "$MIGRATION_HUB" ]; then
+    canonical="$(cd -- "$MIGRATION_HUB" && pwd -P)" || canonical=""
+    MIGRATION_HUB="${canonical:-$MIGRATION_HUB}"
+  fi
+}
+
+# A recursive target must neither sit inside the checkpoint tree (the chown
+# would walk checkpoint files directly) nor contain it (the same, from above).
+# Both sides are resolved paths, so a symlinked hub or target cannot smuggle the
+# tree past the comparison.
+migration_refuse_checkpoint_overlap() {
+  local label="$1" target="$2"
+  case "$target" in
+    "$MIGRATION_HUB"|"$MIGRATION_HUB"/*)
+      migration_refuse "$label is inside the checkpoint tree ($MIGRATION_HUB), so a recursive chown would reach it: $target"
+      ;;
+  esac
+  case "$MIGRATION_HUB" in
+    "$target"|"$target"/*)
+      migration_refuse "$label contains the checkpoint tree ($MIGRATION_HUB), so a recursive chown would reach it: $target"
+      ;;
+  esac
+}
+
+# Validate every target and build the plan before changing anything: every
+# target is resolved and proven safe before the first recursive scan.
 migration_collect() {
   local name path link
 
@@ -318,6 +355,7 @@ migration_collect() {
   if migration_unsafe_root "$MIGRATION_ROOT"; then
     migration_refuse "unsafe root (top-level system directory): $MIGRATION_ROOT"
   fi
+  migration_set_checkpoint_subtree
 
   for name in "${runtime_cache_names[@]}"; do
     path="$HF_CACHE/$name"
@@ -326,10 +364,7 @@ migration_collect() {
       continue
     fi
     path="$MIGRATION_CANONICAL"
-    link="$(find -P "$path" -xdev -type l -print -quit)" || migration_refuse "cannot scan for symlinks: $path"
-    if [ -n "$link" ]; then
-      migration_refuse "symbolic link inside $path: $link"
-    fi
+    migration_refuse_checkpoint_overlap "cache directory $name" "$path"
     MIGRATION_RECURSIVE+=("$path")
   done
 
@@ -341,17 +376,16 @@ migration_collect() {
     if migration_unsafe_root "$path"; then
       migration_refuse "unsafe root (top-level system directory): $path"
     fi
-    case "$MIGRATION_ROOT" in
-      "$path"|"$path"/*)
-        migration_refuse "DSPARK_TMP_HOST contains the cache root, so a recursive chown would reach the checkpoint tree: $path"
-        ;;
-    esac
+    migration_refuse_checkpoint_overlap "DSPARK_TMP_HOST" "$path"
+    MIGRATION_RECURSIVE+=("$path")
+  fi
+
+  for path in "${MIGRATION_RECURSIVE[@]}"; do
     link="$(find -P "$path" -xdev -type l -print -quit)" || migration_refuse "cannot scan for symlinks: $path"
     if [ -n "$link" ]; then
       migration_refuse "symbolic link inside $path: $link"
     fi
-    MIGRATION_RECURSIVE+=("$path")
-  fi
+  done
   return 0
 }
 

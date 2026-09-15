@@ -9,9 +9,11 @@
 #     DSPARK_RUNTIME_UID:GID with the same two --user invocations and no
 #     ownership change of its own;
 #   * the explicit `--migrate-runtime-cache-ownership` mode refuses unsafe
-#     roots, symlinks (target or nested), non-directories, and a
-#     DSPARK_TMP_HOST that would drag the checkpoint tree in, while its plan
-#     covers exactly the seven named caches plus DSPARK_TMP_HOST and never
+#     roots, symlinks (target or nested), non-directories, and any recursive
+#     target that would overlap the checkpoint tree — a `DSPARK_TMP_HOST` that
+#     contains HF_CACHE, equals `HF_CACHE/hub` or is nested under it, and a
+#     checkpoint tree symlinked into a named cache — while its plan covers
+#     exactly the seven named caches plus a separate `DSPARK_TMP_HOST` and never
 #     lists HF_CACHE/hub.
 #
 # The suite runs unprivileged on purpose: CI and ordinary developer runs are
@@ -261,8 +263,35 @@ refusal_case "a top-level HF_CACHE" "unsafe root (top-level system directory): /
   'HF_OVERRIDE=/'
 refusal_case "a top-level DSPARK_TMP_HOST" "unsafe root (top-level system directory): /tmp" \
   'TMP_OVERRIDE=/tmp'
-refusal_case "a DSPARK_TMP_HOST containing the cache root" "DSPARK_TMP_HOST contains the cache root" \
+refusal_case "a DSPARK_TMP_HOST containing the cache root" "DSPARK_TMP_HOST contains the checkpoint tree" \
   'TMP_OVERRIDE=$tmp'
+refusal_case "a DSPARK_TMP_HOST rooted at HF_CACHE/hub" "DSPARK_TMP_HOST is inside the checkpoint tree" \
+  'TMP_OVERRIDE=$tmp/hf/hub'
+refusal_case "a DSPARK_TMP_HOST nested under HF_CACHE/hub" "DSPARK_TMP_HOST is inside the checkpoint tree" \
+  'mkdir -p "$tmp/hf/hub/tmp-root"; TMP_OVERRIDE=$tmp/hf/hub/tmp-root'
+refusal_case "a checkpoint tree symlinked into a named cache" "cache directory vllm-cache contains the checkpoint tree" \
+  'rm -rf "$tmp/hf/hub"; mkdir -p "$tmp/hf/vllm-cache/ckpt"; ln -s "$tmp/hf/vllm-cache/ckpt" "$tmp/hf/hub"'
+
+# --- 7. a tmp root beside the checkpoint tree stays a legitimate target
+scenario existing
+mkdir -p "$tmp/hf/dspark-tmp"
+TMP_OVERRIDE="$tmp/hf/dspark-tmp"
+before="$(fingerprint)"
+tmp_before="$(stat -c '%u:%g:%a' "$tmp/hf/dspark-tmp")"
+migrate --dry-run >"$tmp/out" 2>"$tmp/err" && rc=0 || rc=$?
+after="$(fingerprint)"
+tmp_after="$(stat -c '%u:%g:%a' "$tmp/hf/dspark-tmp")"
+if [ "$rc" = "0" ] && contains "$(cat "$tmp/out")" "would chown -R (named cache, symlinks never followed): $tmp/hf/dspark-tmp"; then
+  ok "a tmp root beside the checkpoint tree is still planned for migration"
+else
+  bad "a tmp root beside the checkpoint tree must stay accepted (rc=$rc): $(cat "$tmp/err")"
+fi
+if [ "$before" = "$after" ] && [ "$tmp_before" = "$tmp_after" ] && ! grep -Eq '^would chown.*/hub' "$tmp/out"; then
+  ok "accepted tmp root changes nothing and the plan never names the checkpoint tree"
+else
+  bad "accepted tmp root must stay inert and outside the plan's checkpoint entries"
+fi
+TMP_OVERRIDE=""
 
 echo ""
 if [ "$fail" -ne 0 ]; then

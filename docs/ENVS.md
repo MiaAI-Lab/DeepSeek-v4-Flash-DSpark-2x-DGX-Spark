@@ -207,9 +207,10 @@ Exactly what that changes:
 What it never changes: `HF_CACHE/hub` or any other checkpoint-tree entry (the
 compose mount is read-only while serving), and it refuses — exit 2, nothing
 touched — a path that is a symlink, a symlink-containing tree, a non-directory,
-a top-level system directory (`/`, `/tmp`, `/var`, `/home`, …), or a
-`DSPARK_TMP_HOST` that contains the cache root. Validation of every target
-completes before the first `chown`.
+a top-level system directory (`/`, `/tmp`, `/var`, `/home`, …), or a recursive
+target that would overlap the checkpoint tree (inside `HF_CACHE/hub`, or
+containing it — a `DSPARK_TMP_HOST` that contains the cache root is one such
+shape). Validation of every target completes before the first `chown`.
 
 `--migrate-runtime-cache-ownership --dry-run` prints the same plan and the same
 refusals without changing ownership, and is allowed for any user. A normal
