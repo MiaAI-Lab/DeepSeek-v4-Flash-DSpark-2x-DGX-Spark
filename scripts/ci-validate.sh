@@ -37,6 +37,7 @@ for f in \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
+  scripts/test-ci-validate-failclosed.sh \
   scripts/selftest-runtime-ablation.sh \
   patches/*.sh
 do
@@ -230,6 +231,8 @@ bash scripts/test-nccl-ib-hca-gid-resolve.sh -q
 ok "test-nccl-ib-hca-gid-resolve"
 bash scripts/test-lmcache-compose-gate.sh -q
 ok "test-lmcache-compose-gate"
+bash scripts/test-ci-validate-failclosed.sh -q
+ok "test-ci-validate-failclosed"
 
 echo "== recipe guards (do not re-ship known regressions) =="
 
@@ -576,11 +579,6 @@ else
   bad "missing patches/tp3/apply_tp3_patch.py, patches/dsv4_tp_pad.py, or scripts/validate_tp3.sh"
 fi
 
-if [ "$fail" -ne 0 ]; then
-  echo "CI validate FAILED" >&2
-  exit 1
-fi
-
 # Healthcheck present, worker-gated, and probing the compose-time VLLM_HOST
 # (rank 1 is headless; a hardcoded 127.0.0.1 probe is wrong for a LAN-IP bind).
 if grep -q "healthcheck:" docker-compose.dspark.yml \
@@ -706,4 +704,13 @@ for fn in remote_compose remote_compose2; do
     bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery/mxfp4-indexer/issue144 passthroughs"
   fi
 done
+
+# Accumulated failure is only final once every guard above has run. This check
+# used to sit before the healthcheck/TP=3/issue191/passthrough tail, so a
+# failure there still printed the success line and exited 0.
+if [ "$fail" -ne 0 ]; then
+  echo "CI validate FAILED" >&2
+  exit 1
+fi
+
 echo "CI validate passed (CPU recipe gates only)."

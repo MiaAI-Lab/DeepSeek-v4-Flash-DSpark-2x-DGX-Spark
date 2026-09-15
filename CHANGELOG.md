@@ -1,3 +1,8 @@
+## 2026-09-15
+
+### Fixed
+- **`ci-validate.sh` fails closed after every guard**: the accumulated `$fail` check sat above the healthcheck / TP=3 / issue191 / hotfix-passthrough tail, so a guard failing there still printed `CI validate passed (CPU recipe gates only).` and exited 0 — a green process for a failed recipe gate. The check now runs after the last guard and before the success line, and keeps every earlier `FAIL` line instead of filtering output. `scripts/test-ci-validate-failclosed.sh`, registered in the unit section, breaks one late-guard target at a time (the compose healthcheck host and the `DSPARK_ENABLE_ROPE_SWA_FIX` launcher passthrough) in a sandbox copy of the tree and asserts exit 1 with the guard's own failure line; `docker`/`python3`/`bash` are stubbed inside that sandbox so the external test commands cannot decide the exit status, so it is an exit-code regression test and not a substitute for CI.
+
 ## 2026-09-08
 
 ### Security
