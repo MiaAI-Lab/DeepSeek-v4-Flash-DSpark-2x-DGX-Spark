@@ -1287,3 +1287,57 @@ new-step block changes, C4 layer-specific indices and mixed-batch slicing.
 Runtime qualification and timing must be reported separately; reduced conversion
 count alone is not an end-to-end speedup claim. Context-parallel and full-graph
 prefill configurations beyond the qualified GPU-runner lane remain unverified.
+
+---
+
+## Issue #82 — bounded loop-breaker for the announce-loop (default OFF)
+
+**Symptom.** The multi-turn tool/reasoning attractor (#82) is self-priming:
+degraded announce lines in prior assistant turns teach the model its own failure
+mode, and a runaway turn then generates thousands of tokens of `Doing it.` /
+`Running.` until `max_tokens` or a client abort. This stack deliberately
+suppresses spurious stopping (draft-EOS penalty + suppress-stops-in-reasoning),
+which turns the attractor's failure mode from a recoverable early stop into
+unbounded babble.
+
+**What the patcher does.** `patches/hotfix-dsv4-loop-breaker.py` inserts a
+repeated-line detector into `vllm/v1/engine/detokenizer.py::update` (CPU side,
+per request, outside CUDA graphs, after the suppress-stops guard). When a
+normalized prose line repeats past its bound — `DSPARK_LOOP_BREAKER_REPEATS`
+(default 6) for lines of 8+ chars, `DSPARK_LOOP_BREAKER_SHORT_REPEATS`
+(default 15) for 3-7 char sentence lines like `Now.` — and the request is past
+`DSPARK_LOOP_BREAKER_MIN_TOKENS` (default 64) output tokens, `update()` returns a
+synthetic stop marker and the request finishes cleanly with
+`stop_reason=loop-breaker`. Counts live in a bounded sliding window (a deque plus
+a same-keyed dict, evicting past `max(64, 2 * max(repeats, short_repeats))`): a
+long generation cannot grow per-request state without bound, and evicted repeats
+stop counting. Fenced (``` / ~~~) and indented code blocks are never counted, nor
+are lines carrying braces, quotes, backticks, pipes or DSML markers, lines with
+no alphanumeric content (rules, table separators) or lines over 160 chars, and
+the breaker holds fire while the stream tail sits inside an apparent DSML tool
+block.
+
+**Flag and status.** Default OFF: only exact `DSPARK_LOOP_BREAKER=1` applies the
+patch at boot and arms it; every other value leaves `detokenizer.py` stock and
+parses no knob (a detokenizer patched by an earlier enabled boot stays inert
+because the flag is re-read at vLLM import). While enabled the launcher
+pre-flights `--check` on the worker(s) then the head, and the boot chain applies
+it fail-closed. The numeric knobs are range-checked there — `repeats` and
+`short_repeats` 2-1024, `min_tokens` 0-1000000; 2 is the floor because 1 would
+fire on the first eligible line — and a malformed or out-of-range value aborts
+the boot with the variable named instead of defaulting silently.
+`DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1` skips applying the patch. Applies are staged
+in a same-directory temp file and `os.replace()`d, preserving the file mode, with
+the patched source compiled before the write and the result re-classified after
+it (original restored + exit 1 otherwise). `--status` exits nonzero unless the
+target carries the complete patch, and a partial patch is never reported as
+applied.
+
+**Evidence status.** Mitigation for the #82 residue, **not** a root-cause fix and
+not a closure of #82. The author's live 2x DGX Spark measurements (runaway trials
+cut on the 6th repeat at 425-493 tokens; healthy verbose turns untouched) and the
+12-case calibration are not committed and were **not** reproduced in this rework;
+this PR ships the CPU suite `python3 scripts/test-loop-breaker.py` plus the chain
+gating coverage in `scripts/test-python-hotfix-failclosed.py`. The false-positive
+rate is reasoned from source and the CPU suite, not measured against live
+production traffic.

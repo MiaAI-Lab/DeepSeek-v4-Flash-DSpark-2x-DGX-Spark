@@ -771,6 +771,78 @@ class PythonHotfixFailClosedTest(unittest.TestCase):
         )
         self.assertFalse(reached)
 
+    def test_loop_breaker_default_off_and_nonone_values_skip_patcher(self):
+        for value in (None, "", "0", "2", "true", "01"):
+            with self.subTest(value=value):
+                extra = {} if value is None else {"DSPARK_LOOP_BREAKER": value}
+                proc, invocations, reached = self._run_line(
+                    self.runtime_line, env_extra=extra
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertNotIn("hotfix-dsv4-loop-breaker.py", invocations)
+                self.assertEqual(
+                    invocations,
+                    [
+                        "hotfix-dsv4-vision-exp.py",
+                        "hotfix-vllm-empty-encoder-output.py",
+                        "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                        "hotfix-dsv4-adaptive-prefill-chunk.py",
+                        "hotfix-dsv4-replicate-markov-head.py",
+                        "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
+                        "hotfix-dsv4-issue26-hybrid-swa-min.py",
+                        "hotfix-dsv4-issue133-triton-specialization.py",
+                        "hotfix-dsv4-runtime-ablation.py",
+                        "hotfix-dsv4-suppress-stops-in-reasoning.py",
+                    ],
+                )
+                self.assertTrue(reached)
+
+    def test_loop_breaker_runs_after_suppress_stops_when_enabled(self):
+        proc, invocations, reached = self._run_line(
+            self.runtime_line, env_extra={"DSPARK_LOOP_BREAKER": "1"}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(
+            invocations,
+            [
+                "hotfix-dsv4-vision-exp.py",
+                "hotfix-vllm-empty-encoder-output.py",
+                "hotfix-dsv4-issue27-partial-prefill-concurrency.py",
+                "hotfix-dsv4-adaptive-prefill-chunk.py",
+                "hotfix-dsv4-replicate-markov-head.py",
+                "hotfix-dsv4-issue43-decode-fairness-and-diag.py",
+                "hotfix-dsv4-issue26-hybrid-swa-min.py",
+                "hotfix-dsv4-issue133-triton-specialization.py",
+                "hotfix-dsv4-runtime-ablation.py",
+                "hotfix-dsv4-suppress-stops-in-reasoning.py",
+                "hotfix-dsv4-loop-breaker.py",
+            ],
+        )
+        self.assertTrue(reached)
+
+    def test_loop_breaker_enabled_failure_blocks_service_exec(self):
+        proc, invocations, reached = self._run_line(
+            self.runtime_line,
+            fail_step="hotfix-dsv4-loop-breaker.py",
+            env_extra={"DSPARK_LOOP_BREAKER": "1"},
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertEqual(invocations[-1], "hotfix-dsv4-loop-breaker.py")
+        self.assertFalse(reached)
+
+    def test_loop_breaker_skip_flag_skips_patcher(self):
+        proc, invocations, reached = self._run_line(
+            self.runtime_line,
+            env_extra={
+                "DSPARK_LOOP_BREAKER": "1",
+                "DSPARK_SKIP_LOOP_BREAKER_HOTFIX": "1",
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("hotfix-dsv4-loop-breaker.py", invocations)
+        self.assertEqual(invocations[-1], "hotfix-dsv4-suppress-stops-in-reasoning.py")
+        self.assertTrue(reached)
+
 
 if __name__ == "__main__":
     unittest.main()

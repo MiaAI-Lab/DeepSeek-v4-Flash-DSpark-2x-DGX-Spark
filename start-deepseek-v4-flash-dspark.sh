@@ -1366,6 +1366,13 @@ print_resolved_profile() {
   else
     echo "  Suppress stops in <think>: will apply (client stop dormant until </think>)"
   fi
+  if [ "${DSPARK_LOOP_BREAKER:-0}" != "1" ]; then
+    echo "  Issue #82 loop-breaker: off (DSPARK_LOOP_BREAKER!=1; stock detokenizer)"
+  elif [ "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}" = "1" ]; then
+    echo "  Issue #82 loop-breaker: SKIPPED (DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1)"
+  else
+    echo "  Issue #82 loop-breaker: will apply (repeats=${DSPARK_LOOP_BREAKER_REPEATS:-6} short_repeats=${DSPARK_LOOP_BREAKER_SHORT_REPEATS:-15} min_tokens=${DSPARK_LOOP_BREAKER_MIN_TOKENS:-64})"
+  fi
   if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
     echo "  GB10 vLLM patch dir: $VLLM_GB10_PATCH_DIR"
     echo "  GB10 hybrid NVFP4 M threshold: ${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}"
@@ -1660,6 +1667,10 @@ if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
 fi
 DSPARK_LOOP_BREAKER_HOTFIX="${DSPARK_LOOP_BREAKER_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-loop-breaker.py}"
 if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
+  echo "Syncing loop-breaker hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  # A leftover directory with this name (root-owned) would make scp fail.
+  ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-loop-breaker.py; fi"
   scp "$DSPARK_LOOP_BREAKER_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py"
 fi
 DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-assistant-final-continuation.py}"
@@ -1982,6 +1993,21 @@ if [ "${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}" = "1" ]; then
     remote_compose2 "NODE_RANK=2 HEADLESS=1 $WORKER2_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER2_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER2_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-c128a-prefill-cache.py --check"
   fi
   compose_base 0 "" run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-c128a-prefill-cache.py --check
+fi
+
+# Issue #82 loop-breaker (opt-in): validate the enabled knob set and the
+# detokenizer anchors on each rank before either rank starts, so a malformed
+# DSPARK_LOOP_BREAKER_* value or a drifted source fails here instead of in the
+# boot chain. DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1 skips the patch entirely.
+if [ "${DSPARK_LOOP_BREAKER:-0}" = "1" ] && [ "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}" != "1" ]; then
+  echo "Checking issue #82 loop-breaker configuration on the worker before either rank starts..."
+  remote_compose "NODE_RANK=1 HEADLESS=1 $WORKER_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-loop-breaker.py --check"
+  if [ "$DSPARK_TP3" = "1" ]; then
+    echo "Checking issue #82 loop-breaker configuration on worker2 before ranks start..."
+    remote_compose2 "NODE_RANK=2 HEADLESS=1 $WORKER2_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER2_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER2_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-loop-breaker.py --check"
+  fi
+  echo "Checking issue #82 loop-breaker configuration on the head before either rank starts..."
+  compose_base 0 "" run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-loop-breaker.py --check
 fi
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."
