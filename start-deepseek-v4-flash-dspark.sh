@@ -545,6 +545,24 @@ if [ "${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}" = "1" ] && { [ ! -f "$DSPARK_C128
 fi
 export DSPARK_C128A_PREFILL_CACHE_HOTFIX DSPARK_ENABLE_C128A_PREFILL_CACHE
 
+# Issue #82 loop-breaker patcher admission (begin).
+# An enabled, unskipped loop-breaker mounts its selected patcher on every rank.
+# Resolve the path once (relative overrides rooted at this checkout, like the
+# other hotfix sources) and refuse a missing or non-regular-file override here,
+# before any host is touched: the sync below is a plain [ -f ] copy that would
+# otherwise push nothing and leave a worker pre-flight reading a stale canonical
+# file. Disabled and skipped boots stay inert and require no file.
+DSPARK_LOOP_BREAKER_HOTFIX="${DSPARK_LOOP_BREAKER_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-loop-breaker.py}"
+case "$DSPARK_LOOP_BREAKER_HOTFIX" in
+  /*) ;;
+  *) DSPARK_LOOP_BREAKER_HOTFIX="$SCRIPT_DIR/${DSPARK_LOOP_BREAKER_HOTFIX#./}" ;;
+esac
+if [ "${DSPARK_LOOP_BREAKER:-0}" = "1" ] && [ "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}" != "1" ] && { [ ! -f "$DSPARK_LOOP_BREAKER_HOTFIX" ] || [ -L "$DSPARK_LOOP_BREAKER_HOTFIX" ]; }; then
+  echo "issue #82 loop-breaker is enabled but its local patcher is missing or not a regular file: $DSPARK_LOOP_BREAKER_HOTFIX" >&2
+  exit 1
+fi
+# Issue #82 loop-breaker patcher admission (end).
+
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
 : "${MASTER_PORT:?MASTER_PORT must be set in $ENV_FILE}"
@@ -1677,7 +1695,8 @@ if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
   ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-suppress-stops-in-reasoning.py; fi"
   scp "$DSPARK_SUPPRESS_STOPS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py"
 fi
-DSPARK_LOOP_BREAKER_HOTFIX="${DSPARK_LOOP_BREAKER_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-loop-breaker.py}"
+# Issue #82 loop-breaker patcher sync (begin). The selected patcher was
+# admitted above; a missing file here means the hotfix is disabled or skipped.
 if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
   echo "Syncing loop-breaker hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
   ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
@@ -1685,6 +1704,7 @@ if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
   ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-loop-breaker.py; fi"
   scp "$DSPARK_LOOP_BREAKER_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py"
 fi
+# Issue #82 loop-breaker patcher sync (end).
 DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-assistant-final-continuation.py}"
 if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
   echo "Syncing assistant-final continuation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
@@ -1837,8 +1857,9 @@ if [ "$DSPARK_TP3" = "1" ]; then
     scp "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/patches/hotfix-vllm-c128a-prefill-cache.py"
   fi
   # The tar above ships the repository copy. A selected loop-breaker override
-  # must replace it here with the same bytes and the same predicate the
-  # worker1 sync uses, or worker2 would pre-flight different source.
+  # (admitted before any host was touched) must replace it here with the same
+  # bytes and the same predicate the worker1 sync uses, or worker2 would
+  # pre-flight different source.
   if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
     scp "$DSPARK_LOOP_BREAKER_HOTFIX" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/patches/hotfix-dsv4-loop-breaker.py"
   fi

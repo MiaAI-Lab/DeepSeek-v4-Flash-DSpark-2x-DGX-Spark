@@ -1327,7 +1327,10 @@ it fail-closed. The numeric knobs are range-checked there — `repeats` and
 fire on the first eligible line — and a malformed or out-of-range value aborts
 the boot with the variable named instead of defaulting silently.
 `DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1` skips applying the patch, but a `--status`
-query still inspects the file bytes. Applies are staged
+query still inspects the file bytes. An enabled, unskipped boot refuses a
+missing or non-regular-file selected `DSPARK_LOOP_BREAKER_HOTFIX` before it
+touches either host, instead of syncing nothing and pre-flighting a stale
+canonical copy. Applies are staged
 in a same-directory temp file and `os.replace()`d, preserving the file mode, with
 the patched source compiled before the write and the result re-read and
 re-classified after it (a mismatch, or a re-read/decode failure, restores the
