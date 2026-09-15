@@ -586,6 +586,24 @@ if [ "${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}" = "1" ] && { [ ! -f "$DSPARK_C128
 fi
 export DSPARK_C128A_PREFILL_CACHE_HOTFIX DSPARK_ENABLE_C128A_PREFILL_CACHE
 
+# Issue #82 loop-breaker patcher admission (begin).
+# An enabled, unskipped loop-breaker mounts its selected patcher on every rank.
+# Resolve the path once (relative overrides rooted at this checkout, like the
+# other hotfix sources) and refuse a missing or non-regular-file override here,
+# before any host is touched: the sync below is a plain [ -f ] copy that would
+# otherwise push nothing and leave a worker pre-flight reading a stale canonical
+# file. Disabled and skipped boots stay inert and require no file.
+DSPARK_LOOP_BREAKER_HOTFIX="${DSPARK_LOOP_BREAKER_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-loop-breaker.py}"
+case "$DSPARK_LOOP_BREAKER_HOTFIX" in
+  /*) ;;
+  *) DSPARK_LOOP_BREAKER_HOTFIX="$SCRIPT_DIR/${DSPARK_LOOP_BREAKER_HOTFIX#./}" ;;
+esac
+if [ "${DSPARK_LOOP_BREAKER:-0}" = "1" ] && [ "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}" != "1" ] && { [ ! -f "$DSPARK_LOOP_BREAKER_HOTFIX" ] || [ -L "$DSPARK_LOOP_BREAKER_HOTFIX" ]; }; then
+  echo "issue #82 loop-breaker is enabled but its local patcher is missing or not a regular file: $DSPARK_LOOP_BREAKER_HOTFIX" >&2
+  exit 1
+fi
+# Issue #82 loop-breaker patcher admission (end).
+
 : "${WORKER_HOST:?WORKER_HOST must be set in $ENV_FILE}"
 : "${MASTER_ADDR:?MASTER_ADDR must be set in $ENV_FILE}"
 : "${MASTER_PORT:?MASTER_PORT must be set in $ENV_FILE}"
@@ -678,6 +696,18 @@ REMOTE_DSML_RECOVERY="$(printf '%q' "${DSPARK_ENABLE_DSML_RECOVERY:-0}")"
 REMOTE_ISSUE144_EFFORT_ALIGN="$(printf '%q' "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}")"
 REMOTE_MXFP4_INDEXER="$(printf '%q' "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}")"
 REMOTE_C128A_PREFILL_CACHE="$(printf '%q' "${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}")"
+# Issue #82 loop-breaker rank parity (begin). Resolve the five controls once on
+# the head and forward the resolved values to both workers: the pushed env file
+# already carries every file-backed value, but a value that exists only in the
+# head environment is not in that file, and without forwarding it the head
+# pre-flight/boot chain could be enabled while a worker silently stayed
+# disabled. Fallbacks mirror the Compose defaults.
+REMOTE_LOOP_BREAKER="$(printf '%q' "${DSPARK_LOOP_BREAKER:-0}")"
+REMOTE_LOOP_BREAKER_SKIP="$(printf '%q' "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}")"
+REMOTE_LOOP_BREAKER_REPEATS="$(printf '%q' "${DSPARK_LOOP_BREAKER_REPEATS:-6}")"
+REMOTE_LOOP_BREAKER_SHORT_REPEATS="$(printf '%q' "${DSPARK_LOOP_BREAKER_SHORT_REPEATS:-15}")"
+REMOTE_LOOP_BREAKER_MIN_TOKENS="$(printf '%q' "${DSPARK_LOOP_BREAKER_MIN_TOKENS:-64}")"
+# Issue #82 loop-breaker rank parity (end).
 REMOTE_COMPOSE="cd $REMOTE_WORKER_DIR && env -u MASTER_ADDR -u MASTER_PORT -u NODE_RANK -u HEADLESS COMPOSE_DISABLE_ENV_FILE=1"
 STARTUP_LOG_SINCE=""
 
@@ -1237,11 +1267,11 @@ remote_nccl_env2() {
 remote_compose() {
   # The head may use an absolute local mount override; the worker always uses
   # the canonical synced relative path.
-  ssh "$WORKER_HOST" "$REMOTE_COMPOSE DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env) $*"
+  ssh "$WORKER_HOST" "$REMOTE_COMPOSE DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' DSPARK_LOOP_BREAKER=$REMOTE_LOOP_BREAKER DSPARK_SKIP_LOOP_BREAKER_HOTFIX=$REMOTE_LOOP_BREAKER_SKIP DSPARK_LOOP_BREAKER_REPEATS=$REMOTE_LOOP_BREAKER_REPEATS DSPARK_LOOP_BREAKER_SHORT_REPEATS=$REMOTE_LOOP_BREAKER_SHORT_REPEATS DSPARK_LOOP_BREAKER_MIN_TOKENS=$REMOTE_LOOP_BREAKER_MIN_TOKENS DSPARK_LOOP_BREAKER_HOTFIX='./patches/hotfix-dsv4-loop-breaker.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env) $*"
 }
 
 remote_compose2() {
-  ssh "$WORKER2_HOST" "$REMOTE_COMPOSE2 DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env2) $*"
+  ssh "$WORKER2_HOST" "$REMOTE_COMPOSE2 DSPARK_ENABLE_C128A_PREFILL_CACHE=$REMOTE_C128A_PREFILL_CACHE DSPARK_C128A_PREFILL_CACHE_HOTFIX='./patches/hotfix-vllm-c128a-prefill-cache.py' DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py' DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED=$REMOTE_ISSUE191_ENABLE DSPARK_ISSUE191_TOOLCALL_HOTFIX='./patches/hotfix-vllm-issue191-toolcall-failclosed.py' DSPARK_ISSUE191_TOOLCALL_RETRIES=$REMOTE_ISSUE191_RETRIES DSPARK_ISSUE191_TOOLCALL_MODE=$REMOTE_ISSUE191_MODE DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK=$REMOTE_ISSUE191_THINKOFF DSPARK_ASYNC_SCHEDULING=$REMOTE_ASYNC_SCHEDULING DSPARK_ENABLE_DSPARK_BLOCK_K=$REMOTE_DSPARK_BLOCK_K DSPARK_DSPARK_BLOCK_K_HOTFIX='./patches/hotfix-vllm-dspark-block-k.py' DSPARK_ENABLE_ROPE_SWA_FIX=$REMOTE_ROPE_SWA_FIX DSPARK_ROPE_SWA_FIX_HOTFIX='./patches/hotfix-vllm-rope-swa-fix.py' DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX DSPARK_DSPARK_SWA_PREFIX_HOTFIX='./patches/hotfix-vllm-dspark-swa-prefix.py' DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY DSPARK_DSML_RECOVERY_HOTFIX='./patches/hotfix-vllm-dsml-recovery.py' DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py' DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX='./patches/hotfix-dsv4-issue144-effort-align.py' DSPARK_LOOP_BREAKER=$REMOTE_LOOP_BREAKER DSPARK_SKIP_LOOP_BREAKER_HOTFIX=$REMOTE_LOOP_BREAKER_SKIP DSPARK_LOOP_BREAKER_REPEATS=$REMOTE_LOOP_BREAKER_REPEATS DSPARK_LOOP_BREAKER_SHORT_REPEATS=$REMOTE_LOOP_BREAKER_SHORT_REPEATS DSPARK_LOOP_BREAKER_MIN_TOKENS=$REMOTE_LOOP_BREAKER_MIN_TOKENS DSPARK_LOOP_BREAKER_HOTFIX='./patches/hotfix-dsv4-loop-breaker.py' TP_SIZE='$TP_SIZE' NNODES='$NNODES' TP3_PATCH_DIR='./patches/tp3' $(remote_nccl_env2) $*"
 }
 
 log_since() {
@@ -1406,6 +1436,13 @@ print_resolved_profile() {
     echo "  Suppress stops in <think>: hotfix applies but guard off (DSPARK_SUPPRESS_STOPS_IN_REASONING=0)"
   else
     echo "  Suppress stops in <think>: will apply (client stop dormant until </think>)"
+  fi
+  if [ "${DSPARK_LOOP_BREAKER:-0}" != "1" ]; then
+    echo "  Issue #82 loop-breaker: off (DSPARK_LOOP_BREAKER!=1; stock detokenizer)"
+  elif [ "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}" = "1" ]; then
+    echo "  Issue #82 loop-breaker: SKIPPED (DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1)"
+  else
+    echo "  Issue #82 loop-breaker: will apply (repeats=${DSPARK_LOOP_BREAKER_REPEATS:-6} short_repeats=${DSPARK_LOOP_BREAKER_SHORT_REPEATS:-15} min_tokens=${DSPARK_LOOP_BREAKER_MIN_TOKENS:-64})"
   fi
   if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
     echo "  GB10 vLLM patch dir: $VLLM_GB10_PATCH_DIR"
@@ -1699,6 +1736,16 @@ if [ -f "$DSPARK_SUPPRESS_STOPS_HOTFIX" ]; then
   ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-suppress-stops-in-reasoning.py; fi"
   scp "$DSPARK_SUPPRESS_STOPS_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-suppress-stops-in-reasoning.py"
 fi
+# Issue #82 loop-breaker patcher sync (begin). The selected patcher was
+# admitted above; a missing file here means the hotfix is disabled or skipped.
+if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
+  echo "Syncing loop-breaker hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
+  ssh "$WORKER_HOST" "mkdir -p '${REMOTE_WORKER_DIR}/patches'"
+  # A leftover directory with this name (root-owned) would make scp fail.
+  ssh "$WORKER_HOST" "if [ -d '${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py' ]; then docker run --rm -v '${REMOTE_WORKER_DIR}/patches:/p' alpine:3.20 rm -rf /p/hotfix-dsv4-loop-breaker.py; fi"
+  scp "$DSPARK_LOOP_BREAKER_HOTFIX" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/hotfix-dsv4-loop-breaker.py"
+fi
+# Issue #82 loop-breaker patcher sync (end).
 DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-$SCRIPT_DIR/patches/hotfix-dsv4-assistant-final-continuation.py}"
 if [ -f "$DSPARK_ASSISTANT_FINAL_HOTFIX" ]; then
   echo "Syncing assistant-final continuation hotfix to ${WORKER_HOST}:${WORKER_DIR}/patches/"
@@ -1849,6 +1896,13 @@ if [ "$DSPARK_TP3" = "1" ]; then
   }
   if [ -f "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ] && [ ! -L "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ]; then
     scp "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/patches/hotfix-vllm-c128a-prefill-cache.py"
+  fi
+  # The tar above ships the repository copy. A selected loop-breaker override
+  # (admitted before any host was touched) must replace it here with the same
+  # bytes and the same predicate the worker1 sync uses, or worker2 would
+  # pre-flight different source.
+  if [ -f "$DSPARK_LOOP_BREAKER_HOTFIX" ]; then
+    scp "$DSPARK_LOOP_BREAKER_HOTFIX" "${WORKER2_HOST}:${REMOTE_WORKER2_DIR}/patches/hotfix-dsv4-loop-breaker.py"
   fi
   if [ "$ENABLE_VLLM_GB10_PATCH" = "1" ]; then
     tar -C "$VLLM_GB10_PATCH_DIR" \
@@ -2019,6 +2073,21 @@ if [ "${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}" = "1" ]; then
     remote_compose2 "NODE_RANK=2 HEADLESS=1 $WORKER2_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER2_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER2_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-c128a-prefill-cache.py --check"
   fi
   compose_base 0 "" run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-vllm-c128a-prefill-cache.py --check
+fi
+
+# Issue #82 loop-breaker (opt-in): validate the enabled knob set and the
+# detokenizer anchors on each rank before either rank starts, so a malformed
+# DSPARK_LOOP_BREAKER_* value or a drifted source fails here instead of in the
+# boot chain. DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1 skips the patch entirely.
+if [ "${DSPARK_LOOP_BREAKER:-0}" = "1" ] && [ "${DSPARK_SKIP_LOOP_BREAKER_HOTFIX:-0}" != "1" ]; then
+  echo "Checking issue #82 loop-breaker configuration on the worker before either rank starts..."
+  remote_compose "NODE_RANK=1 HEADLESS=1 $WORKER_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-loop-breaker.py --check"
+  if [ "$DSPARK_TP3" = "1" ]; then
+    echo "Checking issue #82 loop-breaker configuration on worker2 before ranks start..."
+    remote_compose2 "NODE_RANK=2 HEADLESS=1 $WORKER2_HF_COMPOSE_ENV VLLM_HOST_IP='$WORKER2_VLLM_HOST_IP' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' DSPARK_MODEL='$DSPARK_MODEL' DSPARK_REVISION='${DSPARK_REVISION:-}' ENABLE_VLLM_GB10_PATCH='$ENABLE_VLLM_GB10_PATCH' VLLM_GB10_PATCH_DIR='./vllm_patch_gb10' GB10_HYBRID_NVFP4_M_THRESHOLD='${GB10_HYBRID_NVFP4_M_THRESHOLD:-128}' docker compose -p '$PROJECT_NAME' --env-file .env.dspark $WORKER2_COMPOSE_FILES run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-loop-breaker.py --check"
+  fi
+  echo "Checking issue #82 loop-breaker configuration on the head before either rank starts..."
+  compose_base 0 "" run --rm --no-deps --entrypoint python3 vllm-dspark /opt/hotfix-dsv4-loop-breaker.py --check
 fi
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."

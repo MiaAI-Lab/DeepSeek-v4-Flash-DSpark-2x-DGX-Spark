@@ -65,6 +65,7 @@ py_files+=(
   scripts/test-codex-agent-message-compat.py
   scripts/test-encoding-dsv4-issue21.py
   scripts/test-suppress-stops-in-reasoning.py
+  scripts/test-loop-breaker.py
   scripts/test-assistant-final-continuation.py
   scripts/spec-acceptance.py
   scripts/test-spec-acceptance.py
@@ -125,6 +126,8 @@ python3 scripts/test-encoding-dsv4-issue21.py -q
 ok "test-encoding-dsv4-issue21"
 python3 scripts/test-suppress-stops-in-reasoning.py -q
 ok "test-suppress-stops-in-reasoning"
+python3 scripts/test-loop-breaker.py -q
+ok "test-loop-breaker"
 python3 scripts/test-assistant-final-continuation.py -q
 ok "test-assistant-final-continuation"
 python3 scripts/test-spec-acceptance.py -q
