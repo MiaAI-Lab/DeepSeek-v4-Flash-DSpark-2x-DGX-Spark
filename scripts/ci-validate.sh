@@ -20,6 +20,7 @@ for f in \
   build-dspark-vllm-runtime.sh \
   files/nfs-share.sh \
   files/nfs-server/entrypoint.sh \
+  scripts/ab-boot.sh \
   smoke-deepseek-v4-flash-dspark.sh \
   status-deepseek-v4-flash-dspark.sh \
   logs-deepseek-v4-flash-dspark.sh \
@@ -36,6 +37,7 @@ for f in \
   lmcache/run-lmcache-server.sh \
   scripts/test-lmcache-compose-gate.sh \
   scripts/selftest-runtime-ablation.sh \
+  scripts/bench-baseline-no-patches.sh \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -143,14 +145,20 @@ python3 scripts/test-dspark-api-keys.py -q
 ok "test-dspark-api-keys"
 python3 scripts/test-redact-api-key-log.py -q
 ok "test-redact-api-key-log"
+python3 scripts/test-bench-baseline-lifecycle.py -q
+ok "test-bench-baseline-lifecycle"
 python3 scripts/test-hotfix-atomic-transaction.py -q
 ok "test-hotfix-atomic-transaction"
 python3 scripts/test-python-hotfix-failclosed.py -q
 ok "test-python-hotfix-failclosed"
 python3 scripts/test-gb10-install-failclosed.py -q
 ok "test-gb10-install-failclosed"
+python3 scripts/test-status-logs-probes.py -q
+ok "test-status-logs-probes"
 python3 scripts/test-dsv4-vision-exp-hotfix.py -q
 ok "test-dsv4-vision-exp-hotfix"
+python3 scripts/test-ab-boot-sed-memgate.py -q
+ok "test-ab-boot-sed-memgate"
 python3 scripts/test-issue141-sparse-mla-decode-chunk.py -q
 ok "test-issue141-sparse-mla-decode-chunk"
 python3 scripts/test-issue136-xgrammar-termination.py -q
@@ -159,6 +167,8 @@ python3 scripts/test-build-rsync-guard.py -q
 ok "test-build-rsync-guard"
 python3 scripts/test-issue191-toolcall-failclosed.py -q
 ok "test-issue191-toolcall-failclosed"
+python3 scripts/test-env-perms-open-bind.py -q
+ok "test-env-perms-open-bind"
 python3 scripts/test-dspark-block-k.py -q
 ok "test-dspark-block-k"
 python3 scripts/test-rope-swa-fix.py -q
