@@ -6,8 +6,9 @@ that carries the exact production anchors and then *exec* the patched module:
 firing thresholds, the counting-window bound, the fence/indent/structural
 false-positive controls, the DSML hold and the runtime knob parsing are
 exercised as code. CLI tests cover apply/--check/--status, the default-OFF and
-skip gates, atomic same-directory writes with mode preservation, and the
-fail-closed restore paths.
+skip gates, complete injected-block classification, atomic same-directory
+writes with mode preservation, the fail-closed restore paths (including a
+post-write re-read/decode failure) and the bounded knob parsing.
 
     python3 scripts/test-loop-breaker.py -q
 """
@@ -158,7 +159,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(target.read_bytes(), original)
         self.assertEqual(self._leftovers(), ["detokenizer.py"])
 
-    def test_skip_flag_skips_apply_and_check(self):
+    def test_skip_flag_skips_apply_and_check_but_not_status(self):
         target = self._fixture()
         original = target.read_bytes()
         env = {"DSPARK_LOOP_BREAKER": "1", "DSPARK_SKIP_LOOP_BREAKER_HOTFIX": "1"}
@@ -166,6 +167,20 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1", out)
         self.assertEqual(target.read_bytes(), original)
+        code, out, _ = self._run(["--check", str(target)], env)
+        self.assertEqual(code, 0, out)
+        self.assertIn("skipped", out)
+        self.assertEqual(target.read_bytes(), original)
+
+        # --status stays a byte-state query: the skip flag must not mask it.
+        code, out, _ = self._run(["--status", str(target)], env)
+        self.assertEqual(code, 1, out)
+        self.assertIn("STOCK", out)
+        applied, _ = self.mod.apply_text(target.read_text())
+        target.write_text(applied)
+        code, out, _ = self._run(["--status", str(target)], env)
+        self.assertEqual(code, 0, out)
+        self.assertIn("APPLIED", out)
 
     def test_enabled_apply_writes_atomically_and_preserves_mode(self):
         target = self._fixture(0o640)
@@ -232,6 +247,94 @@ class CliTest(unittest.TestCase):
         self.assertIn("post-apply verification failed", err)
         self.assertEqual(target.read_bytes(), original)
         self.assertEqual(self._leftovers(), ["detokenizer.py"])
+
+    def test_post_write_read_failure_restores_the_original(self):
+        failures = (
+            ("OSError", OSError("simulated re-read failure")),
+            (
+                "UnicodeDecodeError",
+                UnicodeDecodeError("utf-8", b"\xff", 0, 1, "simulated decode failure"),
+            ),
+        )
+        for name, failure in failures:
+            with self.subTest(name=name):
+                target = self._fixture()
+                original = target.read_bytes()
+                real_read_text = Path.read_text
+                reads = []
+
+                def failing_read_text(path, *args, **kwargs):
+                    reads.append(path)
+                    if len(reads) == 2:
+                        raise failure
+                    return real_read_text(path, *args, **kwargs)
+
+                with mock.patch.object(Path, "read_text", failing_read_text):
+                    code, _, err = self._run(
+                        [str(target)], {"DSPARK_LOOP_BREAKER": "1"}
+                    )
+                self.assertEqual(code, 1)
+                self.assertIn("FAIL-CLOSED", err)
+                self.assertIn("original restored", err)
+                self.assertEqual(target.read_bytes(), original)
+                self.assertEqual(self._leftovers(), ["detokenizer.py"])
+
+    def test_post_write_read_failure_reports_a_failed_restore(self):
+        target = self._fixture()
+        real_read_text = Path.read_text
+        real_write = self.mod.write_atomically
+        reads, writes = [], []
+
+        def failing_read_text(path, *args, **kwargs):
+            reads.append(path)
+            if len(reads) == 2:
+                raise OSError("simulated re-read failure")
+            return real_read_text(path, *args, **kwargs)
+
+        def failing_restore(path, payload, mode):
+            writes.append(payload)
+            if len(writes) == 2:
+                raise OSError("simulated restore failure")
+            real_write(path, payload, mode)
+
+        with mock.patch.object(Path, "read_text", failing_read_text), \
+                mock.patch.object(self.mod, "write_atomically", failing_restore):
+            code, _, err = self._run([str(target)], {"DSPARK_LOOP_BREAKER": "1"})
+        self.assertEqual(code, 1)
+        self.assertIn("cannot restore", err)
+        # The restore failed, so the written patch is still on disk; the CLI
+        # must have said so instead of reporting success.
+        self.assertEqual(self.mod.classify(target.read_text()), "applied")
+
+    def test_huge_digit_knobs_fail_closed_without_conversion_errors(self):
+        target = self._fixture()
+        original = target.read_bytes()
+        huge = "9" * 5000
+        for name in (
+            "DSPARK_LOOP_BREAKER_REPEATS",
+            "DSPARK_LOOP_BREAKER_SHORT_REPEATS",
+            "DSPARK_LOOP_BREAKER_MIN_TOKENS",
+        ):
+            with self.subTest(name=name):
+                code, _, err = self._run(
+                    [str(target)], {"DSPARK_LOOP_BREAKER": "1", name: huge}
+                )
+                self.assertEqual(code, 1)
+                self.assertIn("FAIL-CLOSED", err)
+                self.assertIn(name, err)
+                self.assertEqual(target.read_bytes(), original)
+
+    def test_zero_padded_in_range_knob_still_applies(self):
+        target = self._fixture()
+        code, out, err = self._run(
+            [str(target)],
+            {
+                "DSPARK_LOOP_BREAKER": "1",
+                "DSPARK_LOOP_BREAKER_REPEATS": "0" * 5000 + "6",
+            },
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.mod.classify(target.read_text()), "applied")
 
     def test_enabled_rejects_malformed_and_out_of_range_knobs(self):
         target = self._fixture()
@@ -332,6 +435,47 @@ class CliTest(unittest.TestCase):
         code, out, _ = self._run(["--status", str(target)], {})
         self.assertEqual(code, 1)
         self.assertIn("PARTIAL", out)
+
+    def test_incomplete_injected_code_outside_the_markers_is_refused(self):
+        target = self._fixture()
+        applied_text, _ = self.mod.apply_text(target.read_text())
+        # Executable injected state is deleted while every substring the old
+        # classifier counted would still match: the module raises on first use.
+        gutted = applied_text
+        for line in (
+            "        self._lb_counts: dict[str, int] = {}\n",
+            "        self._lb_hist: deque[str] = deque()\n",
+            "        self._lb_scan: int = 0\n",
+        ):
+            gutted = gutted.replace(line, "")
+        self.assertNotEqual(gutted, applied_text)
+        target.write_text(gutted)
+
+        code, out, _ = self._run(["--status", str(target)], {})
+        self.assertEqual(code, 1)
+        self.assertIn("PARTIAL", out)
+
+        code, _, err = self._run(["--check", str(target)], {"DSPARK_LOOP_BREAKER": "1"})
+        self.assertEqual(code, 1)
+        self.assertIn("partial patch", err)
+
+        code, _, err = self._run([str(target)], {"DSPARK_LOOP_BREAKER": "1"})
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL-CLOSED", err)
+        self.assertEqual(target.read_text(), gutted)
+
+    def test_uncompilable_applied_source_is_not_reported_applied(self):
+        target = self._fixture()
+        applied_text, _ = self.mod.apply_text(target.read_text())
+        target.write_text(applied_text + "def broken(:\n")
+
+        code, out, _ = self._run(["--status", str(target)], {})
+        self.assertEqual(code, 1)
+        self.assertIn("PARTIAL", out)
+
+        code, _, err = self._run([str(target)], {"DSPARK_LOOP_BREAKER": "1"})
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL-CLOSED", err)
 
 
 class DetectorTest(unittest.TestCase):
@@ -528,6 +672,29 @@ class DetectorTest(unittest.TestCase):
         self.assertIn("DSPARK_LOOP_BREAKER_SHORT_REPEATS", message)
         self.assertIn("'many'", message)
         self.assertIn("[loop-breaker]", message)
+
+    def test_huge_digit_knobs_disarm_the_import(self):
+        huge = "9" * 5000
+        for name in (
+            "DSPARK_LOOP_BREAKER_REPEATS",
+            "DSPARK_LOOP_BREAKER_SHORT_REPEATS",
+            "DSPARK_LOOP_BREAKER_MIN_TOKENS",
+        ):
+            with self.subTest(name=name):
+                with self.assertLogs("vllm.loop-breaker", level="WARNING") as captured:
+                    namespace = self._exec({"DSPARK_LOOP_BREAKER": "1", name: huge})
+                self.assertFalse(namespace["_LB_ENABLED"])
+                self.assertEqual(len(captured.records), 1)
+                self.assertIn(name, captured.records[0].getMessage())
+                fixture = namespace["DetokenizerFixture"]()
+                self.assertIsNone(self._repeat(fixture, "Doing it.", 40))
+
+    def test_zero_padded_knob_arms_with_the_normalized_value(self):
+        namespace = self._exec(
+            {"DSPARK_LOOP_BREAKER": "1", "DSPARK_LOOP_BREAKER_REPEATS": "0" * 5000 + "6"}
+        )
+        self.assertTrue(namespace["_LB_ENABLED"])
+        self.assertEqual(namespace["_LB_REPEATS"], 6)
 
     def test_cli_and_runtime_knob_bounds_agree(self):
         specs = self.mod.KNOB_SPECS

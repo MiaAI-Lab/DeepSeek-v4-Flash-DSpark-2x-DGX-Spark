@@ -1326,12 +1326,14 @@ it fail-closed. The numeric knobs are range-checked there — `repeats` and
 `short_repeats` 2-1024, `min_tokens` 0-1000000; 2 is the floor because 1 would
 fire on the first eligible line — and a malformed or out-of-range value aborts
 the boot with the variable named instead of defaulting silently.
-`DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1` skips applying the patch. Applies are staged
+`DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1` skips applying the patch, but a `--status`
+query still inspects the file bytes. Applies are staged
 in a same-directory temp file and `os.replace()`d, preserving the file mode, with
-the patched source compiled before the write and the result re-classified after
-it (original restored + exit 1 otherwise). `--status` exits nonzero unless the
-target carries the complete patch, and a partial patch is never reported as
-applied.
+the patched source compiled before the write and the result re-read and
+re-classified after it (a mismatch, or a re-read/decode failure, restores the
+original and exits 1). `--status` exits nonzero unless every injected block is
+present exactly once and the module still compiles, and a partial patch is never
+reported as applied.
 
 **Evidence status.** Mitigation for the #82 residue, **not** a root-cause fix and
 not a closure of #82. The author's live 2x DGX Spark measurements (runaway trials

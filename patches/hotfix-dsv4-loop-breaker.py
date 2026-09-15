@@ -72,11 +72,15 @@ CLI
   python3 hotfix-dsv4-loop-breaker.py            apply (fail closed)
   python3 hotfix-dsv4-loop-breaker.py --check    preflight: knobs + target
   python3 hotfix-dsv4-loop-breaker.py --status   classify the target bytes
-``--status`` exits nonzero unless the target carries the complete patch; a
-partial patch (marker without the hook) is never reported as applied. Applies
-are staged in a same-directory temp file and ``os.replace()``d, preserving the
-file mode, and are verified after the replace (restore + exit 1 otherwise).
-Skip applying this file: DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1.
+``--status`` inspects the file bytes even when the skip flag is set, and exits
+nonzero unless every injected block is present exactly once and the module
+still compiles; a partial patch (marker without the hooks) is never reported as
+applied. Applies are staged in a same-directory temp file and ``os.replace()``d,
+preserving the file mode, and are verified after the replace: a re-read or
+decode failure, or bytes that no longer classify as applied, restore the
+original and exit 1.
+Skip applying this file: DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1 (status queries are
+never skipped).
 """
 from __future__ import annotations
 
@@ -122,7 +126,16 @@ def resolve_knobs(environ=os.environ) -> tuple[int, int, int]:
             raise LoopBreakerConfigError(
                 f"{name} must be a non-negative integer (got {raw!r})"
             )
-        value = int(raw)
+        # Bound the decimal magnitude before int(): a normalized digit string
+        # longer than the high bound cannot be in range, and converting it
+        # first could raise an int() conversion error (Python's digit limit for
+        # huge strings) instead of the named config error.
+        digits = raw.lstrip("0")
+        if len(digits) > len(str(high)):
+            raise LoopBreakerConfigError(
+                f"{name} must be between {low} and {high} (got {raw})"
+            )
+        value = int(digits) if digits else 0
         if not low <= value <= high:
             raise LoopBreakerConfigError(
                 f"{name} must be between {low} and {high} (got {raw})"
@@ -278,16 +291,27 @@ if _LB_ENABLED:
         _lb_raw = os.environ.get(_lb_name, "")
         if _lb_raw == "":
             _lb_values[_lb_name] = _lb_default
-        elif (_lb_raw.isascii() and _lb_raw.isdigit()
-                and _lb_low <= int(_lb_raw) <= _lb_high):
-            _lb_values[_lb_name] = int(_lb_raw)
-        else:
-            logging.getLogger("vllm.loop-breaker").warning(
-                "[loop-breaker] %s=%r is outside %d..%d; detector disarmed",
-                _lb_name, _lb_raw, _lb_low, _lb_high,
-            )
-            _lb_valid = False
-            _LB_ENABLED = False
+            continue
+        # Bound the decimal magnitude before int(): a normalized digit string
+        # longer than the high bound cannot be in range, and converting it
+        # first could raise an int() conversion error out of the import
+        # instead of disarming the detector.
+        _lb_digits = (
+            _lb_raw.lstrip("0")
+            if _lb_raw.isascii() and _lb_raw.isdigit()
+            else None
+        )
+        if _lb_digits is not None and len(_lb_digits) <= len(str(_lb_high)):
+            _lb_value = int(_lb_digits) if _lb_digits else 0
+            if _lb_low <= _lb_value <= _lb_high:
+                _lb_values[_lb_name] = _lb_value
+                continue
+        logging.getLogger("vllm.loop-breaker").warning(
+            "[loop-breaker] %s=%r is outside %d..%d; detector disarmed",
+            _lb_name, _lb_raw, _lb_low, _lb_high,
+        )
+        _lb_valid = False
+        _LB_ENABLED = False
     if _lb_valid:
         _LB_REPEATS = _lb_values["DSPARK_LOOP_BREAKER_REPEATS"]
         _LB_SHORT_REPEATS = _lb_values["DSPARK_LOOP_BREAKER_SHORT_REPEATS"]
@@ -302,25 +326,28 @@ IMPORT_NEW = (
     .replace("__LB_STRUCTURAL__", STRUCTURAL_LITERAL)
 )
 
-# Every injected piece, in apply order. ``apply_text`` reports "applied" only
-# when all of them are present: a partial patch (marker without hook) is a
-# distinct, fail-closed state rather than an accepted idempotent hit.
-FINGERPRINTS = (
-    '_LB_ENABLED = os.environ.get("DSPARK_LOOP_BREAKER", "0") == "1"',
-    "_LB_WINDOW = max(64, 2 * max(_LB_REPEATS, _LB_SHORT_REPEATS))",
-    "self._lb_fence: str | None = None",
-    "if stop_string is None and _LB_ENABLED:",
-    "def _lb_check(self) -> str | None:",
-    "def _lb_count(self, line: str) -> int:",
-)
+# The complete injected blocks, in apply order. ``classify`` reports "applied"
+# only when every block is present exactly once and the module still compiles:
+# a substring hit is not enough, because deleting executable injected code (a
+# gutted method body, a dropped hook or state field) can leave the individual
+# markers behind while the detector is silently disarmed. A partial patch
+# (marker without the hooks) is a distinct, fail-closed state rather than an
+# accepted idempotent hit.
+PATCH_BLOCKS = (IMPORT_NEW, INIT_NEW, RET_NEW)
 
 
 def classify(src: str) -> str:
-    """Return applied|partial|stock for ``src`` (see FINGERPRINTS)."""
-    hits = sum(1 for fingerprint in FINGERPRINTS if fingerprint in src)
-    if hits == len(FINGERPRINTS):
+    """Return applied|partial|stock for ``src`` (see PATCH_BLOCKS)."""
+    counts = tuple(src.count(block) for block in PATCH_BLOCKS)
+    if all(count == 1 for count in counts):
+        try:
+            compile(src, "<loop-breaker>", "exec")
+        except (SyntaxError, ValueError):
+            # Null bytes and other source-encoding garbage are not executable
+            # injected code either.
+            return "partial"
         return "applied"
-    if hits or MARK in src:
+    if any(counts) or MARK in src:
         return "partial"
     return "stock"
 
@@ -373,9 +400,6 @@ def write_atomically(target: Path, payload: str, mode: int) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if os.environ.get("DSPARK_SKIP_LOOP_BREAKER_HOTFIX") == "1":
-        print("[loop-breaker] skipped via DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1")
-        return 0
     mode = "apply"
     positional = []
     for arg in argv[1:]:
@@ -390,14 +414,18 @@ def main(argv: list[str]) -> int:
     enabled = os.environ.get("DSPARK_LOOP_BREAKER", "0") == "1"
 
     if mode == "status":
-        # A query about bytes on disk: independent of the enable flag, and
-        # nonzero unless the complete patch is present.
+        # A query about bytes on disk: independent of the enable and skip
+        # flags, and nonzero unless the complete patch is present.
         if not target.is_file():
             print(f"loop-breaker                   : NOT APPLIED (missing {target})")
             return 1
         state = classify(target.read_text(encoding="utf-8"))
         print(f"loop-breaker                   : {state.upper()} ({target})")
         return 0 if state == "applied" else 1
+
+    if os.environ.get("DSPARK_SKIP_LOOP_BREAKER_HOTFIX") == "1":
+        print("[loop-breaker] skipped via DSPARK_SKIP_LOOP_BREAKER_HOTFIX=1")
+        return 0
 
     if not enabled:
         # Default-OFF boot: no knob is parsed and no byte is written.
@@ -479,20 +507,28 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    written = target.read_text(encoding="utf-8")
-    if written != new or classify(written) != "applied":
-        # Postcondition failure: never leave a written-but-unverified module.
+    failure = None
+    try:
+        written = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        failure = f"post-apply re-read failed ({error})"
+    else:
+        if written != new or classify(written) != "applied":
+            failure = "post-apply verification failed"
+    if failure is not None:
+        # Never leave a written-but-unverified or unreadable module.
         try:
             write_atomically(target, original, mode_bits)
         except OSError as error:
             print(
-                f"[loop-breaker] FAIL-CLOSED: cannot restore {target} ({error})",
+                f"[loop-breaker] FAIL-CLOSED: {failure}; cannot restore "
+                f"{target} ({error})",
                 file=sys.stderr,
             )
             return 1
         print(
-            "[loop-breaker] FAIL-CLOSED: post-apply verification failed, "
-            f"original restored ({target})",
+            f"[loop-breaker] FAIL-CLOSED: {failure}; original restored "
+            f"({target})",
             file=sys.stderr,
         )
         return 1
