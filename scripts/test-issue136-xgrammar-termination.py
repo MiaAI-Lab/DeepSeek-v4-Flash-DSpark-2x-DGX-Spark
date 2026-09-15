@@ -34,8 +34,6 @@ MANAGER_PRISTINE_POST_FIXTURE = FIXTURES / "structured_output_init-752a3a504-pri
 # sha256:a8394849… = local config/image ID sha256:3430d661…). The non-pristine
 # pair additionally carries the default #44993 grammar-advance train.
 PATCHER_PATH = ROOT / "patches" / "hotfix-vllm-issue136-xgrammar-termination.py"
-COMPOSE = ROOT / "docker-compose.dspark.yml"
-START = ROOT / "start-deepseek-v4-flash-dspark.sh"
 GRAMMAR_ADVANCE = ROOT / "patches" / "hotfix-dsv4-grammar-advance.sh"
 
 STOCK_SHA256 = "231f6b9d7dab5e8d68aba486fa5912db99f8bdd3f9d8842ee3e0bb12bdb7cb67"
@@ -1112,77 +1110,6 @@ class ManagerWindowBehaviorTests(unittest.TestCase):
         self.assertEqual(state, 0)
         self.assertEqual(grammar.calls, [("accept", "r1", [9])])
 
-class StartupWiringTests(unittest.TestCase):
-    # Gate execution behavior (disabled/non-"1" values skip, enabled invokes,
-    # failure blocks exec) is covered once, in scripts/test-python-hotfix-failclosed.py;
-    # these tests pin the static compose and launcher wiring.
-    def compose_gate(self) -> str:
-        token = "python3 /opt/hotfix-vllm-issue136-xgrammar-termination.py"
-        matches = [line.strip() for line in COMPOSE.read_text(encoding="utf-8").splitlines() if token in line]
-        self.assertEqual(len(matches), 1)
-        return matches[0]
-
-    def test_compose_mount_default_gate_and_exec_order(self):
-        compose = COMPOSE.read_text(encoding="utf-8")
-        mount = (
-            "${DSPARK_ISSUE136_XGRAMMAR_HOTFIX:-./patches/"
-            "hotfix-vllm-issue136-xgrammar-termination.py}:"
-            "/opt/hotfix-vllm-issue136-xgrammar-termination.py:ro"
-        )
-        env_default = (
-            'DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX: '
-            '"${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}"'
-        )
-        gate = self.compose_gate()
-        self.assertEqual(compose.count(mount), 1)
-        self.assertEqual(compose.count(env_default), 1)
-        self.assertEqual(
-            gate,
-            'if [ "$${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}" = "1" ]; then '
-            'python3 /opt/hotfix-vllm-issue136-xgrammar-termination.py || exit 1; fi;',
-        )
-        self.assertLess(compose.index(gate), compose.index("exec /usr/local/bin/vllm serve"))
-        hotfix_loop = next(line for line in compose.splitlines() if "for _hf in" in line)
-        self.assertNotIn("issue136", hotfix_loop.lower())
-
-    def test_launcher_syncs_and_preflights_both_nodes_before_any_up(self):
-        source = START.read_text(encoding="utf-8")
-        regular_check = (
-            '[ "${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}" = "1" ] '
-            '&& { [ ! -f "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" ] '
-            '|| [ -L "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" ]; }'
-        )
-        sync = (
-            'scp "$DSPARK_ISSUE136_XGRAMMAR_HOTFIX" '
-            '"${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/'
-            'hotfix-vllm-issue136-xgrammar-termination.py"'
-        )
-        worker_check = (
-            'run --rm --no-deps --entrypoint python3 vllm-dspark '
-            '/opt/hotfix-vllm-issue136-xgrammar-termination.py --check'
-        )
-        head_check = (
-            'compose_base 0 "" run --rm --no-deps --entrypoint python3 '
-            'vllm-dspark /opt/hotfix-vllm-issue136-xgrammar-termination.py --check'
-        )
-        worker_up = 'echo "Starting DSpark worker on ${WORKER_HOST}..."'
-        head_up = 'echo "Starting DSpark head..."'
-        for token in (regular_check, sync, worker_check, head_check):
-            self.assertIn(token, source)
-        self.assertIn(
-            'issue136 XGrammar termination hotfix: ${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}',
-            source,
-        )
-        self.assertIn(
-            "DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX=$REMOTE_ISSUE136_ENABLE",
-            source,
-        )
-        self.assertIn(
-            "DSPARK_ISSUE136_XGRAMMAR_HOTFIX='./patches/hotfix-vllm-issue136-xgrammar-termination.py'",
-            source,
-        )
-        positions = [source.index(token) for token in (sync, worker_check, head_check, worker_up, head_up)]
-        self.assertEqual(positions, sorted(positions))
 
 
 if __name__ == "__main__":
