@@ -7,6 +7,7 @@ ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.dspark}"
 usage() {
   cat <<'EOF'
 Usage: ./prepare-dspark-model-cache.sh [--official | --abliterated] [--yes]
+       ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership [--dry-run]
 
 Downloads DeepSeek-V4-Flash-Vision-Exp weights into HF_CACHE on this node,
 then onto the worker (default DSPARK_WORKER_HF_NFS=0). Set
@@ -17,6 +18,22 @@ DSPARK_WORKER_HF_NFS=1 to skip the worker copy; start then exports this cache ov
                   (sets ABLITERATED=1). Does not download the 157 GiB Keys checkpoint.
                   Requires HF_TOKEN and agreement on the gated Hub repo.
   --yes           Non-interactive: use ABLITERATED from .env.dspark (or 0)
+
+Existing installs only — one-time ownership migration (run as root):
+  --migrate-runtime-cache-ownership
+                  Hand the seven named runtime/JIT caches under HF_CACHE
+                  (runtime-home, flashinfer, tilelang-cache, triton-cache,
+                  b12x-cute-cache, vllm-cache, nccl-fr) plus DSPARK_TMP_HOST to
+                  DSPARK_RUNTIME_UID:DSPARK_RUNTIME_GID, and chown the HF cache
+                  root directory entry itself. Needed once when a pre-non-root
+                  install created those paths as root; a normal prepare never
+                  changes ownership and refuses unwritable paths.
+  --dry-run       With the migration flag only: print the plan, and any refusal,
+                  without changing ownership (allowed as a non-root user).
+
+The migration never recurses into the checkpoint tree (HF_CACHE/hub): serving
+mounts it read-only. Only a weight (re)download needs it writable by the
+runtime identity — docs/ENVS.md, "Migrating an existing install".
 
 Official downloads default to DSPARK_REVISION=86f746b3… (Vision-Exp pin). Override
 via DSPARK_REVISION in .env.dspark, or clear it to follow tip of main.
@@ -36,6 +53,8 @@ EOF
 
 CLI_CHOICE=""
 ASSUME_YES=0
+CLI_MIGRATE=0
+CLI_DRY_RUN=0
 # Snapshot Hub credentials from the calling shell before .env.dspark is
 # sourced — an empty HF_TOKEN= in the env file must not wipe an exported token.
 _SHELL_HF_TOKEN="${HF_TOKEN-}"
@@ -45,6 +64,8 @@ while [ $# -gt 0 ]; do
     --official) CLI_CHOICE=0 ;;
     --abliterated) CLI_CHOICE=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
+    --migrate-runtime-cache-ownership) CLI_MIGRATE=1 ;;
+    --dry-run) CLI_DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -54,6 +75,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$CLI_DRY_RUN" = "1" ] && [ "$CLI_MIGRATE" != "1" ]; then
+  echo "--dry-run is only valid with --migrate-runtime-cache-ownership" >&2
+  exit 2
+fi
 
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -124,8 +150,10 @@ WORKER_HF_TOKEN_ENV=""
 if [ -n "$HF_TOKEN" ]; then
   DOCKER_HF_TOKEN_ARGS=(-e "HF_TOKEN=${HF_TOKEN}" -e "HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}")
   WORKER_HF_TOKEN_ENV="HF_TOKEN=$(printf '%q' "$HF_TOKEN") HUGGING_FACE_HUB_TOKEN=$(printf '%q' "$HF_TOKEN")"
-  echo "prepare: Hugging Face token: set (from ${_HF_TOKEN_SRC}; redacted)" >&2
-else
+  if [ "$CLI_MIGRATE" != "1" ]; then
+    echo "prepare: Hugging Face token: set (from ${_HF_TOKEN_SRC}; redacted)" >&2
+  fi
+elif [ "$CLI_MIGRATE" != "1" ]; then
   echo "prepare: Hugging Face token: unset (anonymous Hub; slower / rate-limited)" >&2
 fi
 unset _HF_TOKEN_SRC
@@ -217,7 +245,166 @@ verify_worker_image() {
   }
 }
 
-need_cmd docker
+# --- one-time runtime/JIT cache ownership migration --------------------------
+# Installs that predate the non-root serving identity ran this downloader as
+# root, so the runtime/JIT cache directories the serve container binds writable
+# are root-owned and the fail-closed preflight below refuses them. Migration is
+# explicit, privileged and one-time: it is never part of a normal prepare, it
+# refuses anything it cannot prove is a named cache directory, and it never
+# walks into the checkpoint tree (HF_CACHE/hub).
+
+# The seven named caches docker-compose.dspark.yml exposes as writable binds.
+# Keep in step with the compose mount list.
+runtime_cache_names=(
+  runtime-home
+  flashinfer
+  tilelang-cache
+  triton-cache
+  b12x-cute-cache
+  vllm-cache
+  nccl-fr
+)
+
+# Canonical path of the last resolved directory (globals, not command
+# substitution: a refusal must abort the script, not a subshell).
+MIGRATION_CANONICAL=""
+MIGRATION_ROOT=""
+MIGRATION_RECURSIVE=()
+MIGRATION_ABSENT=()
+
+migration_refuse() {
+  echo "refusing ownership migration: $1" >&2
+  exit 2
+}
+
+# Shared or top-level trees must never be adopted: a recursive chown of one of
+# these is unbounded damage, so refuse by name as well as by depth.
+migration_unsafe_root() {
+  case "$1" in
+    /|/tmp|/var|/var/tmp|/var/run|/run|/run/lock|/dev|/dev/shm|/proc|/sys|/usr|/etc|/home|/root|/mnt|/media|/opt|/srv|/boot|/bin|/sbin|/lib|/lib64)
+      return 0
+      ;;
+  esac
+  case "$1" in /*/*) return 1 ;; *) return 0 ;; esac
+}
+
+# Resolve one existing directory into MIGRATION_CANONICAL, or return 1 when it
+# does not exist yet. A symlink or a non-directory is a refusal, never a
+# resolution: chown would otherwise land on the link's target.
+migration_resolve_dir() {
+  local path="$1" canonical
+  if [ -L "$path" ]; then
+    migration_refuse "symbolic link (pass the real path): $path"
+  fi
+  if [ ! -e "$path" ]; then
+    return 1
+  fi
+  if [ ! -d "$path" ]; then
+    migration_refuse "not a directory ($(stat -c %F -- "$path")): $path"
+  fi
+  canonical="$(cd -- "$path" && pwd -P)" || migration_refuse "cannot resolve directory: $path"
+  MIGRATION_CANONICAL="$canonical"
+}
+
+# Validate every target and build the plan before changing anything.
+migration_collect() {
+  local name path link
+
+  if ! migration_resolve_dir "$HF_CACHE"; then
+    echo "nothing to migrate: $HF_CACHE does not exist yet (a fresh prepare creates the runtime paths as $DSPARK_RUNTIME_UID:$DSPARK_RUNTIME_GID)"
+    return 1
+  fi
+  MIGRATION_ROOT="$MIGRATION_CANONICAL"
+  if migration_unsafe_root "$MIGRATION_ROOT"; then
+    migration_refuse "unsafe root (top-level system directory): $MIGRATION_ROOT"
+  fi
+
+  for name in "${runtime_cache_names[@]}"; do
+    path="$HF_CACHE/$name"
+    if ! migration_resolve_dir "$path"; then
+      MIGRATION_ABSENT+=("$path")
+      continue
+    fi
+    path="$MIGRATION_CANONICAL"
+    link="$(find -P "$path" -xdev -type l -print -quit)" || migration_refuse "cannot scan for symlinks: $path"
+    if [ -n "$link" ]; then
+      migration_refuse "symbolic link inside $path: $link"
+    fi
+    MIGRATION_RECURSIVE+=("$path")
+  done
+
+  path="$DSPARK_TMP_HOST"
+  if ! migration_resolve_dir "$path"; then
+    MIGRATION_ABSENT+=("$path")
+  else
+    path="$MIGRATION_CANONICAL"
+    if migration_unsafe_root "$path"; then
+      migration_refuse "unsafe root (top-level system directory): $path"
+    fi
+    case "$MIGRATION_ROOT" in
+      "$path"|"$path"/*)
+        migration_refuse "DSPARK_TMP_HOST contains the cache root, so a recursive chown would reach the checkpoint tree: $path"
+        ;;
+    esac
+    link="$(find -P "$path" -xdev -type l -print -quit)" || migration_refuse "cannot scan for symlinks: $path"
+    if [ -n "$link" ]; then
+      migration_refuse "symbolic link inside $path: $link"
+    fi
+    MIGRATION_RECURSIVE+=("$path")
+  fi
+  return 0
+}
+
+migrate_runtime_cache_ownership() {
+  local owner="$DSPARK_RUNTIME_UID:$DSPARK_RUNTIME_GID"
+  local verb=chown target hub_owner
+
+  if [ "$CLI_DRY_RUN" != "1" ] && [ "$(id -u)" != "0" ]; then
+    echo "Ownership migration needs CAP_CHOWN; re-run it as root:" >&2
+    echo "  sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership" >&2
+    echo "(add --dry-run to print the plan and any refusal without changing ownership)" >&2
+    exit 2
+  fi
+
+  if ! migration_collect; then
+    exit 0
+  fi
+  if [ "$CLI_DRY_RUN" = "1" ]; then
+    verb="would chown"
+  fi
+
+  echo "ownership migration: owner $owner"
+  echo "$verb (cache root directory entry only, checkpoint tree untouched): $MIGRATION_ROOT"
+  for target in "${MIGRATION_RECURSIVE[@]}"; do
+    echo "$verb -R (named cache, symlinks never followed): $target"
+  done
+  for target in "${MIGRATION_ABSENT[@]}"; do
+    echo "absent (a fresh prepare creates it as $owner): $target"
+  done
+
+  hub="$MIGRATION_ROOT/hub"
+  if [ -e "$hub" ]; then
+    hub_owner="$(stat -c %u:%g "$hub")"
+    if [ "$hub_owner" != "$owner" ]; then
+      echo "note: $hub is owned by $hub_owner and was NOT touched. Serving mounts it read-only; only a weight (re)download needs it writable by $owner — docs/ENVS.md, \"Migrating an existing install\"."
+    fi
+  fi
+
+  if [ "$CLI_DRY_RUN" = "1" ]; then
+    echo "dry run: no ownership changed"
+    exit 0
+  fi
+
+  chown -- "$owner" "$MIGRATION_ROOT"
+  for target in "${MIGRATION_RECURSIVE[@]}"; do
+    # -P + chown -h: a link inside a cache directory is relinked, never followed.
+    find -P "$target" -xdev -exec chown -h -- "$owner" {} +
+  done
+  echo "ownership migration complete: the cache root entry and ${#MIGRATION_RECURSIVE[@]} named cache directories are now $owner"
+  echo "re-run ./prepare-dspark-model-cache.sh as $owner to download."
+  exit 0
+}
+
 if ! [[ "$DSPARK_RUNTIME_UID" =~ ^[1-9][0-9]*$ ]]; then
   echo "DSPARK_RUNTIME_UID must be a positive, non-root numeric UID." >&2
   exit 2
@@ -226,6 +413,12 @@ if ! [[ "$DSPARK_RUNTIME_GID" =~ ^[1-9][0-9]*$ ]]; then
   echo "DSPARK_RUNTIME_GID must be a positive, non-root numeric GID." >&2
   exit 2
 fi
+
+if [ "$CLI_MIGRATE" = "1" ]; then
+  migrate_runtime_cache_ownership
+fi
+
+need_cmd docker
 if [ "$(id -u)" != "$DSPARK_RUNTIME_UID" ] || [ "$(id -g)" != "$DSPARK_RUNTIME_GID" ]; then
   echo "Run prepare as the configured runtime identity $DSPARK_RUNTIME_UID:$DSPARK_RUNTIME_GID (current: $(id -u):$(id -g))." >&2
   exit 1
@@ -246,6 +439,8 @@ for runtime_dir in "${runtime_dirs[@]}"; do
   if ! mkdir -p -- "$runtime_dir" || [ ! -w "$runtime_dir" ]; then
     echo "Runtime path must be writable by $DSPARK_RUNTIME_UID:$DSPARK_RUNTIME_GID: $runtime_dir" >&2
     echo "Fix legacy root-owned cache paths before retrying; do not run this downloader with sudo." >&2
+    echo "Existing installs: hand the named runtime/JIT caches to the runtime identity once, as root:" >&2
+    echo "  sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership" >&2
     exit 1
   fi
 done

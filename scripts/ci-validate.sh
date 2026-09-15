@@ -30,6 +30,7 @@ for f in \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
   scripts/boot-shape-warmup.sh \
   scripts/test-boot-shape-warmup.sh \
+  scripts/test-runtime-cache-ownership.sh \
   scripts/validate_tp3.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
@@ -202,6 +203,8 @@ bash scripts/test-boot-shape-warmup.sh -q
 ok "test-boot-shape-warmup"
 bash scripts/test-nccl-ib-hca-gid-resolve.sh -q
 ok "test-nccl-ib-hca-gid-resolve"
+bash scripts/test-runtime-cache-ownership.sh -q
+ok "test-runtime-cache-ownership"
 bash scripts/test-lmcache-compose-gate.sh -q
 ok "test-lmcache-compose-gate"
 

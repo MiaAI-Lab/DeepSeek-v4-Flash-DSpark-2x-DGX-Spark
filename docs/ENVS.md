@@ -85,7 +85,7 @@ PY
 | `NCCL_DMABUF_ENABLE` | Passthrough, default **unset**. `0` disables DMA-BUF probing (workaround control). Contributor-reported observation on GB10 driver `580.173.02`, that stack only: the container reported `CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED=0` and boot logs showed `via NET/IB/x` with no `/GDRDMA`; no GDR effect was demonstrated there, which is not a claim about GDR availability in general. |
 | `NCCL_GIN_ENABLE` | Passthrough, default **unset** (= NCCL's enabled default, GPU-initiated networking). Exact `0` selects the CPU-driven comm-init path: measured 2026-09-05 on the 2-node lane at ~97% GPU memory pressure, comm-init drops from ~2 min to ~13 s with no bandwidth change at serving message sizes. Bootstrap-speed knob only. |
 | `HF_*` / `TRANSFORMERS_OFFLINE` | Hub cache behavior |
-| `DSPARK_RUNTIME_UID` / `DSPARK_RUNTIME_GID` | Numeric non-root vLLM identity (defaults `1000:1000`). The root boot phase applies the pinned hotfixes, then `setpriv` drops to this identity, removes group 0, empties all capability sets including the bounding set, and sets `no-new-privileges`. Preparation must run as this host identity so persistent caches are writable without granting the container filesystem capabilities. |
+| `DSPARK_RUNTIME_UID` / `DSPARK_RUNTIME_GID` | Numeric non-root vLLM identity (defaults `1000:1000`). The root boot phase applies the pinned hotfixes, then `setpriv` drops to this identity, removes group 0, empties all capability sets including the bounding set, and sets `no-new-privileges`. Preparation must run as this host identity so persistent caches are writable without granting the container filesystem capabilities; installs whose caches predate this identity need the one-time migration (see [Migrating an existing install](#migrating-an-existing-install-to-the-non-root-runtime-identity)). |
 | `DSPARK_CACHE_READ_GID` | Supplemental group used only to read host-promoted `0640` checkpoint files (default `100` on DGX Spark). It must be positive/non-root. The checkpoint hub is additionally mounted read-only during serving. |
 | `MTP_NUM_TOKENS` | Consumed by compose command line (not a vLLM env registry key) |
 | `WORKER2_HOST` / `WORKER2_VLLM_HOST_IP` / `WORKER2_DIR` / `WORKER2_HF_CACHE` | Launcher-side, `./start-tp3.sh` only (`docs/TP3.md`). Third rank: SSH target, its RoCE IP, repo dir and JIT-cache dir (default to the `WORKER_*` values). Stop/status/logs/prepare also address it whenever `WORKER2_HOST` is set. Prerequisites: passwordless SSH and the pinned image already pulled there. |
@@ -182,6 +182,57 @@ docker compose --env-file .env.dspark \
 
 
 ---
+
+## Migrating an existing install to the non-root runtime identity
+
+Preparation and serving run as `DSPARK_RUNTIME_UID:DSPARK_RUNTIME_GID`
+(default `1000:1000`). Both the launcher/compose preflight and
+`prepare-dspark-model-cache.sh` require the seven named runtime/JIT caches under
+`HF_CACHE` plus the `/tmp` bind (`DSPARK_TMP_HOST`) to be writable by that
+identity, and both fail closed instead of adopting a path they cannot write. An
+install whose caches were created by an earlier root run hands them over once,
+as root:
+
+```bash
+sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership
+```
+
+Exactly what that changes:
+
+- `HF_CACHE/{runtime-home,flashinfer,tilelang-cache,triton-cache,b12x-cute-cache,vllm-cache,nccl-fr}`
+  — recursively, each bounded to its own named directory;
+- `DSPARK_TMP_HOST` (default `~/.cache/dspark-tmp`) — same bounded recursion;
+- the `HF_CACHE` directory entry itself, so prepare can create anything missing.
+
+What it never changes: `HF_CACHE/hub` or any other checkpoint-tree entry (the
+compose mount is read-only while serving), and it refuses — exit 2, nothing
+touched — a path that is a symlink, a symlink-containing tree, a non-directory,
+a top-level system directory (`/`, `/tmp`, `/var`, `/home`, …), or a
+`DSPARK_TMP_HOST` that contains the cache root. Validation of every target
+completes before the first `chown`.
+
+`--migrate-runtime-cache-ownership --dry-run` prints the same plan and the same
+refusals without changing ownership, and is allowed for any user. A normal
+prepare never changes ownership: it reports the unwritable path, points at the
+migration, and exits 1.
+
+Fresh installs need none of this — prepare creates the named paths as the
+runtime identity and the preflight passes unchanged.
+
+One caveat for existing installs: the migration deliberately leaves the
+checkpoint tree alone, so *serving* needs no further change, but a **weight
+(re)download** still needs `HF_CACHE/hub` writable by the runtime identity
+(serving mounts it read-only, so the container never sees that write access).
+Either re-download into a fresh `HF_CACHE`, or make the tree writable in a
+maintenance window as an explicit operator decision:
+
+```bash
+sudo chown -R 1000:1000 "$HF_CACHE/hub"   # your DSPARK_RUNTIME_UID:GID
+```
+
+That rewrites host ownership of the checkpoint tree (file contents are
+untouched; the container still mounts it read-only) — do it only when you
+actually need to (re)download.
 
 ## Recommended defaults by image
 

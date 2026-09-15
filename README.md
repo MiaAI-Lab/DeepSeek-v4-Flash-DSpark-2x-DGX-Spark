@@ -88,7 +88,19 @@ Qwen3.8-Flash-vLLM).
    Preparation and serving use the numeric, non-root
    `DSPARK_RUNTIME_UID:GID` (default `1000:1000`). The prepare script creates
    the persistent JIT/cache and `/tmp` bind paths under that identity and
-   refuses legacy root-owned paths. While serving, the model `hub` and all
+   refuses legacy root-owned paths. An install whose caches were created by an
+   earlier root run hands them over once, as root:
+
+   ```bash
+   sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership
+   ```
+
+   Only the seven named runtime/JIT caches plus `DSPARK_TMP_HOST` (and the
+   `HF_CACHE` directory entry itself) change owner; the checkpoint tree never
+   does. Add `--dry-run` to print the plan without touching anything, and see
+   [ENVS.md § Migrating an existing install](docs/ENVS.md#migrating-an-existing-install-to-the-non-root-runtime-identity)
+   for the weight-download caveat. Fresh installs need no migration.
+   While serving, the model `hub` and all
    repository-supplied patch sources are bind-mounted read-only. The brief
    boot-time hotfix phase is root with only `SETUID`, `SETGID`, and `SETPCAP`;
    vLLM is then executed as the runtime UID with group 0 removed, an empty
