@@ -36,9 +36,11 @@ for f in \
   scripts/validate_tp3.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
+  scripts/bench-baseline-issue22-only.sh \
   scripts/test-lmcache-compose-gate.sh \
   scripts/test-ci-validate-failclosed.sh \
   scripts/selftest-runtime-ablation.sh \
+  scripts/bench-baseline-no-patches.sh \
   patches/*.sh
 do
   [ -e "$f" ] || continue
@@ -159,10 +161,16 @@ python3 scripts/test-served-model-alias.py -q
 ok "test-served-model-alias"
 python3 scripts/test-dspark-api-keys.py -q
 ok "test-dspark-api-keys"
+python3 scripts/test-bench-baseline-hotfix-paths.py -q
+ok "test-bench-baseline-hotfix-paths"
 python3 scripts/test-redact-api-key-log.py -q
 ok "test-redact-api-key-log"
+python3 scripts/test-bench-baseline-lifecycle.py -q
+ok "test-bench-baseline-lifecycle"
 python3 scripts/test-hotfix-atomic-transaction.py -q
 ok "test-hotfix-atomic-transaction"
+python3 scripts/test-bench-baseline-patch-counters.py -q
+ok "test-bench-baseline-patch-counters"
 python3 scripts/test-python-hotfix-failclosed.py -q
 ok "test-python-hotfix-failclosed"
 python3 scripts/test-gb10-install-failclosed.py -q
@@ -494,6 +502,30 @@ if grep -q 'exit 3' start-deepseek-v4-flash-dspark.sh \
   ok "start already-running is exit 3 (#72)"
 else
   bad "start missing already-running exit 3 (#72)"
+fi
+
+# The ENVS.md -> PATCHES.md #136 anchor must match the actual heading slug.
+if grep -q 'issue-136--xgrammar-accepts-speculative-tokens-after-termination' docs/ENVS.md; then
+  bad "ENVS.md links the retired #136 anchor"
+elif ! grep -q 'issues-136--210--xgrammar-termination-and-post-reasoning-fsm-chain' docs/ENVS.md; then
+  bad "ENVS.md -> PATCHES.md #136+#210 anchor missing"
+elif grep -q '](vl-nvfp4-coexist-2026-08-11.md)' results/RESULTS-2026-08-14.md; then
+  bad "RESULTS links a file that is not in the repo"
+else
+  ok "no broken doc anchors/links"
+fi
+
+# Docs/ops lane facts must not regress to the retired 0731 lane.
+if grep -q 'deepseek-v4-flash-0731' AUDIT.md scripts/run-audit.sh smoke-deepseek-v4-flash-dspark.sh; then
+  bad "0731 served-model name returned in AUDIT.md / run-audit.sh / smoke script"
+elif ! grep -q 'SERVED_MODEL_NAME:-deepseek-v4-flash-vision-exp' smoke-deepseek-v4-flash-dspark.sh; then
+  bad "smoke script served-name fallback is not the Vision-Exp lane"
+elif grep -q '0731 hub snapshot' README.md; then
+  bad "README troubleshooting references the 0731 snapshot again"
+elif grep -q '36 rows (N=6, k=5)' .env.dspark.example; then
+  bad ".env.dspark.example again claims the shipped default is 36 rows (k=5)"
+else
+  ok "no stale 0731-lane facts in docs/ops surface"
 fi
 
 # Hotfix files referenced by the compose mount list / boot command or the
