@@ -74,9 +74,9 @@ log ""
 run_ttft() {
   local prompt_tokens=$1
   local label=$2
-  # Generate a prompt of ~prompt_tokens words (rough: 1 token ≈ 1.3 chars)
+  # Keep repetition integral so Python does not silently select the tiny fallback.
   local prompt
-  prompt=$(python3 -c "print('hello ' * ($prompt_tokens * 4 / 3 // 6))" 2>/dev/null || echo "hello world")
+  prompt=$(python3 -c "print('hello ' * ($prompt_tokens * 4 // 3 // 6))" 2>/dev/null || echo "hello world")
   
   local start_ms end_ms ttft_ms
   start_ms=$(date +%s%3N)

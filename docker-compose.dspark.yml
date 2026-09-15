@@ -16,11 +16,19 @@ services:
     # (double) is evaluated in the container at runtime; ${VLLM_PORT:-8888} is
     # resolved by Compose. start_period covers cold model load (~6 min measured;
     # raise it if your storage is slower).
+    # ${VLLM_HOST:-127.0.0.1} is resolved by Compose too; the in-container guard
+    # maps a wildcard 0.0.0.0 / :: bind back to 127.0.0.1 so LAN-IP deployments
+    # probe the interface the server actually bound (issue #185). Do not defer
+    # $$VLLM_HOST: that env is compose-only and is not in the container
+    # environment: block (only VLLM_HOST_IP is).
     healthcheck:
       # Docker starts health checks with the image user (root here), not the
       # user of PID 1 after setpriv. Mirror the serving privilege boundary so
       # a compromised health-check binary never runs with the boot-only caps.
-      test: ["CMD-SHELL", "exec setpriv --reuid=$${DSPARK_RUNTIME_UID:-1000} --regid=$${DSPARK_RUNTIME_GID:-1000} --groups=$${DSPARK_CACHE_READ_GID:-100} --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs sh -c 'if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS http://127.0.0.1:${VLLM_PORT:-8888}/health || exit 1'"]
+      # ${VLLM_HOST:-127.0.0.1} is resolved by Compose (issue #185); the
+      # wildcard guard runs in this unprivileged-capability shell and the
+      # resolved host is handed to the dropped-privilege probe as $1.
+      test: ["CMD-SHELL", "urlhost='${VLLM_HOST:-127.0.0.1}'; case \"$$urlhost\" in 0.0.0.0|::|'[::]') urlhost=127.0.0.1 ;; esac; exec setpriv --reuid=$${DSPARK_RUNTIME_UID:-1000} --regid=$${DSPARK_RUNTIME_GID:-1000} --groups=$${DSPARK_CACHE_READ_GID:-100} --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs sh -c 'if [ -n \"$$HEADLESS\" ]; then exit 0; fi; curl -fsS \"http://$$1:${VLLM_PORT:-8888}/health\" || exit 1' dspark-health \"$$urlhost\""]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -82,23 +90,68 @@ services:
       # Issue #55 tool-call truncation safety: finish_reason=length + drop
       # non-JSON-parseable args when max_tokens cuts a tool call mid-flight.
       - ${DSPARK_ISSUE55_HOTFIX:-./patches/hotfix-dsv4-issue55-tool-truncation.py}:/opt/hotfix-dsv4-issue55-tool-truncation.py:ro
+      # Optional Responses state: bound response/message/event stores together.
+      - ${DSPARK_RESPONSES_STORE_HOTFIX:-./patches/hotfix-dsv4-responses-store.py}:/opt/hotfix-dsv4-responses-store.py:ro
       # Issue #109: encoder-only EC producer steps must not emit phantom token 0.
       - ${DSPARK_EMPTY_ENCODER_OUTPUT_HOTFIX:-./patches/hotfix-vllm-empty-encoder-output.py}:/opt/hotfix-vllm-empty-encoder-output.py:ro
       # Issue #27 partial-prefill concurrency hotfix (enforce max_num_partial_prefills).
       - ${DSPARK_ISSUE27_HOTFIX:-./patches/hotfix-dsv4-issue27-partial-prefill-concurrency.py}:/opt/hotfix-dsv4-issue27-partial-prefill-concurrency.py:ro
+      # Adaptive prefill chunk: 1024 only while decode lanes run; else full batch.
+      - ${DSPARK_ADAPTIVE_CHUNK_HOTFIX:-./patches/hotfix-dsv4-adaptive-prefill-chunk.py}:/opt/hotfix-dsv4-adaptive-prefill-chunk.py:ro
+      # Replicate DSpark Markov w1/w2 (drop 12 serialized collectives / decode step).
+      - ${DSPARK_REPLICATE_MARKOV_HOTFIX:-./patches/hotfix-dsv4-replicate-markov-head.py}:/opt/hotfix-dsv4-replicate-markov-head.py:ro
       # Issue #43 bounded decode service during mixed prefill steps + scheduler diag.
       - ${DSPARK_ISSUE43_HOTFIX:-./patches/hotfix-dsv4-issue43-decode-fairness-and-diag.py}:/opt/hotfix-dsv4-issue43-decode-fairness-and-diag.py:ro
       # Issue #26/#36 hybrid coordinator: SWA may shrink the common hit (v2).
       - ${DSPARK_ISSUE26_HOTFIX:-./patches/hotfix-dsv4-issue26-hybrid-swa-min.py}:/opt/hotfix-dsv4-issue26-hybrid-swa-min.py:ro
       # Issue #133: stop global top-k Triton recompiles on sliced-pointer alignment.
       - ${DSPARK_ISSUE133_HOTFIX:-./patches/hotfix-dsv4-issue133-triton-specialization.py}:/opt/hotfix-dsv4-issue133-triton-specialization.py:ro
+      # Issue #141 workaround: keep oversized SM120 sparse-MLA decode calls on
+      # FlashInfer's fixed 64-row decode path. Default-off and source-locked.
+      - ${DSPARK_ISSUE141_HOTFIX:-./patches/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py}:/opt/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py:ro
+      # Sequence-parallel Lightning indexer for long prefills (report item 6).
+      # Opt-in via DSPARK_ENABLE_SP_INDEXER=1; default-off, stock bytes.
+      - ${DSPARK_SP_INDEXER_HOTFIX:-./patches/hotfix-dsv4-sp-indexer-prefill.py}:/opt/hotfix-dsv4-sp-indexer-prefill.py:ro
+      # Issue #136: exact vLLM #52805 XGrammar termination backport (opt-in).
+      - ${DSPARK_ISSUE136_XGRAMMAR_HOTFIX:-./patches/hotfix-vllm-issue136-xgrammar-termination.py}:/opt/hotfix-vllm-issue136-xgrammar-termination.py:ro
+      # Issue #191: fail-closed named/required tool_choice contract (opt-in).
+      - ${DSPARK_ISSUE191_TOOLCALL_HOTFIX:-./patches/hotfix-vllm-issue191-toolcall-failclosed.py}:/opt/hotfix-vllm-issue191-toolcall-failclosed.py:ro
+      # DSpark block-k unlock: k follows dspark_block_size, not n_predict divisibility (opt-in).
+      - ${DSPARK_DSPARK_BLOCK_K_HOTFIX:-./patches/hotfix-vllm-dspark-block-k.py}:/opt/hotfix-vllm-dspark-block-k.py:ro
+      # Upstream vllm#54815: sparse-SWA layers use plain RoPE, not YaRN (opt-in).
+      - ${DSPARK_ROPE_SWA_FIX_HOTFIX:-./patches/hotfix-vllm-rope-swa-fix.py}:/opt/hotfix-vllm-rope-swa-fix.py:ro
+      # DSpark draft SWA prefix fix: recompute the last draft window on prefix-cache hits (opt-in).
+      - ${DSPARK_DSPARK_SWA_PREFIX_HOTFIX:-./patches/hotfix-vllm-dspark-swa-prefix.py}:/opt/hotfix-vllm-dspark-swa-prefix.py:ro
+      # Upstream vllm#52645: recover DeepSeek V4 tool calls with malformed DSML wrappers (opt-in).
+      - ${DSPARK_DSML_RECOVERY_HOTFIX:-./patches/hotfix-vllm-dsml-recovery.py}:/opt/hotfix-vllm-dsml-recovery.py:ro
+      # MXFP4 indexer K cache: relax the fp4 indexer datacenter-only gate for sm_12x (opt-in).
+      - ${DSPARK_MXFP4_INDEXER_CACHE_HOTFIX:-./patches/hotfix-vllm-mxfp4-indexer-cache.py}:/opt/hotfix-vllm-mxfp4-indexer-cache.py:ro
+      # Reuse C128A prefill conversion within one metadata lifetime (opt-in).
+      - ${DSPARK_C128A_PREFILL_CACHE_HOTFIX:-./patches/hotfix-vllm-c128a-prefill-cache.py}:/opt/hotfix-vllm-c128a-prefill-cache.py:ro
+      # Optional runtime refusal-direction ablation. The direction itself is
+      # staged into the existing HF cache mount on both nodes by the launcher.
+      - ${DSPARK_ABLATION_HOTFIX:-./patches/hotfix-dsv4-runtime-ablation.py}:/opt/hotfix-dsv4-runtime-ablation.py:ro
       # Client stop strings stay dormant until </think> (Tony/Capicua25x Patch 5).
       - ${DSPARK_SUPPRESS_STOPS_HOTFIX:-./patches/hotfix-dsv4-suppress-stops-in-reasoning.py}:/opt/hotfix-dsv4-suppress-stops-in-reasoning.py:ro
       # A request ending with an assistant message must still get a generation
       # header, or the model generates from a dead state (empty turns /
       # hallucinated DSML markup loop). Upstream issue #52, PR #53.
       - ${DSPARK_ASSISTANT_FINAL_HOTFIX:-./patches/hotfix-dsv4-assistant-final-continuation.py}:/opt/hotfix-dsv4-assistant-final-continuation.py:ro
+      # Issue #144: relocate the reasoning-effort directive to the end of the
+      # leading system region so prefix-cache blocks are shared across effort
+      # buckets (opt-in).
+      - ${DSPARK_ISSUE144_EFFORT_ALIGN_HOTFIX:-./patches/hotfix-dsv4-issue144-effort-align.py}:/opt/hotfix-dsv4-issue144-effort-align.py:ro
+      # Native Vision-Exp ViT/Aligner + image_url processor (images only; no video).
+      - ${DSPARK_VISION_EXP_HOTFIX:-./patches/hotfix-dsv4-vision-exp.py}:/opt/hotfix-dsv4-vision-exp.py:ro
+      # Issue #138: opt-in compatibility for singleton type-less assistant
+      # output_text items replayed through the Responses API.
+      - ${DSPARK_ISSUE138_HOTFIX:-./patches/hotfix-vllm-issue138-responses-history.py}:/opt/hotfix-vllm-issue138-responses-history.py:ro
+      # Codex-only agent_message history compatibility (opt-in).
+      - ${DSPARK_CODEX_AGENT_MESSAGE_HOTFIX:-./patches/hotfix-vllm-codex-agent-message.py}:/opt/hotfix-vllm-codex-agent-message.py:ro
       - ${DSPARK_PATCHES_DIR:-./patches}:/opt/dspark-patches:ro
+      # TP=3 group-pad patch (no-op unless TP_SIZE=3). Sourced from
+      # localaiguyy/DeepSeek-V4-Flash-DSpark-3x-DGX-Spark.
+      - ${TP3_PATCH_DIR:-./patches/tp3}:/opt/dsv4-tp3:ro
       - ${DSPARK_TMP_HOST:-${HOME}/.cache/dspark-tmp}:/tmp
 
     # Env surface is split by runtime image:
@@ -116,19 +169,36 @@ services:
       HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
       TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-0}"
       HF_HUB_DISABLE_XET: "${HF_HUB_DISABLE_XET:-1}"
-      DSPARK_MODEL: "${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
+      DSPARK_MODEL: "${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
+      # Optional in-memory refusal-direction projection. The launcher stages
+      # the tiny direction file into the existing HF cache on both nodes.
+      ABLATE: "${ABLATE:-0}"
+      DSV4_ABLATE_LAMBDA: "${DSV4_ABLATE_LAMBDA:-3.5}"
+      DSV4_ABLATE_LAYERS: "${DSV4_ABLATE_LAYERS:-10-42}"
       # Issue #26: sparsify SWA prefix-cache checkpoints (one tail per
       # 4096-token segment + replay boundary). Complements the hybrid
       # coordinator hotfix — SWA-min alone still 0/8 at 44K+ x8 because
       # dense SWA tails evict MLA prefix blocks.
       VLLM_PREFIX_CACHE_RETENTION_INTERVAL: "${VLLM_PREFIX_CACHE_RETENTION_INTERVAL:-4096}"
+      # Stateful previous_response_id is opt-in. The backport bounds terminal
+      # response/message/event state and protects active work when enabled.
+      VLLM_ENABLE_RESPONSES_API_STORE: "${VLLM_ENABLE_RESPONSES_API_STORE:-0}"
+      DSPARK_RESPONSES_STORE_MAX_ENTRIES: "${DSPARK_RESPONSES_STORE_MAX_ENTRIES:-256}"
       # Issue #43 scheduler diagnostics: emit one compact per-step line
       # (scheduled prefill/decode tokens per request + zero-token decode
       # skips) when set to 1. Off by default (zero overhead).
       DSPARK_ISSUE43_SCHED_DIAG: "${DSPARK_ISSUE43_SCHED_DIAG:-0}"
-      # In-flight partial-prefill cap for the #27 hotfix (1-3, default 2).
-      # Do NOT pass --max-num-partial-prefills (Anemll 0.1.1 rejects it).
-      DSPARK_MAX_INFLIGHT_PREFILLS: "${DSPARK_MAX_INFLIGHT_PREFILLS:-2}"
+      # In-flight partial-prefill cap for the #27 hotfix (1-3). Default 1 per the
+      # #211 campaign: strictly serialized prefills, maximally starvation-proof
+      # (gate26 fairness spreads 1.60-1.76x, zero preemptions). 2 is an
+      # evidence-backed opt-in, operator-qualified post-r3 on TP=2 with
+      # LONG_PREFILL_TOKEN_THRESHOLD=1024 (#217: 4x8K gate26 spread 1.50-1.57x,
+      # zero preemptions, TTFT spread 2.1-2.4x vs 4.1x at 1), trading admission
+      # serialization for TTFT/equity on admission-limited shapes. 3 remains
+      # an explicit opt-in: a separate, limited #217 sample improved 4x8K
+      # spread but worsened median TTFT on 8-wide bursts; it is not the same
+      # qualification as 2. Anemll 0.1.1 rejects the native CLI flag.
+      DSPARK_MAX_INFLIGHT_PREFILLS: "${DSPARK_MAX_INFLIGHT_PREFILLS:-1}"
       # Pin HF revision (issue #19). Empty → tip of default branch / refs/main.
       DSPARK_REVISION: "${DSPARK_REVISION:-}"
       DSPARK_ENCODING_FILE: "${DSPARK_ENCODING_FILE:-}"
@@ -168,6 +238,8 @@ services:
       VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM: "${VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM:-0}"
       VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M: "${VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M:-16}"
       VLLM_B12X_W4A16_FORCE_TILE_CONFIG: "${VLLM_B12X_W4A16_FORCE_TILE_CONFIG:-}"
+      # b12x small-M packed decode (M<=8, i.e. c=1). Not a VLLM_* registry key.
+      B12X_W4A16_TC_DECODE: "${B12X_W4A16_TC_DECODE:-0}"
 
       TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-12.1a}"
       FLASHINFER_CUDA_ARCH_LIST: "${FLASHINFER_CUDA_ARCH_LIST:-12.1a}"
@@ -251,18 +323,32 @@ services:
       # with overwrite=0 — a defined-empty variable would silently mask them.
       # Configured non-empty values pass through unchanged; an empty value is
       # normalized to absent, so it cannot be used to force an empty setting.
+      # NCCL_IB_GID_INDEX joins the same normalization with one extra reason:
+      # NCCL parses a defined-empty value as GID index 0 (the fe80 link-local
+      # entry), and NCCL_IB_GID_AUTO=1 deliberately leaves it empty — the map
+      # key always renders (the launcher's empty value masks a stale .env
+      # entry) and the entrypoint makes that empty truly absent on both ranks
+      # so NCCL selects the RoCEv2/IPv4 GID per HCA.
       # See docs/ENVS.md for what each knob actually controls.
       NCCL_IB_MERGE_NICS: "${NCCL_IB_MERGE_NICS:-}"
+      NCCL_IB_SUBNET_AWARE_ROUTING: "${NCCL_IB_SUBNET_AWARE_ROUTING:-}"
+      NCCL_IB_SUBNET_PREFIX_LEN: "${NCCL_IB_SUBNET_PREFIX_LEN:-}"
       NCCL_NET_GDR_LEVEL: "${NCCL_NET_GDR_LEVEL:-}"
       NCCL_NET_GDR_READ: "${NCCL_NET_GDR_READ:-}"
       NCCL_DMABUF_ENABLE: "${NCCL_DMABUF_ENABLE:-}"
+      # GPU-initiated networking (GIN). Empty = absent = NCCL default (enabled).
+      # Exact 0 = CPU-driven comm-init: ~10x faster bootstrap while the serve
+      # holds ~97% GPU memory (measured 2026-09-05; bandwidth unchanged).
+      NCCL_GIN_ENABLE: "${NCCL_GIN_ENABLE:-}"
 
       NODE_RANK: "${NODE_RANK}"
       HEADLESS: "${HEADLESS:-}"
+      TP_SIZE: "${TP_SIZE:-2}"
+      NNODES: "${NNODES:-2}"
       MASTER_ADDR: "${MASTER_ADDR}"
       MASTER_PORT: "${MASTER_PORT:-25000}"
       # Checkpoint dspark_block_size is 5; k<5 truncates draft blocks (silent on 0.25.2 image).
-      MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-5}"
+      MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-6}"
       # DSpark draft sampling. Default "probabilistic" = the value this compose
       # hardcoded before; the official model cards ship "greedy" with k=7
       # (issue #84). Consumed by the --speculative-config line below, not a
@@ -279,12 +365,89 @@ services:
       # empty no-op turn loop). 0 (default) = stock renderer, patch not
       # invoked; 1 = apply at boot and fail the container on any patch error.
       DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX: "${DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX:-0}"
+      # Issue #138: 0/non-1 = stock Responses validation; exact 1 applies
+      # the pinned-source compatibility patch and fails boot on any error.
+      DSPARK_ENABLE_ISSUE138_RESPONSES_HISTORY_COMPAT: "${DSPARK_ENABLE_ISSUE138_RESPONSES_HISTORY_COMPAT:-0}"
+      # Codex agent_message: exact 1 applies the narrow compatibility patch.
+      DSPARK_ENABLE_CODEX_AGENT_MESSAGE_COMPAT: "${DSPARK_ENABLE_CODEX_AGENT_MESSAGE_COMPAT:-0}"
+      # Issue #141 stochastic TP=2 sparse-MLA stall workaround. Only exact 1
+      # applies the pinned-source, fixed-64-row patch; default 0 changes no bytes.
+      DSPARK_ENABLE_ISSUE141_SPARSE_MLA_CHUNK: "${DSPARK_ENABLE_ISSUE141_SPARSE_MLA_CHUNK:-0}"
+      # Report item 6: sequence-parallel Lightning indexer for prefill chunks
+      # with >= DSPARK_SP_INDEXER_MIN_KEYS compressed keys (default 8192 =
+      # 32K tokens at compress ratio 4). TP ranks each score a page-aligned
+      # slice of every request's keys and merge (score, id) candidates exactly.
+      # Exact 1 applies the source patch at boot (fail-closed); default 0
+      # changes no bytes. Decode and short chunks always use the stock path.
+      # Replicated DSpark Markov head (drops 12 serialized TP collectives per
+      # decode step). Default 1 = apply; 0 = stock sharded head. Kept gated so
+      # draft acceptance can be A/B'd (2026-09-02: natural-prose acceptance
+      # measured 27% / pos0 0.69 with it on; stock comparison pending).
+      # Adaptive long-prefill chunk cap (1024 only while decode lanes run).
+      # Default 1 = apply; 0 = stock static cap. Gated for A/B.
+      DSPARK_ENABLE_ADAPTIVE_CHUNK: "${DSPARK_ENABLE_ADAPTIVE_CHUNK:-0}"
+      DSPARK_ENABLE_REPLICATE_MARKOV: "${DSPARK_ENABLE_REPLICATE_MARKOV:-0}"
+      DSPARK_ENABLE_SP_INDEXER: "${DSPARK_ENABLE_SP_INDEXER:-0}"
+      DSPARK_SP_INDEXER_MIN_KEYS: "${DSPARK_SP_INDEXER_MIN_KEYS:-8192}"
+      # DeepGEMM SM121 indexer-logits header alias (see
+      # docs/CLAUDE/item8-fp4-kv-design.md §5). The vendored DeepGEMM names
+      # the kernel by exact CC (sm121_*) but ships sm120_* only; production
+      # survives on the persisted JIT cache. Exact 1 writes four alias headers
+      # at boot (fail-closed); default 0 changes no bytes.
+      DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS: "${DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS:-0}"
+      # Issue #136: vLLM #52805 XGrammar termination fix. Exact 1 applies
+      # source-exact bytes at boot; default 0 leaves the image untouched.
+      DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX: "${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}"
+      # Issue #191: fail-closed named/required tool_choice contract on the
+      # non-streaming Chat path. Exact 1 applies the serving-layer check plus
+      # bounded regeneration (RETRIES, MODE=failclosed|log); default 0 is stock.
+      DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED: "${DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED:-0}"
+      DSPARK_ISSUE191_TOOLCALL_RETRIES: "${DSPARK_ISSUE191_TOOLCALL_RETRIES:-2}"
+      DSPARK_ISSUE191_TOOLCALL_MODE: "${DSPARK_ISSUE191_TOOLCALL_MODE:-failclosed}"
+      # 1 (default): the last failclosed retry regenerates with thinking off
+      # (prompt <think> -> </think>), so reasoning that outran max_tokens still
+      # yields a grammar-constrained call. 0 keeps every retry identical.
+      DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK: "${DSPARK_ISSUE191_TOOLCALL_THINKOFF_FALLBACK:-1}"
+      # Issue #191 A/B: 1 (default) keeps --async-scheduling; 0 removes it on
+      # both ranks (engine args must match across the TP pair).
+      DSPARK_ASYNC_SCHEDULING: "${DSPARK_ASYNC_SCHEDULING:-1}"
+      # DSpark block-k unlock: exact 1 drops the MTP module-reuse divisibility
+      # rule for method=dspark (stacked stages, one parallel block pass), so a
+      # 3-stage checkpoint can run k=dspark_block_size=5. Default 0 = stock.
+      DSPARK_ENABLE_DSPARK_BLOCK_K: "${DSPARK_ENABLE_DSPARK_BLOCK_K:-0}"
+      # Upstream vllm#54815 port: stock promotes the checkpoint's yarn config to
+      # deepseek_yarn for every layer; sparse-SWA layers (compress_ratio<=1)
+      # must use plain RoPE. 1 = apply at boot (fail-closed). Default 0 = stock.
+      DSPARK_ENABLE_ROPE_SWA_FIX: "${DSPARK_ENABLE_ROPE_SWA_FIX:-0}"
+      # DSpark draft SWA prefix fix: exact 1 caps prefix-cache hits so the
+      # target always recomputes the draft's sliding window (port of
+      # Anemll/dspark-vllm-gx10#2). Default 0 = stock.
+      DSPARK_ENABLE_DSPARK_SWA_PREFIX: "${DSPARK_ENABLE_DSPARK_SWA_PREFIX:-0}"
+      # Upstream vllm#52645 port: a bare or corrupted-wrapper DSML invoke leaks
+      # into content instead of a structured tool call; exact 1 recovers it
+      # when the request declared the tool. Default 0 = stock.
+      DSPARK_ENABLE_DSML_RECOVERY: "${DSPARK_ENABLE_DSML_RECOVERY:-0}"
+      # MXFP4 indexer K cache (item8 design §3): exact 1 relaxes the
+      # datacenter-only gate in v1/attention/backends/mla/indexer.py and passes
+      # --attention-config {"use_fp4_indexer_cache":true}, so the Lightning
+      # indexer writes packed MXFP4 K and the logits kernels read half the
+      # bytes per key. The launcher requires DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS=1
+      # with it (fp4 kernels are not in the persisted JIT cache). Default 0 = stock.
+      DSPARK_ENABLE_MXFP4_INDEXER_CACHE: "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}"
+      DSPARK_ENABLE_C128A_PREFILL_CACHE: "${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}"
+      # Issue #144: exact 1 relocates the reasoning-effort directive to the end
+      # of the leading system region so prefix-cache blocks are shared across
+      # effort buckets (fail-closed encoder patch). Default 0 = stock renderer.
+      DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN: "${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}"
       # Issue #66: GPU V2 thinking_token_budget hotfix. 0 (default) = stock
       # sampler (HTTP 400 if a client sends the field). 1 = apply at boot
       # (fail-closed) so explicit thinking_token_budget works. Omit-field
       # traffic does not need this patch and can hit a decode cliff with it on.
       DSPARK_ENABLE_ISSUE31_GPU_HOTFIX: "${DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0}"
       DSPARK_SKIP_SPIN_WAIT_HOTFIX: "${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}"
+      # Issue #117: upstream #45224 bounded reader recheck + slot release.
+      # Exact 1 selects rollback on recreate; the issue #79 setting is unchanged.
+      DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX: "${DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX:-0}"
       # 1 = keep client stop strings dormant inside <think> (default).
       # 0 = stock vLLM (stops can fire mid-reason). Also honors
       # VLLM_SUPPRESS_STOPS_IN_REASONING if that is set in .env.
@@ -310,13 +473,18 @@ services:
         for _immutable_dir in /cache/huggingface /cache/huggingface/hub; do if "$${RUNTIME_PRIVDROP[@]}" test -w "$${_immutable_dir}"; then echo "error: serving path must be mounted read-only: $${_immutable_dir}" >&2; exit 1; fi; done;
         API_KEY_ARGS=(); case "$${DSPARK_API_KEYS:-}" in *[$$'\r\n\v\f']*) echo "error: DSPARK_API_KEYS must be a single-line space-separated list" >&2; exit 2 ;; *\\*) echo "error: DSPARK_API_KEYS must not contain backslashes" >&2; exit 2 ;; esac; _dspark_keys_set=0; case "$${DSPARK_API_KEYS:-}" in *[!$$' \t']*) _dspark_keys_set=1 ;; esac; if [ -n "$${VLLM_API_KEY:-}" ] && [ "$${_dspark_keys_set}" = "1" ]; then echo "error: VLLM_API_KEY and DSPARK_API_KEYS are both set; set exactly one of them" >&2; exit 2; fi; if [ "$${_dspark_keys_set}" = "1" ]; then read -r -a _dspark_keys <<< "$${DSPARK_API_KEYS}"; for _dspark_key in "$${_dspark_keys[@]}"; do case "$${_dspark_key}" in -*) echo "error: DSPARK_API_KEYS contains a token beginning with '-'" >&2; exit 2 ;; esac; done; API_KEY_ARGS=(--api-key "$${_dspark_keys[@]}"); fi;
         if [ -z "$${NCCL_IB_MERGE_NICS:-}" ]; then unset NCCL_IB_MERGE_NICS; fi;
+        if [ -z "$${NCCL_IB_SUBNET_AWARE_ROUTING:-}" ]; then unset NCCL_IB_SUBNET_AWARE_ROUTING; fi;
+        if [ -z "$${NCCL_IB_SUBNET_PREFIX_LEN:-}" ]; then unset NCCL_IB_SUBNET_PREFIX_LEN; fi;
         if [ -z "$${NCCL_NET_GDR_LEVEL:-}" ]; then unset NCCL_NET_GDR_LEVEL; fi;
         if [ -z "$${NCCL_NET_GDR_READ:-}" ]; then unset NCCL_NET_GDR_READ; fi;
         if [ -z "$${NCCL_DMABUF_ENABLE:-}" ]; then unset NCCL_DMABUF_ENABLE; fi;
+        if [ -z "$${NCCL_GIN_ENABLE:-}" ]; then unset NCCL_GIN_ENABLE; fi;
+        if [ -z "$${NCCL_IB_GID_INDEX:-}" ]; then unset NCCL_IB_GID_INDEX; fi;
         if [ -n "$${TORCH_FR_DUMP_TEMP_FILE:-}" ]; then mkdir -p "$$(dirname "$${TORCH_FR_DUMP_TEMP_FILE}")" || echo "warn: cannot create flight-recorder dump dir; dumps will be lost (boot continues)" >&2; fi;
+        case "$${ABLATE:-0}" in 0) unset DSV4_ABLATE_FILE ;; 1) export DSV4_ABLATE_FILE=/cache/huggingface/dspark-ablation/direction_r1.pt ;; *) echo "error: ABLATE must be 0 or 1 (got: $${ABLATE})" >&2; exit 2 ;; esac;
         ENCODING_SOURCE="$${DSPARK_ENCODING_FILE:-}";
         if [ -z "$${ENCODING_SOURCE}" ]; then
-          MODEL_HUB_DIR=$$(printf '%s' "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}" | sed 's|/|--|g');
+          MODEL_HUB_DIR=$$(printf '%s' "$${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}" | sed 's|/|--|g');
           if [ -n "$${DSPARK_REVISION:-}" ] && [ -f "/cache/huggingface/hub/models--$${MODEL_HUB_DIR}/snapshots/$${DSPARK_REVISION}/encoding/encoding_dsv4.py" ]; then
             ENCODING_SOURCE="/cache/huggingface/hub/models--$${MODEL_HUB_DIR}/snapshots/$${DSPARK_REVISION}/encoding/encoding_dsv4.py";
           fi;
@@ -331,20 +499,39 @@ services:
         if [ -n "$${ENCODING_SOURCE}" ] && [ -f "$${ENCODING_SOURCE}" ]; then cp "$${ENCODING_SOURCE}" /usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py || exit 1; python3 -c 'from pathlib import Path; p=Path("/usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4.py"); s=p.read_text(); old="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            else:\n                reasoning_effort = \"high\""; new="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            elif reasoning_effort == \"high\":\n                reasoning_effort = \"high\"\n            else:\n                reasoning_effort = \"low\""; updated=s.replace(old,new); assert new in updated; p.write_text(updated)' || exit 1; python3 /opt/hotfix-encoding-dsv4-issue21.py || exit 1; else echo "WARN: encoding_dsv4.py not found (set DSPARK_ENCODING_FILE or check the model snapshot) - encoder copy, reasoning-effort mapping and issue21 skipped" >&2; fi; if [ "$${DSPARK_ENABLE_ISSUE31_GPU_HOTFIX:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-issue31-v2-thinking-budget-gpu.py || exit 1; fi; python3 /opt/hotfix-dsv4-issue55-tool-truncation.py || exit 1;
         if [ "$${DSPARK_SKIP_ISSUE22_HOTFIX:-0}" != "1" ]; then if [ ! -f /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh ]; then echo "FATAL: /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh missing" >&2; exit 1; fi; bash /opt/dspark-patches/hotfix-nvfp4-ds-mla-issue22.sh || exit 1; fi;
         if [ "$${DSPARK_SKIP_SPIN_WAIT_HOTFIX:-0}" != "1" ]; then if [ ! -f /opt/dspark-patches/hotfix-gb10-spin-wait.sh ]; then echo "FATAL: /opt/dspark-patches/hotfix-gb10-spin-wait.sh missing" >&2; exit 1; fi; bash /opt/dspark-patches/hotfix-gb10-spin-wait.sh || exit 1; fi;
+        if [ "$${DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX:-0}" != "1" ]; then if [ ! -f /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py ]; then echo "FATAL: /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py missing" >&2; exit 1; fi; python3 /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py || exit 1; python3 /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py --status || exit 1; fi;
         if [ "$${DSPARK_SKIP_HOTFIX:-0}" != "1" ]; then for _hf in hotfix-dsv4-mtp-buffer-50312.sh hotfix-dsv4-skip-topk-49486.sh hotfix-dsv4-dense-prefill-indexer-48407.sh hotfix-dsv4-skip-empty-c128-48957.sh hotfix-dsv4-flashmla-workspace-50298.sh hotfix-dsv4-grammar-advance.sh; do if [ ! -f /opt/dspark-patches/$${_hf} ]; then echo "FATAL: /opt/dspark-patches/$${_hf} missing" >&2; exit 1; fi; bash /opt/dspark-patches/$${_hf} || exit 1; done; fi;
         if [ "$${_dspark_keys_set}" = "1" ] || [ -n "$${VLLM_API_KEY:-}" ]; then bash /opt/dspark-patches/hotfix-vllm-redact-api-key-log.sh || exit 1; bash /opt/dspark-patches/hotfix-vllm-redact-api-key-log.sh --status || exit 1; fi;
-        python3 /opt/hotfix-vllm-empty-encoder-output.py || exit 1; python3 /opt/hotfix-dsv4-issue27-partial-prefill-concurrency.py || exit 1; python3 /opt/hotfix-dsv4-issue43-decode-fairness-and-diag.py || exit 1; python3 /opt/hotfix-dsv4-issue26-hybrid-swa-min.py || exit 1; python3 /opt/hotfix-dsv4-issue133-triton-specialization.py || exit 1; if [ "$${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}" != "1" ]; then python3 /opt/hotfix-dsv4-suppress-stops-in-reasoning.py || exit 1; fi; VLLM_QUANTIZATION_ARGS="";
+        if [ "$${VLLM_ENABLE_RESPONSES_API_STORE:-0}" != "1" ]; then export VLLM_ENABLE_RESPONSES_API_STORE=0; fi; if [ "$${VLLM_ENABLE_RESPONSES_API_STORE}" = "1" ]; then python3 /opt/hotfix-dsv4-responses-store.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_ISSUE138_RESPONSES_HISTORY_COMPAT:-0}" = "1" ]; then python3 /opt/hotfix-vllm-issue138-responses-history.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_CODEX_AGENT_MESSAGE_COMPAT:-0}" = "1" ]; then python3 /opt/hotfix-vllm-codex-agent-message.py || exit 1; fi;
+        python3 /opt/hotfix-dsv4-vision-exp.py || exit 1; if [ "$${DSPARK_ENABLE_ISSUE141_SPARSE_MLA_CHUNK:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-issue141-sparse-mla-decode-chunk.py || exit 1; fi; if [ "$${DSPARK_ENABLE_SP_INDEXER:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-sp-indexer-prefill.py || exit 1; fi; if [ "$${DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS:-0}" = "1" ]; then bash /opt/dspark-patches/hotfix-deepgemm-sm121-mqa-header-alias.sh || exit 1; fi; python3 /opt/hotfix-vllm-empty-encoder-output.py || exit 1; python3 /opt/hotfix-dsv4-issue27-partial-prefill-concurrency.py || exit 1; if [ "$${DSPARK_ENABLE_ADAPTIVE_CHUNK:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-adaptive-prefill-chunk.py || exit 1; fi; if [ "$${DSPARK_ENABLE_REPLICATE_MARKOV:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-replicate-markov-head.py || exit 1; fi; python3 /opt/hotfix-dsv4-issue43-decode-fairness-and-diag.py || exit 1; python3 /opt/hotfix-dsv4-issue26-hybrid-swa-min.py || exit 1; python3 /opt/hotfix-dsv4-issue133-triton-specialization.py || exit 1; python3 /opt/hotfix-dsv4-runtime-ablation.py || exit 1; if [ "$${DSPARK_SKIP_SUPPRESS_STOPS_HOTFIX:-0}" != "1" ]; then python3 /opt/hotfix-dsv4-suppress-stops-in-reasoning.py || exit 1; fi; VLLM_QUANTIZATION_ARGS="";
         if [ "$${DSPARK_ENABLE_ASSISTANT_FINAL_HOTFIX:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-assistant-final-continuation.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN:-0}" = "1" ]; then python3 /opt/hotfix-dsv4-issue144-effort-align.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_ISSUE136_XGRAMMAR_HOTFIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-issue136-xgrammar-termination.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_ISSUE191_TOOLCALL_FAILCLOSED:-0}" = "1" ]; then python3 /opt/hotfix-vllm-issue191-toolcall-failclosed.py || exit 1; fi;
+        case "$${DSPARK_ASYNC_SCHEDULING:-1}" in 1) ASYNC_SCHEDULING_ARGS="--async-scheduling" ;; 0) ASYNC_SCHEDULING_ARGS="" ;; *) echo "DSPARK_ASYNC_SCHEDULING must be 0 or 1 (got $${DSPARK_ASYNC_SCHEDULING})" >&2; exit 1 ;; esac;
+        case "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" in 1) MXFP4_INDEXER_ARGS="--attention-config {\"use_fp4_indexer_cache\":true}" ;; 0) MXFP4_INDEXER_ARGS="" ;; *) echo "DSPARK_ENABLE_MXFP4_INDEXER_CACHE must be 0 or 1 (got $${DSPARK_ENABLE_MXFP4_INDEXER_CACHE})" >&2; exit 1 ;; esac;
+        if [ "$${DSPARK_ENABLE_DSPARK_BLOCK_K:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dspark-block-k.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_ROPE_SWA_FIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-rope-swa-fix.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_DSPARK_SWA_PREFIX:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dspark-swa-prefix.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_DSML_RECOVERY:-0}" = "1" ]; then python3 /opt/hotfix-vllm-dsml-recovery.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ]; then python3 /opt/hotfix-vllm-mxfp4-indexer-cache.py || exit 1; fi;
+        if [ "$${DSPARK_ENABLE_C128A_PREFILL_CACHE:-0}" = "1" ]; then python3 /opt/hotfix-vllm-c128a-prefill-cache.py || exit 1; fi;
         if [ "$${ENABLE_VLLM_GB10_PATCH:-0}" = "1" ]; then
-          python3 -m pip install -e /opt/vllm-gb10-hybrid-nvfp4 --no-deps;
+          python3 -m pip install -e /opt/vllm-gb10-hybrid-nvfp4 --no-deps || exit 1;
           export VLLM_PLUGINS="$${VLLM_PLUGINS:-gb10_hybrid_nvfp4}";
           VLLM_QUANTIZATION_ARGS="--quantization modelopt_gb10_hybrid";
+        fi;
+        if [ "${TP_SIZE:-2}" = "3" ]; then
+          if [ ! -f /opt/dsv4-tp3/apply_tp3_patch.py ]; then echo "FATAL: TP_SIZE=3 but /opt/dsv4-tp3/apply_tp3_patch.py is missing" >&2; exit 1; fi;
+          python3 /opt/dsv4-tp3/apply_tp3_patch.py || exit 1;
         fi;
         case "$${DRAFT_SAMPLE_METHOD:-probabilistic}" in
           probabilistic|greedy) DRAFT_SAMPLE_METHOD="$${DRAFT_SAMPLE_METHOD:-probabilistic}" ;;
           *) echo "DRAFT_SAMPLE_METHOD must be one of: probabilistic, greedy (got: $${DRAFT_SAMPLE_METHOD})" >&2; exit 2 ;;
         esac;
-        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"$${DRAFT_SAMPLE_METHOD}\"}";
+        SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":$${MTP_NUM_TOKENS:-6},\"draft_sample_method\":\"$${DRAFT_SAMPLE_METHOD}\"}";
         case "$${DEFAULT_THINKING:-low}" in
           off) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":false}' ;;
           low) DEFAULT_CHAT_TEMPLATE_KWARGS='{"thinking":true,"reasoning_effort":"low"}' ;;
@@ -354,19 +541,20 @@ services:
         esac;
         REVISION_ARGS="";
         if [ -n "$${DSPARK_REVISION:-}" ]; then REVISION_ARGS="--revision $${DSPARK_REVISION}"; fi;
+        LIMIT_MM_RAW='${LIMIT_MM_PER_PROMPT:-image=8}'; case "$${LIMIT_MM_RAW}" in image=*) _lim_n="$${LIMIT_MM_RAW#image=}"; case "$${_lim_n}" in ''|*[!0-9]*) echo "error: LIMIT_MM_PER_PROMPT image=N needs an integer (Anemll --limit-mm-per-prompt requires JSON)" >&2; exit 2 ;; esac; LIMIT_MM_JSON="{\"image\":$${_lim_n}}" ;; *) LIMIT_MM_JSON="$${LIMIT_MM_RAW}" ;; esac; LIMIT_MM_ARGS=(--limit-mm-per-prompt "$${LIMIT_MM_JSON}");
         export HOME=/cache/huggingface/runtime-home;
         export XDG_CACHE_HOME=/cache/huggingface/runtime-home/.cache;
         export PYTHONPYCACHEPREFIX=/cache/huggingface/runtime-home/.cache/pycache;
         export USER=dspark LOGNAME=dspark;
-        exec "$${RUNTIME_PRIVDROP[@]}" /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-0731}
+        exec "$${RUNTIME_PRIVDROP[@]}" /usr/local/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}
         $${REVISION_ARGS}
-        --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}
+        --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-vision-exp}
         --host ${VLLM_HOST:-127.0.0.1}
         --port ${VLLM_PORT:-8888}
         --trust-remote-code
         "$${API_KEY_ARGS[@]}"
         $${VLLM_QUANTIZATION_ARGS}
-        --tensor-parallel-size 2
+        --tensor-parallel-size ${TP_SIZE:-2}
         --pipeline-parallel-size 1
         --kv-cache-dtype nvfp4_ds_mla
         --block-size 256
@@ -374,14 +562,16 @@ services:
         --max-num-seqs ${MAX_NUM_SEQS:-6}
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
         --long-prefill-token-threshold ${LONG_PREFILL_TOKEN_THRESHOLD:-1024}
-        --max-cudagraph-capture-size $$(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) ))
+        --max-cudagraph-capture-size $$(( ( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-6} + 1) + 7 ) / 8 * 8 ))
         --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
         --enable-prefix-caching
         --enable-prompt-tokens-details
-        --async-scheduling
+        $${ASYNC_SCHEDULING_ARGS}
+        $${MXFP4_INDEXER_ARGS}
         --enable-chunked-prefill
         --speculative-config "$${SPECULATIVE_CONFIG}"
         --tokenizer-mode deepseek_v4
+        "$${LIMIT_MM_ARGS[@]}"
         --distributed-executor-backend mp
         --moe-backend flashinfer_b12x
         --tool-call-parser deepseek_v4
@@ -391,7 +581,7 @@ services:
         --default-chat-template-kwargs "$${DEFAULT_CHAT_TEMPLATE_KWARGS}"
         --generation-config vllm
         --enable-flashinfer-autotune
-        --nnodes 2
+        --nnodes ${NNODES:-2}
         --node-rank ${NODE_RANK}
         --master-addr ${MASTER_ADDR}
         --master-port ${MASTER_PORT:-25000}

@@ -2,9 +2,10 @@
 """Strict live verification for OpenAI-compatible Chat and Responses APIs.
 
 The verifier is intentionally dependency-free.  It checks semantic output,
-SSE framing, stateful ``previous_response_id`` tool continuation, strict JSON
-schema output, reasoning, invalid-field errors, appended multi-turn prefix
-reuse, and client-disconnect cleanup.
+SSE framing, stateful ``previous_response_id`` tool continuation, optional
+terminal-store LRU eviction, strict JSON schema output, reasoning,
+invalid-field errors, appended multi-turn prefix reuse, and client-disconnect
+cleanup.
 """
 
 from __future__ import annotations
@@ -323,6 +324,42 @@ def check_responses(client: Client, model: str) -> dict[str, Any]:
             "structured": True, "reasoning": True, "invalid_field": True}
 
 
+def check_store_lru(client: Client, model: str,
+                    capacity: int) -> dict[str, Any]:
+    request = {
+        "model": model,
+        "input": "Reply with one word.",
+        "max_output_tokens": 32,
+        "temperature": 0,
+        "reasoning": {"effort": "none"},
+        "store": True,
+    }
+    response_ids: list[str] = []
+    for _ in range(capacity):
+        response = client.json("POST", client.api_path + "/responses", request)
+        response_id = response.get("id")
+        if not isinstance(response_id, str) or not response_id:
+            raise RuntimeError("stored response id missing")
+        response_ids.append(response_id)
+
+    touched_id = response_ids[0]
+    client.json("GET", client.api_path + "/responses/" + touched_id)
+    rollover = client.json("POST", client.api_path + "/responses", request)
+    rollover_id = rollover.get("id")
+    if not isinstance(rollover_id, str) or not rollover_id:
+        raise RuntimeError("rollover response id missing")
+
+    client.json("GET", client.api_path + "/responses/" + touched_id)
+    evicted_status, _ = client.request(
+        "GET", client.api_path + "/responses/" + response_ids[1])
+    if evicted_status != 404:
+        raise RuntimeError(
+            f"least-recently-used response returned HTTP {evicted_status}, "
+            "expected 404")
+    client.json("GET", client.api_path + "/responses/" + rollover_id)
+    return {"capacity": capacity, "lru_touch": True, "terminal_eviction": True}
+
+
 def build_prefix(client: Client, model: str, target: int, nonce: str) -> str:
     unit = "append-only cache datum alpha beta gamma delta epsilon "
     text = f"unique verifier nonce {nonce}\n" + unit * max(1, target // 3)
@@ -443,10 +480,15 @@ def main() -> int:
     parser.add_argument("--multiturn-turns", type=int, default=6)
     parser.add_argument("--skip-multiturn", action="store_true")
     parser.add_argument("--skip-disconnect", action="store_true")
+    parser.add_argument(
+        "--store-capacity", type=int,
+        help="verify terminal LRU against the server's exact configured cap (2-16)")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.multiturn_prefix_tokens < 4096 or args.multiturn_turns < 2:
         parser.error("multiturn prefix must be >=4096 and turns must be >=2")
+    if args.store_capacity is not None and not 2 <= args.store_capacity <= 16:
+        parser.error("store capacity verification requires a value from 2 to 16")
     client = Client(args.base_url, args.timeout)
     report: dict[str, Any] = {
         "schema_version": 1, "base_url": args.base_url, "model": args.model,
@@ -454,6 +496,9 @@ def main() -> int:
     }
     run_gate(report, "catalog", check_catalog, client, args.model)
     run_gate(report, "responses", check_responses, client, args.model)
+    if args.store_capacity is not None:
+        run_gate(report, "responses_store_lru", check_store_lru,
+                 client, args.model, args.store_capacity)
     if not args.skip_multiturn:
         run_gate(report, "appended_multiturn", check_appended_multiturn,
                  client, args.model, args.multiturn_prefix_tokens,

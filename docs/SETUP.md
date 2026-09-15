@@ -4,7 +4,7 @@
 
 - 4× NVIDIA DGX Spark (GB10, SM121, 128 GB unified each), 200 Gb RoCE fabric.
 - Two independent **TP=2** replicas (one GPU per node, 2 nodes per replica).
-- Fabric interface `enp1s0f1np1`, HCA `rocep1s0f1`, `NCCL_IB_GID_INDEX=3`.
+- Fabric interface `enp1s0f1np1`, HCA `rocep1s0f1`. Earlier revisions pinned `NCCL_IB_GID_INDEX=3`; the launcher now validates sysfs GIDs and leaves the index unset so NCCL selects the RoCEv2/IPv4 GID per HCA.
 
 ## Model (same weights for both replicas)
 

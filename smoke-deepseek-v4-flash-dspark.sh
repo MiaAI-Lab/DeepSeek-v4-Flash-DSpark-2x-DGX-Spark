@@ -21,7 +21,10 @@ _dspark_host="${VLLM_HOST:-127.0.0.1}"
 case "$_dspark_host" in 0.0.0.0|::|"") _dspark_host=127.0.0.1 ;; esac
 CHAT_URL="${CHAT_URL:-http://${_dspark_host}:${VLLM_PORT:-8888}/v1/chat/completions}"
 
-MODEL="${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
+# Smoke model selection (begin)
+read -r MODEL _ <<< "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"
+MODEL="${MODEL:-deepseek-v4-flash-dspark}"
+# Smoke model selection (end)
 # DSPARK_API_KEYS auth (begin)
 AUTH_HEADER_ARGS=()
 case "${DSPARK_API_KEYS:-}" in
