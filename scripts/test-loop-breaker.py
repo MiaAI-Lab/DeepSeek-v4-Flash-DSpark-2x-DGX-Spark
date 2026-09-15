@@ -8,7 +8,10 @@ false-positive controls, the DSML hold and the runtime knob parsing are
 exercised as code. CLI tests cover apply/--check/--status, the default-OFF and
 skip gates, complete injected-block classification, atomic same-directory
 writes with mode preservation, the fail-closed restore paths (including a
-post-write re-read/decode failure) and the bounded knob parsing.
+post-write re-read/decode failure) and the bounded knob parsing. Rank-parity
+cases run the launcher's resolved-control/forwarding slices and worker sync
+statements against recording ssh/scp stubs, so the argv and the transferred
+bytes each rank receives are asserted without touching a host or a container.
 
     python3 scripts/test-loop-breaker.py -q
 """
@@ -20,7 +23,9 @@ import io
 import logging
 import os
 import re
+import shlex
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +83,56 @@ def fixture_source(mod, header: str = "stock") -> str:
         '        self.output_text += text\n'
         '        self.tokens += tokens\n'
     )
+
+
+LAUNCHER = ROOT / "start-deepseek-v4-flash-dspark.sh"
+PARITY_BEGIN = "# Issue #82 loop-breaker rank parity (begin)."
+PARITY_END = "# Issue #82 loop-breaker rank parity (end)."
+FORWARD_BEGIN = "remote_compose() {"
+FORWARD_END = "log_since() {"
+WORKER_SYNC_BEGIN = 'DSPARK_LOOP_BREAKER_HOTFIX="${DSPARK_LOOP_BREAKER_HOTFIX:-'
+WORKER_SYNC_END = 'DSPARK_ASSISTANT_FINAL_HOTFIX="${DSPARK_ASSISTANT_FINAL_HOTFIX:-'
+WORKER2_SYNC_BEGIN = '  if [ -f "$DSPARK_C128A_PREFILL_CACHE_HOTFIX" ]'
+WORKER2_SYNC_END = '  sync_tp3_patch_dir "$WORKER2_HOST" "$REMOTE_WORKER2_DIR"'
+CONTROL_KEYS = (
+    "DSPARK_LOOP_BREAKER",
+    "DSPARK_SKIP_LOOP_BREAKER_HOTFIX",
+    "DSPARK_LOOP_BREAKER_REPEATS",
+    "DSPARK_LOOP_BREAKER_SHORT_REPEATS",
+    "DSPARK_LOOP_BREAKER_MIN_TOKENS",
+    "DSPARK_LOOP_BREAKER_HOTFIX",
+)
+CANONICAL_REMOTE_PATCH = "./patches/hotfix-dsv4-loop-breaker.py"
+
+SSH_STUB = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$SSH_RECORD"
+"""
+
+SCP_STUB = """#!/usr/bin/env bash
+n=$(wc -l < "$SCP_RECORD")
+printf '%s\\t%s\\n' "$1" "${@: -1}" >> "$SCP_RECORD"
+cp -- "$1" "$SCP_STAGE/$n"
+"""
+
+
+def _launcher_region(begin: str, end: str) -> str:
+    """Executable launcher slice between two anchors that must be unique."""
+    text = LAUNCHER.read_text()
+    for anchor in (begin, end):
+        if text.count(anchor) != 1:
+            raise AssertionError(f"launcher anchor is not unique: {anchor!r}")
+    start = text.index(begin)
+    return text[start : text.index(end, start)]
+
+
+def _remote_assignments(line: str) -> dict[str, str]:
+    """Loop-breaker assignments the ssh recorder saw on a remote command."""
+    found = {}
+    for key in CONTROL_KEYS:
+        match = re.search(rf"(?<![A-Z_]){key}=('[^']*'|\S+)", line)
+        if match is not None:
+            found[key] = match.group(1).strip("'\"")
+    return found
 
 
 class PatchTextTest(unittest.TestCase):
@@ -776,6 +831,222 @@ class ComposeWiringTest(unittest.TestCase):
         match = re.search(r"^DSPARK_LOOP_BREAKER=(\S+)$", text, re.M)
         self.assertIsNotNone(match, "DSPARK_LOOP_BREAKER is not documented")
         self.assertEqual(match.group(1), "0")
+
+
+class RankParityForwardingTest(unittest.TestCase):
+    """Defect guard: both ranks must run the same resolved loop-breaker state.
+
+    ComposeWiringTest pins the service declarations and
+    scripts/test-python-hotfix-failclosed.py executes the real Compose command
+    line; neither runs the launcher's remote commands. These cases execute the
+    launcher's resolved-control block, its remote Compose wrappers and its
+    worker sync statements against recording ssh/scp stubs, so a control that
+    lives only in the head environment (absent from the pushed env file) or an
+    override the worker2 tar would shadow is caught on the argv each rank
+    receives and on the transferred bytes.
+    """
+
+    PREFLIGHT = (
+        "NODE_RANK={rank} HEADLESS=1 VLLM_HOST_IP='10.0.0.2{rank}' docker compose "
+        "-p dspark --env-file .env.dspark -f docker-compose.dspark.yml run --rm "
+        "--no-deps --entrypoint python3 vllm-dspark "
+        "/opt/hotfix-dsv4-loop-breaker.py --check"
+    )
+    RUNTIME = (
+        "NODE_RANK={rank} HEADLESS=1 VLLM_HOST_IP='10.0.0.2{rank}' docker compose "
+        "-p dspark --env-file .env.dspark -f docker-compose.dspark.yml up -d"
+    )
+    CALLS = (
+        ("pre-flight --check", "remote_compose", "worker-one", 1),
+        ("pre-flight --check", "remote_compose2", "worker-two", 2),
+        ("runtime up -d", "remote_compose", "worker-one", 1),
+        ("runtime up -d", "remote_compose2", "worker-two", 2),
+    )
+
+    def _remote_command_record(self, ambient: dict[str, str]) -> list[str]:
+        """Run the real forwarding slices; return the ssh argv per rank."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            ssh_stub = bin_dir / "ssh"
+            ssh_stub.write_text(SSH_STUB)
+            ssh_stub.chmod(0o755)
+            record = root / "ssh-record.txt"
+            record.touch()
+            calls = []
+            for kind, wrapper, _, rank in self.CALLS:
+                shape = self.PREFLIGHT if kind.startswith("pre-flight") else self.RUNTIME
+                calls.append(f'{wrapper} "{shape.format(rank=rank)}"')
+            script = "\n".join(
+                [
+                    "set -euo pipefail",
+                    "WORKER_HOST=worker-one",
+                    "WORKER2_HOST=worker-two",
+                    "REMOTE_WORKER_DIR=/srv/dspark",
+                    "REMOTE_WORKER2_DIR=/srv/dspark2",
+                    'REMOTE_COMPOSE="cd /srv/dspark && env -u NODE_RANK '
+                    'COMPOSE_DISABLE_ENV_FILE=1"',
+                    'REMOTE_COMPOSE2="cd /srv/dspark2 && env -u NODE_RANK '
+                    'COMPOSE_DISABLE_ENV_FILE=1"',
+                    "TP_SIZE=2",
+                    "NNODES=2",
+                    "REMOTE_C128A_PREFILL_CACHE=0",
+                    "REMOTE_ISSUE136_ENABLE=0",
+                    "REMOTE_ISSUE191_ENABLE=0",
+                    "REMOTE_ISSUE191_RETRIES=2",
+                    "REMOTE_ISSUE191_MODE=failclosed",
+                    "REMOTE_ISSUE191_THINKOFF=1",
+                    "REMOTE_ASYNC_SCHEDULING=1",
+                    "REMOTE_DSPARK_BLOCK_K=0",
+                    "REMOTE_ROPE_SWA_FIX=0",
+                    "REMOTE_DSPARK_SWA_PREFIX=0",
+                    "REMOTE_DSML_RECOVERY=0",
+                    "REMOTE_MXFP4_INDEXER=0",
+                    "REMOTE_ISSUE144_EFFORT_ALIGN=0",
+                    "remote_nccl_env() { printf \"NCCL_IB_HCA='rocep1s0f0'\"; }",
+                    "remote_nccl_env2() { printf \"NCCL_IB_HCA='rocep2s0f0'\"; }",
+                    _launcher_region(PARITY_BEGIN, PARITY_END),
+                    _launcher_region(FORWARD_BEGIN, FORWARD_END),
+                    *calls,
+                ]
+            )
+            base = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("DSPARK_LOOP_BREAKER")
+                and key != "DSPARK_SKIP_LOOP_BREAKER_HOTFIX"
+            }
+            env = {
+                **base,
+                **ambient,
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "SSH_RECORD": str(record),
+            }
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            return record.read_text().splitlines()
+
+    def test_both_ranks_resolve_and_receive_the_same_controls(self):
+        # Ambient-only controls (no .env.dspark entry): the head runs enabled
+        # while a rank that only saw the pushed file would stay disabled.
+        record = self._remote_command_record(
+            {
+                "DSPARK_LOOP_BREAKER": "1",
+                "DSPARK_LOOP_BREAKER_REPEATS": "9",
+                "DSPARK_LOOP_BREAKER_MIN_TOKENS": "0",
+            }
+        )
+        expected = {
+            "DSPARK_LOOP_BREAKER": "1",
+            "DSPARK_SKIP_LOOP_BREAKER_HOTFIX": "0",
+            "DSPARK_LOOP_BREAKER_REPEATS": "9",
+            "DSPARK_LOOP_BREAKER_SHORT_REPEATS": "15",
+            "DSPARK_LOOP_BREAKER_MIN_TOKENS": "0",
+            "DSPARK_LOOP_BREAKER_HOTFIX": CANONICAL_REMOTE_PATCH,
+        }
+        self.assertEqual(len(record), len(self.CALLS), record)
+        for (kind, _, host, _), line in zip(self.CALLS, record):
+            where = f"{kind} on {host}: {line}"
+            self.assertEqual(line.split()[0], host, where)
+            self.assertEqual(_remote_assignments(line), expected, where)
+
+    def test_skip_flag_and_selected_override_keep_the_canonical_path(self):
+        record = self._remote_command_record(
+            {
+                "DSPARK_LOOP_BREAKER": "1",
+                "DSPARK_SKIP_LOOP_BREAKER_HOTFIX": "1",
+                "DSPARK_LOOP_BREAKER_HOTFIX": "/opt/head/selected-loop-breaker.py",
+            }
+        )
+        expected = {
+            "DSPARK_LOOP_BREAKER": "1",
+            "DSPARK_SKIP_LOOP_BREAKER_HOTFIX": "1",
+            "DSPARK_LOOP_BREAKER_REPEATS": "6",
+            "DSPARK_LOOP_BREAKER_SHORT_REPEATS": "15",
+            "DSPARK_LOOP_BREAKER_MIN_TOKENS": "64",
+            "DSPARK_LOOP_BREAKER_HOTFIX": CANONICAL_REMOTE_PATCH,
+        }
+        self.assertEqual(len(record), len(self.CALLS), record)
+        for line in record:
+            self.assertEqual(_remote_assignments(line), expected, line)
+
+    def test_selected_override_bytes_reach_both_worker_canonical_paths(self):
+        # The repository copy stands for what the worker2 tar ships; only a
+        # selected override may be what the pre-flight reads on either rank.
+        repository_copy = b'"""repository loop-breaker copy"""\n'
+        selected_override = b'"""selected loop-breaker override"""\n'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            script_dir = root / "head"
+            patches = script_dir / "patches"
+            patches.mkdir(parents=True)
+            (patches / "hotfix-dsv4-loop-breaker.py").write_bytes(repository_copy)
+            selected = root / "selected-loop-breaker.py"
+            selected.write_bytes(selected_override)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for name, body in (("ssh", SSH_STUB), ("scp", SCP_STUB)):
+                stub = bin_dir / name
+                stub.write_text(body)
+                stub.chmod(0o755)
+            stage = root / "stage"
+            stage.mkdir()
+            ssh_record = root / "ssh-record.txt"
+            ssh_record.touch()
+            scp_record = root / "scp-record.txt"
+            scp_record.touch()
+            script = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"SCRIPT_DIR={shlex.quote(str(script_dir))}",
+                    "WORKER_HOST=worker-one",
+                    "WORKER2_HOST=worker-two",
+                    "WORKER_DIR=/srv/dspark",
+                    "REMOTE_WORKER_DIR=/srv/dspark",
+                    "REMOTE_WORKER2_DIR=/srv/dspark2",
+                    f"DSPARK_LOOP_BREAKER_HOTFIX={shlex.quote(str(selected))}",
+                    f"DSPARK_C128A_PREFILL_CACHE_HOTFIX="
+                    f"{shlex.quote(str(root / 'absent-c128a-prefill-cache.py'))}",
+                    "ENABLE_VLLM_GB10_PATCH=0",
+                    _launcher_region(WORKER_SYNC_BEGIN, WORKER_SYNC_END),
+                    _launcher_region(WORKER2_SYNC_BEGIN, WORKER2_SYNC_END),
+                ]
+            )
+            env = {
+                **os.environ,
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "SSH_RECORD": str(ssh_record),
+                "SCP_RECORD": str(scp_record),
+                "SCP_STAGE": str(stage),
+            }
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            delivered = {}
+            for index, line in enumerate(scp_record.read_text().splitlines()):
+                _, destination = line.split("\t")
+                delivered[destination] = (stage / str(index)).read_bytes()
+        self.assertEqual(
+            sorted(delivered),
+            [
+                "worker-one:/srv/dspark/patches/hotfix-dsv4-loop-breaker.py",
+                "worker-two:/srv/dspark2/patches/hotfix-dsv4-loop-breaker.py",
+            ],
+        )
+        for destination, payload in delivered.items():
+            self.assertEqual(payload, selected_override, destination)
 
 
 if __name__ == "__main__":
