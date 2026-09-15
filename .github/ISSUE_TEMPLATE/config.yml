@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: I want help using this recipe on my own hardware.
+    url: https://x.com/MiaAI_lab
+    about: Ask questions about setting this up on a different cluster, or about how a particular piece of this recipe works.

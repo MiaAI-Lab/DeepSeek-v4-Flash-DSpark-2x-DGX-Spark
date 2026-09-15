@@ -65,6 +65,39 @@ class ContinuationFailureClient:
         )
 
 
+class LruStoreClient:
+    api_path = "/v1"
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.next_id = 0
+        self.responses = {}
+
+    def _get(self, response_id):
+        if response_id not in self.responses:
+            return 404, {}
+        response = self.responses.pop(response_id)
+        self.responses[response_id] = response
+        return 200, response
+
+    def json(self, method, path, body=None):
+        if method == "POST":
+            self.next_id += 1
+            response = {"id": f"resp-{self.next_id}"}
+            self.responses[response["id"]] = response
+            while len(self.responses) > self.capacity:
+                del self.responses[next(iter(self.responses))]
+            return response
+        status, response = self._get(path.rsplit("/", 1)[-1])
+        if status != 200:
+            raise AssertionError(f"unexpected missing response: {path}")
+        return response
+
+    def request(self, method, path, body=None):
+        status, response = self._get(path.rsplit("/", 1)[-1])
+        return status, json.dumps(response).encode()
+
+
 class ResponsesApiLiveTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -177,6 +210,16 @@ vllm:prefix_cache_hits_total{model_name="x"} 80
             "POST /v1/responses returned HTTP 500: b'upstream'")
         self.assertNotIn(
             "VLLM_ENABLE_RESPONSES_API_STORE", str(caught.exception))
+
+    def test_store_probe_verifies_touch_and_terminal_eviction(self):
+        client = LruStoreClient(capacity=2)
+        result = self.module.check_store_lru(client, "model", 2)
+        self.assertEqual(result, {
+            "capacity": 2,
+            "lru_touch": True,
+            "terminal_eviction": True,
+        })
+        self.assertEqual(list(client.responses), ["resp-1", "resp-3"])
 
 
 if __name__ == "__main__":

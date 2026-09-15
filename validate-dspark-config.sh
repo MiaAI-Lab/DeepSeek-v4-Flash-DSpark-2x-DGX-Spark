@@ -20,29 +20,61 @@ set -a
 source "$ENV_FILE"
 set +a
 
-# Match start-deepseek-v4-flash-dspark.sh: flag selects main util profile.
-if [ "${ENABLE_VL_SIDECAR:-0}" = "1" ]; then
-  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_VISION:-0.80}"
-  DSPARK_SERVE_MODE="vision"
-else
-  GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_TEXT:-0.835}"
-  DSPARK_SERVE_MODE="text"
-fi
+# GPU util comes from GPU_MEMORY_UTILIZATION_TEXT (default 0.835).
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_TEXT:-0.835}"
 export GPU_MEMORY_UTILIZATION
 
-DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-0731}"
-DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32}"
-DEFAULT_OFFICIAL_REVISION="9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
-if [ "${ABLITERATED:-0}" = "1" ]; then
-  DSPARK_MODEL="$DSPARK_MODEL_ABLITERATED"
-  DSPARK_REVISION="${DSPARK_REVISION_ABLITERATED:-}"
-else
-  DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
-  if [ -z "${DSPARK_REVISION+x}" ]; then
-    DSPARK_REVISION="$DEFAULT_OFFICIAL_REVISION"
-  fi
+DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
+DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4Flash-Vision-EXP-ablit}"
+DEFAULT_OFFICIAL_REVISION="86f746b36186f0e567729a5c06a8c918caba82a9"
+DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+if [ -z "${DSPARK_REVISION+x}" ]; then
+  DSPARK_REVISION="$DEFAULT_OFFICIAL_REVISION"
 fi
 export DSPARK_MODEL DSPARK_REVISION
+
+DSV4_ABLATE_LAMBDA="${DSV4_ABLATE_LAMBDA:-3.5}"
+DSV4_ABLATE_LAYERS="${DSV4_ABLATE_LAYERS:-10-42}"
+if [ "${ABLITERATED:-0}" = "1" ]; then
+  ABLATE=1
+elif [ "${ABLATE:-0}" = "1" ]; then
+  echo "ABLATE=1 is gated on ABLITERATED=1. Agree at https://huggingface.co/${DSPARK_MODEL_ABLITERATED}" >&2
+  echo "then run ./prepare-dspark-model-cache.sh --abliterated" >&2
+  exit 2
+else
+  ABLATE=0
+fi
+case "$ABLATE" in 0|1) ;; *) echo "ABLATE must be 0 or 1 (got: $ABLATE)" >&2; exit 2 ;; esac
+if [ "$ABLATE" = "1" ]; then
+  if [[ ! "$DSV4_ABLATE_LAYERS" =~ ^([0-9]+)[[:space:]]*-[[:space:]]*([0-9]+)$ ]] \
+    || (( 10#${BASH_REMATCH[1]:-999} > 10#${BASH_REMATCH[2]:-0} )) \
+    || (( 10#${BASH_REMATCH[2]:-999} > 42 )); then
+    echo "DSV4_ABLATE_LAYERS must be an ordered range within 0-42 (got: $DSV4_ABLATE_LAYERS)" >&2
+    exit 2
+  fi
+  if ! python3 - "$DSV4_ABLATE_LAMBDA" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and value >= 0.0 else 1)
+PY
+  then
+    echo "DSV4_ABLATE_LAMBDA must be a finite non-negative number (got: $DSV4_ABLATE_LAMBDA)" >&2
+    exit 2
+  fi
+  _ablate_cache="${HF_CACHE:-${HF_HOME:-$HOME/.cache/huggingface}}"
+  if [ ! -f "${_ablate_cache}/dspark-ablation/RESPONSIBLE_USE.md" ] \
+    || [ ! -f "${_ablate_cache}/dspark-ablation/direction_r1.pt" ]; then
+    echo "ABLITERATED=1 requires a gated Hub download (Keys terms + 18 KiB direction)." >&2
+    echo "Agree at https://huggingface.co/${DSPARK_MODEL_ABLITERATED}" >&2
+    echo "then run: ./prepare-dspark-model-cache.sh --abliterated" >&2
+    exit 1
+  fi
+fi
+export ABLATE DSV4_ABLATE_LAMBDA DSV4_ABLATE_LAYERS
 
 # Same contract as the compose entrypoint: only these two values reach
 # --speculative-config; anything else must fail here too, not at boot.
@@ -65,8 +97,8 @@ echo "DSpark config:"
 echo "  worker: ${WORKER_HOST}"
 echo "  master: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "  image: ${DSPARK_VLLM_IMAGE}"
-echo "  serve mode: $DSPARK_SERVE_MODE (ENABLE_VL_SIDECAR=${ENABLE_VL_SIDECAR:-0})"
 echo "  checkpoint: $DSPARK_MODEL (ABLITERATED=${ABLITERATED:-0})"
+echo "  runtime ablation: $ABLATE (lambda=$DSV4_ABLATE_LAMBDA layers=$DSV4_ABLATE_LAYERS)"
 if [ -n "${DSPARK_REVISION:-}" ]; then
   echo "  revision: $DSPARK_REVISION"
 else
@@ -116,9 +148,9 @@ dspark_validate_numeric_knobs || exit $?
 
 echo "  max num seqs: ${MAX_NUM_SEQS:-6}"
 echo "  max batched tokens: ${MAX_NUM_BATCHED_TOKENS:-8192}"
-echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION} (text ${GPU_MEMORY_UTILIZATION_TEXT:-0.835} / vision ${GPU_MEMORY_UTILIZATION_VISION:-0.80})"
-echo "  spec tokens (MTP_NUM_TOKENS): ${MTP_NUM_TOKENS:-5} with draft_sample_method=${DRAFT_SAMPLE_METHOD} (min 5 = dspark_block_size)"
-echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-5} + 1) )) (max_num_seqs * (mtp + 1))"
+echo "  gpu memory utilization: ${GPU_MEMORY_UTILIZATION} (GPU_MEMORY_UTILIZATION_TEXT=${GPU_MEMORY_UTILIZATION_TEXT:-0.835})"
+echo "  spec tokens (MTP_NUM_TOKENS): ${MTP_NUM_TOKENS:-6} with draft_sample_method=${DRAFT_SAMPLE_METHOD} (Vision-Exp: >=5 and divisible by 3)"
+echo "  cudagraph capture size: $(( ${MAX_NUM_SEQS:-6} * (${MTP_NUM_TOKENS:-6} + 1) )) (max_num_seqs * (mtp + 1))"
 echo "  breakable cudagraph: ${VLLM_USE_BREAKABLE_CUDAGRAPH:-0}"
 echo "  dspark slot clamp: ${DSPARK_SLOT_CLAMP:-1}"
 echo "  sampling override: none (no --override-generation-config; --generation-config vllm only)"
@@ -132,4 +164,4 @@ env -u MASTER_PORT -u NODE_RANK -u HEADLESS -u WORKER_HOST -u MASTER_ADDR \
   DSPARK_MODEL="$DSPARK_MODEL" \
   DSPARK_REVISION="${DSPARK_REVISION:-}" \
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config \
-  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION'
+  | grep -E -- '--max-model-len|--max-num-seqs|--max-num-batched-tokens|--max-cudagraph-capture-size|--gpu-memory-utilization|--limit-mm-per-prompt|--master-port|--kv-cache-dtype|--speculative-config|--async-scheduling|--enable-chunked-prefill|--generation-config|--revision|image:|VLLM_USE_B12X_WO_PROJECTION|VLLM_USE_BREAKABLE_CUDAGRAPH|VLLM_USE_FLASHINFER_SAMPLER|MTP_NUM_TOKENS|DRAFT_SAMPLE_METHOD|DSPARK_REVISION|ABLATE'

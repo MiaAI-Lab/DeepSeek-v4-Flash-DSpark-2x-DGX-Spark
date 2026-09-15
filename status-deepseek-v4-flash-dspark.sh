@@ -68,6 +68,8 @@ API_URL="${API_URL:-http://${_dspark_host}:${VLLM_PORT:-8888}/v1/models}"
 
 cd "$SCRIPT_DIR"
 WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
+WORKER2_HOST="${WORKER2_HOST:-}"
+WORKER2_DIR="${WORKER2_SCRIPT_DIR:-${WORKER2_DIR:-$WORKER_DIR}}"
 
 show_compose() {
   local project="$1"
@@ -77,6 +79,11 @@ show_compose() {
   echo "== worker compose: $project =="
   ssh "$WORKER_HOST" "cd '$WORKER_DIR' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml ps" || true
   echo
+  if [ -n "${WORKER2_HOST:-}" ]; then
+    echo "== worker2 compose: $project =="
+    ssh "$WORKER2_HOST" "cd '${WORKER2_DIR:-$WORKER_DIR}' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml ps" || true
+    echo
+  fi
 }
 
 show_compose "$PROJECT_NAME"
@@ -90,9 +97,17 @@ echo
 echo "== worker matching containers =="
 ssh "$WORKER_HOST" "docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true" || true
 echo
+if [ -n "${WORKER2_HOST:-}" ]; then
+  echo "== worker2 matching containers =="
+  ssh "$WORKER2_HOST" "docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true" || true
+  echo
+fi
 echo "== images =="
 docker image inspect "$DSPARK_VLLM_IMAGE" --format "head $DSPARK_VLLM_IMAGE {{.Id}}" || true
 ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' --format 'worker $DSPARK_VLLM_IMAGE {{.Id}}'" || true
+if [ -n "${WORKER2_HOST:-}" ]; then
+  ssh "$WORKER2_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' --format 'worker2 $DSPARK_VLLM_IMAGE {{.Id}}'" || true
+fi
 echo
 echo "== port/API =="
 if command -v ss >/dev/null 2>&1; then
