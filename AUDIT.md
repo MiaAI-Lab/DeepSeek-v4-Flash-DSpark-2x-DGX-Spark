@@ -9,7 +9,7 @@ as a model failure). Methodology and rationale: [`scripts/EVAL.md`](scripts/EVAL
 ## Run everything
 
 ```bash
-bash scripts/run-audit.sh --base-url http://127.0.0.1:8888/v1 --model deepseek-v4-flash-0731
+bash scripts/run-audit.sh --base-url http://127.0.0.1:8888/v1 --model deepseek-v4-flash-vision-exp
 ```
 
 Or each phase individually:
@@ -30,6 +30,11 @@ Or each phase individually:
 - RULER-lite: **8/8** at 8k/32k (retrieval, variable tracking, common-words)
 - Tool battery: **7/7**; deep-context **8/8**; issue55 truncation always `finish=length`
 - Garble: **CLEAN** at every length through ~900k tokens (cold prefill)
+
+These are the best-seen 2026-08-14/16 figures. A 2026-09-02 re-measurement of
+the same lane read 15-25% lower on decode (56 tok/s c=1, 139 agg c=6) with no
+`.env.dspark` change to account for it — treat the numbers above as the upper
+bound, and re-baseline if your cluster consistently lands below them.
 
 ## Design notes (the hard-won lessons)
 

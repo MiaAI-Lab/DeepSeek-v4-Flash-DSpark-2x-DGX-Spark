@@ -17,6 +17,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts" / "fixtures" / "issue191" / "chat_completion_serving-752a3a504-post-issue55.py"
@@ -97,6 +98,29 @@ class FixtureAndTransform(unittest.TestCase):
         patched = HF.transform(FIXTURE.read_bytes())
         with self.assertRaises(HF.HotfixError):
             HF.transform(patched)
+
+    def test_issue55_upgrade_and_restart_keep_issue191_source_identity(self):
+        issue55 = ROOT / "patches" / "hotfix-dsv4-issue55-tool-truncation.py"
+        spec = importlib.util.spec_from_file_location("issue55", issue55)
+        hf55 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hf55)
+        current = FIXTURE.read_text()
+        previous = current.replace(hf55.STREAMING_NEW, hf55.STREAMING_PREVIOUS)
+        previous = previous.replace(hf55.NOSTREAM_NEW, hf55.NOSTREAM_PREVIOUS)
+        for initial in (PRISTINE.read_bytes(), previous.encode(), HF.transform(previous.encode())):
+            with self.subTest(initial_size=len(initial)), tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp) / hf55.SERVING
+                target.parent.mkdir(parents=True)
+                target.write_bytes(initial)
+                with mock.patch.object(sys, "argv", ["hf55", tmp]):
+                    self.assertEqual(hf55.main(), 0)
+                    HF.apply(target, provider=GOOD_VERSION)
+                    expected = target.read_bytes()
+                    self.assertEqual(hashlib.sha256(expected).hexdigest(), HF.PATCHED_SHA256)
+                    # Compose re-runs both hotfixes on a same-container restart.
+                    self.assertEqual(hf55.main(), 0)
+                    self.assertEqual(HF.apply(target, provider=GOOD_VERSION), "already-patched")
+                    self.assertEqual(target.read_bytes(), expected)
 
 
 class Patcher(unittest.TestCase):
