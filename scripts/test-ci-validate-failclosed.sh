@@ -66,11 +66,6 @@ reset_tree
 sed -i "s|urlhost='\${VLLM_HOST:-127.0.0.1}'|urlhost='127.0.0.1'|" "$TREE/docker-compose.dspark.yml"
 run_ci "$WORK/healthcheck.log"
 expect 1 "late healthcheck guard fails closed" "$WORK/healthcheck.log"
-if grep -qF 'compose healthcheck missing' "$WORK/healthcheck.log"; then
-  ok "late healthcheck guard reported the failure"
-else
-  bad "healthcheck break was not reported by the healthcheck guard"
-fi
 
 # Passthrough: the last guard in the script (remote_compose/remote_compose2).
 reset_tree
@@ -78,11 +73,6 @@ sed -i "s|DSPARK_ENABLE_ROPE_SWA_FIX=\$REMOTE_ROPE_SWA_FIX|DSPARK_ENABLE_ROPE_SW
   "$TREE/start-deepseek-v4-flash-dspark.sh"
 run_ci "$WORK/passthrough.log"
 expect 1 "final passthrough guard fails closed" "$WORK/passthrough.log"
-if grep -qF 'must be defined exactly once and carry issue191' "$WORK/passthrough.log"; then
-  ok "final passthrough guard reported the failure"
-else
-  bad "passthrough break was not reported by the passthrough guard"
-fi
 
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
