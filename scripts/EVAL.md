@@ -42,6 +42,7 @@ benchmarks, and MiaAI-Lab's own `scripts/stability-quick.py` + `scripts/benchmar
 | 4. Tool calling | `tool-battery.py` | Single/complex/parallel/multi-turn calls + issue55 truncation | The agent-serving path; issue55 = truncated calls must report `finish=length`, never broken tool JSON |
 | 5. Deep-context tools | `deepctx-tool-battery.py` | Same battery at 32k/131k+ | Tool calls at depth (the Hermes/agent case) |
 | 6. Garble | `context-garble-sweep.py` | Cold-prefill prompt/schema/secret echo at depth | The classic DS4 failure mode; only visible cold |
+| 7. Production decode profile | `metrics-decode-report.py`, `metrics-delta-probe.py`, `context-step-probe.py` | Time split, sequences per step, step-time quantiles and per-position acceptance from the engine's own counters; acceptance by content and temperature; step time vs context | What the recipe does under real traffic; complements `spec-acceptance.py`'s bench burst (see docs/AGENT_CLIENTS_PREFIX_CACHE.md) |
 
 ## Expected values (this recipe, 2x DGX Spark, Anemll 0.1.1, verified 2026-08-16)
 
