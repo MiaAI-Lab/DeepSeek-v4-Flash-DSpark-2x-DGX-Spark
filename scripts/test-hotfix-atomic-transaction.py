@@ -878,7 +878,7 @@ class ComposeFailClosedWiring(unittest.TestCase):
         # Supplemental placement guard: all three shell-hotfix lines must sit
         # before the real `exec vllm serve` in the Compose command.
         text = COMPOSE.read_text()
-        exec_pos = text.index("exec /usr/local/bin/vllm serve")
+        exec_pos = text.index("/usr/local/bin/vllm serve")
         for var in SKIP_VARS:
             self.assertLess(text.index("$${" + var + ":-0}"), exec_pos)
 

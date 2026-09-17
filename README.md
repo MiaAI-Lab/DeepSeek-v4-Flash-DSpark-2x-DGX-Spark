@@ -85,6 +85,33 @@ Qwen3.8-Flash-vLLM).
    [Worker weights over NFS](#worker-weights-over-nfs-optional) to skip the
    second copy.
 
+   Preparation and serving use the numeric, non-root
+   `DSPARK_RUNTIME_UID:GID` (default `1000:1000`). The prepare script creates
+   the persistent JIT/cache and `/tmp` bind paths under that identity and
+   refuses legacy root-owned paths. An install whose caches were created by an
+   earlier root run hands them over once, as root, in an authorized maintenance
+   window. First set `HF_CACHE` and `DSPARK_TMP_HOST` in `.env.dspark` to the
+   intended absolute runtime-user host paths, not `$HOME` or `~` (which `sudo`
+   may resolve under root), and confirm the numeric runtime UID/GID.
+   Inspect every target in the root-context dry-run before removing `--dry-run`:
+
+   ```bash
+   sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership --dry-run
+   ```
+
+   Only the seven named runtime/JIT caches plus `DSPARK_TMP_HOST` (and the
+   `HF_CACHE` directory entry itself) change owner; the checkpoint tree never
+   does. Add `--dry-run` to print the plan without touching anything, and see
+   [ENVS.md § Migrating an existing install](docs/ENVS.md#migrating-an-existing-install-to-the-non-root-runtime-identity)
+   for the weight-download caveat. Fresh installs need no migration.
+   While serving, the model `hub` and all
+   repository-supplied patch sources are bind-mounted read-only. The brief
+   boot-time hotfix phase is root with only `SETUID`, `SETGID`, and `SETPCAP`;
+   vLLM is then executed as the runtime UID with group 0 removed, an empty
+   capability bounding set, and `no-new-privileges`. The cache root is also
+   read-only; only the named runtime-home, CUDA/JIT, flight-recorder, and `/tmp`
+   nested binds are writable.
+
 4. **Optional CPU gates** (no GPU; will not measure tok/s)
 
    ```bash

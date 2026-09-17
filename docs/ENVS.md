@@ -72,7 +72,7 @@ PY
 | `TORCH_FR_BUFFER_SIZE` | **Not** `VLLM_*`. Compose default `2000` (torch 2.11 default, pinned). Canonical ring-buffer-size control for PyTorch's ProcessGroupNCCL flight recorder; `>0` is required for dump-on-timeout and the pipe trigger below. The older `TORCH_NCCL_TRACE_BUFFER_SIZE` spelling is deprecated by the pinned runtime and is not forwarded. |
 | `TORCH_NCCL_DUMP_ON_TIMEOUT` | **Not** `VLLM_*`. Compose default `1`. Dump the flight-recorder ring buffer when torch's NCCL watchdog hits its timeout; per the torch header it must be paired with `TORCH_NCCL_ENABLE_MONITORING=1` (also pinned to `1` in compose) and a nonzero buffer size. |
 | `TORCH_FR_DUMP_TEMP_FILE` | **Not** `VLLM_*`. Compose default `/cache/huggingface/nccl-fr/comm_lib_trace_rank_` (HF volume; rank id appended). Where flight-recorder dumps land — persisted so a killed pair still leaves per-rank evidence for `torchfrtrace`. The entrypoint creates the directory non-fatally; older torch reads `TORCH_NCCL_DEBUG_INFO_TEMP_FILE` instead. **Filenames are static per rank and torch truncates on every dump** — preservation is the operator's job: archive `comm_lib_trace_rank_*` from **both** nodes together after every dump, before the next poke or timeout overwrites them (`torchfrtrace` needs the complete rank set in one directory; each node's volume only holds its own rank's file). |
-| `TORCH_NCCL_DEBUG_INFO_PIPE_FILE` | **Not** `VLLM_*`. Compose default `/tmp/fr_dump_pipe_`. The stem lives on `/tmp` because torch `TORCH_CHECK`s the mkfifo at process-group init — it must never point at a directory that might not exist (an unmounted volume dir would fail the boot). In this compose stack `/tmp` is **not** container-local: it is the `DSPARK_TMP_HOST` bind mount (host default `~/.cache/dspark-tmp`), so the FIFO is also host-visible there — root-owned, so host-side pokes need root, or use `docker exec`; torch unlinks and recreates a stale FIFO left by a previous container. Torch creates `<stem><rank>.pipe`; writing anything to it triggers an on-demand flight-recorder dump — the hook an external watchdog uses to capture evidence from a frozen-but-not-timed-out rank before restarting the pair. **A poke is asynchronous and best-effort** (torch launches the dump via `std::async` and never waits): after poking, wait for torch's `Finished writing Flight Recorder debug info` log line, or for the dump file to appear and its size to settle (bounded wait), before killing or restarting the pair — an immediate restart can kill the writer mid-dump and leave a truncated or missing file. |
+| `TORCH_NCCL_DEBUG_INFO_PIPE_FILE` | **Not** `VLLM_*`. Compose default `/tmp/fr_dump_pipe_`. The stem lives on `/tmp` because torch `TORCH_CHECK`s the mkfifo at process-group init — it must never point at a directory that might not exist (an unmounted volume dir would fail the boot). In this compose stack `/tmp` is **not** container-local: it is the `DSPARK_TMP_HOST` bind mount (host default `~/.cache/dspark-tmp`), so the FIFO is also host-visible there and owned by `DSPARK_RUNTIME_UID:GID`; the host runtime user can poke it directly, or an operator can use `docker exec`. Torch unlinks and recreates a stale FIFO left by a previous container. Torch creates `<stem><rank>.pipe`; writing anything to it triggers an on-demand flight-recorder dump — the hook an external watchdog uses to capture evidence from a frozen-but-not-timed-out rank before restarting the pair. **A poke is asynchronous and best-effort** (torch launches the dump via `std::async` and never waits): after poking, wait for torch's `Finished writing Flight Recorder debug info` log line, or for the dump file to appear and its size to settle (bounded wait), before killing or restarting the pair — an immediate restart can kill the writer mid-dump and leave a truncated or missing file. |
 | `B12X_CUTE_COMPILE_CACHE_DIR` | **Not** `VLLM_*`. Compose default `/cache/huggingface/b12x-cute-cache` (HF volume). Issue #117 family, third JIT cache: the B12X MoE backend's CuTeDSL compile cache defaults to in-image `~/.cache/b12x/cute_compile` and dies on container recreate, so `W4A16FusedMoeKernel` re-JITs after every restart (`jit_monitor` flags it as "CuTeDSL JIT compilation during inference"). |
 | `DSPARK_BOOT_SHAPE_WARMUP` | Launcher-side (not passed to the container). `1` (default) runs `scripts/boot-shape-warmup.sh` after the smoke request. `_prepare_dflash_inputs_kernel` keys on `next_pow2(scheduled_tokens + 6)` only — request concurrency does not enter the key — so coverage comes from a deterministic ladder of exact-token plain completions (s = 1/6/20/45/100/200, each verified via an authenticated `/tokenize` before firing) hitting every live BLOCK key {8,16,32,64,128,256}. Chat arms C=1/2/4/6 up to the launcher's resolved `MAX_NUM_SEQS` cover both bounded longer prompts and ordinary short requests with client-default generation settings; medium/long-prefill and thinking-off cover other batch-keyed variants. `0` skips. Warmup failure is a WARN, never a boot failure. |
 | `DSPARK_WORKER_HF_NFS` | Launcher-side. `0` (default): bind a local worker checkpoint (`prepare` downloads on both nodes). `1`: worker mounts the head HuggingFace cache over NFSv4 on `NCCL_SOCKET_IFNAME` (ConnectX). Hub weights are not copied to the worker. JIT dirs (`triton-cache`, `tilelang-cache`, `vllm-cache`, `flashinfer`, `b12x-cute-cache`, `nccl-fr`) are local overlays under `WORKER_HF_CACHE`. Reuses a live NFSv4 exporter on that address (e.g. Qwen `vllm-fn-nfs`). |
@@ -85,6 +85,8 @@ PY
 | `NCCL_DMABUF_ENABLE` | Passthrough, default **unset**. `0` disables DMA-BUF probing (workaround control). Contributor-reported observation on GB10 driver `580.173.02`, that stack only: the container reported `CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED=0` and boot logs showed `via NET/IB/x` with no `/GDRDMA`; no GDR effect was demonstrated there, which is not a claim about GDR availability in general. |
 | `NCCL_GIN_ENABLE` | Passthrough, default **unset** (= NCCL's enabled default, GPU-initiated networking). Exact `0` selects the CPU-driven comm-init path: measured 2026-09-05 on the 2-node lane at ~97% GPU memory pressure, comm-init drops from ~2 min to ~13 s with no bandwidth change at serving message sizes. Bootstrap-speed knob only. |
 | `HF_*` / `TRANSFORMERS_OFFLINE` | Hub cache behavior |
+| `DSPARK_RUNTIME_UID` / `DSPARK_RUNTIME_GID` | Numeric non-root vLLM identity (defaults `1000:1000`). The root boot phase applies the pinned hotfixes, then `setpriv` drops to this identity, removes group 0, empties all capability sets including the bounding set, and sets `no-new-privileges`. Preparation must run as this host identity so persistent caches are writable without granting the container filesystem capabilities; installs whose caches predate this identity need the one-time migration (see [Migrating an existing install](#migrating-an-existing-install-to-the-non-root-runtime-identity)). |
+| `DSPARK_CACHE_READ_GID` | Supplemental group used only to read host-promoted `0640` checkpoint files (default `100` on DGX Spark). It must be positive/non-root. The checkpoint hub is additionally mounted read-only during serving. |
 | `MTP_NUM_TOKENS` | Consumed by compose command line (not a vLLM env registry key) |
 | `WORKER2_HOST` / `WORKER2_VLLM_HOST_IP` / `WORKER2_DIR` / `WORKER2_HF_CACHE` | Launcher-side, `./start-tp3.sh` only (`docs/TP3.md`). Third rank: SSH target, its RoCE IP, repo dir and JIT-cache dir (default to the `WORKER_*` values). Stop/status/logs/prepare also address it whenever `WORKER2_HOST` is set. Prerequisites: passwordless SSH and the pinned image already pulled there. |
 | `WORKER2_NCCL_IB_HCA` / `WORKER2_NCCL_SOCKET_IFNAME` / `WORKER2_TP_SOCKET_IFNAME` / `WORKER2_GLOO_SOCKET_IFNAME` | Launcher-side, TP=3 only. spark3's ConnectX port facing the head (not a copy of `WORKER_NCCL_*`). The launcher then moves Gloo/NCCL-socket/TP bootstrap onto `TP3_BOOTSTRAP_IFNAME` (default `enP7s7`) and sets `NCCL_IB_HCA` to both CX ports with `NCCL_IB_MERGE_NICS=0`, `NCCL_IB_SUBNET_AWARE_ROUTING=1`, `NCCL_IB_SUBNET_PREFIX_LEN=24`. |
@@ -180,6 +182,66 @@ docker compose --env-file .env.dspark \
 
 
 ---
+
+## Migrating an existing install to the non-root runtime identity
+
+Preparation and serving run as `DSPARK_RUNTIME_UID:DSPARK_RUNTIME_GID`
+(default `1000:1000`). Both the launcher/compose preflight and
+`prepare-dspark-model-cache.sh` require the seven named runtime/JIT caches under
+`HF_CACHE` plus the `/tmp` bind (`DSPARK_TMP_HOST`) to be writable by that
+identity, and both fail closed instead of adopting a path they cannot write. An
+install whose caches were created by an earlier root run hands them over once,
+as root, in an explicitly authorized maintenance window. Before using `sudo`,
+set `HF_CACHE` and `DSPARK_TMP_HOST` in the script's `.env.dspark` to the
+intended **absolute host paths for the runtime user**, and set the intended
+numeric `DSPARK_RUNTIME_UID` and `DSPARK_RUNTIME_GID`. Do not leave these paths
+dependent on `$HOME` or `~`: `sudo` may resolve them under root's home, and this
+script sources the env file after inherited environment assignments.
+
+First inspect the root-context plan and verify every target against those
+intended paths; only then, with maintenance authorization, remove `--dry-run`:
+
+```bash
+sudo ./prepare-dspark-model-cache.sh --migrate-runtime-cache-ownership --dry-run
+```
+
+Exactly what that changes:
+
+- `HF_CACHE/{runtime-home,flashinfer,tilelang-cache,triton-cache,b12x-cute-cache,vllm-cache,nccl-fr}`
+  — recursively, each bounded to its own named directory;
+- `DSPARK_TMP_HOST` (default `~/.cache/dspark-tmp`) — same bounded recursion;
+- the `HF_CACHE` directory entry itself, so prepare can create anything missing.
+
+What it never changes: `HF_CACHE/hub` or any other checkpoint-tree entry (the
+compose mount is read-only while serving), and it refuses — exit 2, nothing
+touched — a path that is a symlink, a symlink-containing tree, a non-directory,
+a top-level system directory (`/`, `/tmp`, `/var`, `/home`, …), or a recursive
+target that would overlap the checkpoint tree (inside `HF_CACHE/hub`, or
+containing it — a `DSPARK_TMP_HOST` that contains the cache root is one such
+shape). Validation of every target completes before the first `chown`.
+
+`--migrate-runtime-cache-ownership --dry-run` prints the same plan and the same
+refusals without changing ownership, and is allowed for any user. A normal
+prepare never changes ownership: it reports the unwritable path, points at the
+migration, and exits 1.
+
+Fresh installs need none of this — prepare creates the named paths as the
+runtime identity and the preflight passes unchanged.
+
+One caveat for existing installs: the migration deliberately leaves the
+checkpoint tree alone, so *serving* needs no further change, but a **weight
+(re)download** still needs `HF_CACHE/hub` writable by the runtime identity
+(serving mounts it read-only, so the container never sees that write access).
+Either re-download into a fresh `HF_CACHE`, or make the tree writable in a
+maintenance window as an explicit operator decision:
+
+```bash
+sudo chown -R 1000:1000 "$HF_CACHE/hub"   # your DSPARK_RUNTIME_UID:GID
+```
+
+That rewrites host ownership of the checkpoint tree (file contents are
+untouched; the container still mounts it read-only) — do it only when you
+actually need to (re)download.
 
 ## Recommended defaults by image
 

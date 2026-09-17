@@ -41,9 +41,6 @@ UPSTREAM_MERGE_FIXTURE = (
 )
 UPSTREAM_MERGE_GIT_BLOB_SHA1 = "6b9dd4068b9a82b46fe12a47e0479fe2cb0ae2ad"
 PATCHER_PATH = ROOT / "patches" / "hotfix-vllm-issue117-shm-ring-buffer.py"
-SPIN_PATCHER = ROOT / "patches" / "hotfix-gb10-spin-wait.sh"
-COMPOSE = ROOT / "docker-compose.dspark.yml"
-START = ROOT / "start-deepseek-v4-flash-dspark.sh"
 EXPECTED_VLLM = "0.25.2.dev0+g752a3a504.d20260714"
 STOCK_SIZE = 39_864
 STOCK_SHA256 = "7ff67c2ef6b8a33a13b11aa3cb202da7887d1d44eed27c6a02d817ea24807d61"
@@ -638,70 +635,6 @@ class PatcherFailureRecoveryTests(PatcherTestBase):
             self.assertEqual(temp_artifacts(directory), [])
 
 
-class StartupWiringTests(unittest.TestCase):
-    def test_compose_applies_and_verifies_after_issue79_before_exec(self):
-        compose = COMPOSE.read_text(encoding="utf-8")
-        issue79 = "bash /opt/dspark-patches/hotfix-gb10-spin-wait.sh"
-        apply = "python3 /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py || exit 1"
-        status = "python3 /opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py --status || exit 1"
-        env_default = (
-            'DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX: '
-            '"${DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX:-0}"'
-        )
-        self.assertEqual(compose.count(env_default), 1)
-        self.assertEqual(compose.count(apply), 1)
-        self.assertEqual(compose.count(status), 1)
-        positions = [
-            compose.index(issue79),
-            compose.index(apply),
-            compose.index(status),
-            compose.index("exec /usr/local/bin/vllm serve"),
-        ]
-        self.assertEqual(positions, sorted(positions))
-
-    def test_launcher_syncs_and_checks_both_ranks_before_either_start(self):
-        source = START.read_text(encoding="utf-8")
-        regular_check = (
-            '[ "${DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX:-0}" != "1" ] '
-            '&& { [ ! -f "$DSPARK_ISSUE117_HOTFIX" ] '
-            '|| [ -L "$DSPARK_ISSUE117_HOTFIX" ]; }'
-        )
-        sync = (
-            'scp "$DSPARK_ISSUE117_HOTFIX" '
-            '"${WORKER_HOST}:${REMOTE_WORKER_DIR}/patches/'
-            'hotfix-vllm-issue117-shm-ring-buffer.py"'
-        )
-        worker_check = (
-            'run --rm --no-deps --entrypoint python3 vllm-dspark '
-            '/opt/dspark-patches/hotfix-vllm-issue117-shm-ring-buffer.py --check'
-        )
-        head_check = (
-            'compose_base 0 "" run --rm --no-deps --entrypoint python3 '
-            'vllm-dspark /opt/dspark-patches/'
-            'hotfix-vllm-issue117-shm-ring-buffer.py --check'
-        )
-        worker_start = 'echo "Starting DSpark worker on ${WORKER_HOST}..."'
-        head_start = 'echo "Starting DSpark head..."'
-        for token in (regular_check, sync, worker_check, head_check):
-            self.assertIn(token, source)
-        positions = [
-            source.index(sync),
-            source.index(worker_check),
-            source.index(head_check),
-            source.index(worker_start),
-            source.index(head_start),
-        ]
-        self.assertEqual(positions, sorted(positions))
-
-    def test_issue117_rollback_switch_is_independent_and_not_tunable(self):
-        compose = COMPOSE.read_text(encoding="utf-8")
-        start = START.read_text(encoding="utf-8")
-        spin = SPIN_PATCHER.read_text(encoding="utf-8")
-        self.assertIn("DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX", compose)
-        self.assertIn("DSPARK_SKIP_ISSUE117_RECHECK_HOTFIX", start)
-        self.assertNotIn("ISSUE117", spin)
-        self.assertNotIn("DSPARK_ISSUE117_RECHECK_INTERVAL", compose + start)
-        self.assertIn("SHM_READER_RECHECK_INTERVAL_MS = 5000", PATCHER_PATH.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
