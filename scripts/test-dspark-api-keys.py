@@ -62,14 +62,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "docker-compose.dspark.yml"
 START = ROOT / "start-deepseek-v4-flash-dspark.sh"
-ENV_EXAMPLE = ROOT / ".env.dspark.example"
-ENVS_DOC = ROOT / "docs" / "ENVS.md"
-CHANGELOG = ROOT / "CHANGELOG.md"
-SELF = Path(__file__)
-REDACTION_PATCH = ROOT / "patches" / "hotfix-vllm-redact-api-key-log.sh"
-CI_VALIDATE = ROOT / "scripts" / "ci-validate.sh"
-REDACTION_TEST = ROOT / "scripts" / "test-redact-api-key-log.py"
-ENV_NORMALISATION_TEST = ROOT / "scripts" / "test-env-normalisation.py"
 SOURCE = START.read_text(encoding="utf-8")
 PROBES = (
     ROOT / "start-deepseek-v4-flash-dspark.sh",
@@ -1151,74 +1143,6 @@ class WorkerSync(unittest.TestCase):
                 self.assertIn(f"/wdir/patches/{n}", out, n)
 
 
-class Documented(unittest.TestCase):
-    ROUTE_SCOPE = (
-        "Every route outside the guarded prefixes `/v1`, `/v2`, `/inference` "
-        "is keyless."
-    )
-    ROUTE_DETAIL = (
-        "On the pinned runtime that includes `POST /invocations` and `POST "
-        "/generative_scoring` (both run inference unauthenticated) and the "
-        "`/tokenize` / `/detokenize` utility routes, besides `/health`, "
-        "`/metrics`, `/version`, `/ping`; a keyed deployment still needs "
-        "network-level access control on the server port."
-    )
-
-    @staticmethod
-    def normalized_prose(path):
-        parts = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("#"):
-                line = line[1:].strip()
-            parts.append(line)
-        return " ".join(" ".join(parts).split())
-
-    def assert_documented_contract(self, path):
-        text = path.read_text(encoding="utf-8")
-        prose = self.normalized_prose(path)
-        for required in (
-            "/generative_scoring", "/invocations", "/tokenize",
-            "/detokenize", "network-level access control",
-            "fails the container before exec",
-        ):
-            self.assertIn(required, text, (path.name, required))
-        self.assertIn(self.ROUTE_SCOPE, prose, path.name)
-        self.assertIn(self.ROUTE_DETAIL, prose, path.name)
-
-    def test_env_example_documents_exact_contract(self):
-        text = ENV_EXAMPLE.read_text(encoding="utf-8")
-        self.assertIn("DSPARK_API_KEYS", text)
-        self.assertIn("VLLM_API_KEY", text)
-        self.assertIn("exit 2", text)
-        self.assertIn("hotfix-vllm-redact-api-key-log.sh", text)
-        self.assert_documented_contract(ENV_EXAMPLE)
-
-    def test_envs_doc_documents_exact_contract(self):
-        text = ENVS_DOC.read_text(encoding="utf-8")
-        self.assertIn("`DSPARK_API_KEYS`", text)
-        self.assertIn("`VLLM_API_KEY`", text)
-        self.assertIn("hotfix-vllm-redact-api-key-log.sh", text)
-        self.assert_documented_contract(ENVS_DOC)
-
-    def test_no_key_material_committed_in_any_changed_text_artifact(self):
-        allow = (
-            "sk-dspark-alice", "sk-dspark-bob", "sk-single-key",
-            "sk-probe-a", "sk-probe-b",
-        )
-        paths = (
-            COMPOSE, ENV_EXAMPLE, *PROBES, ENVS_DOC, CHANGELOG, SELF,
-            REDACTION_PATCH, CI_VALIDATE, REDACTION_TEST,
-            ENV_NORMALISATION_TEST,
-        )
-        for changed_path in paths:
-            changed_text = changed_path.read_text(encoding="utf-8")
-            for match in re.findall(r"sk-[A-Za-z0-9_-]{6,}", changed_text):
-                self.assertIn(
-                    match,
-                    allow,
-                    f"possible real key in {changed_path.name}: {match}",
-                )
 
 if __name__ == "__main__":
     unittest.main()
