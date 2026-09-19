@@ -83,11 +83,25 @@ if nfs_ensure_server >/dev/null 2>&1; then
 else
   bad "nfs_ensure_server failed; see: docker logs $NFS_CONTAINER"
 fi
-_opts="$(docker exec "$NFS_CONTAINER" sh -c 'grep -o "([^)]*)" /etc/exports | head -1' 2>/dev/null || true)"
-case "$_opts" in
-  *root_squash*) ok "live exports carry root_squash: $_opts" ;;
-  *) bad "live exports do not show root_squash: ${_opts:-<unreadable>}" ;;
-esac
+# Exact-option match on every export group: `no_root_squash` contains the
+# `root_squash` substring, so a substring check would PASS on an unsquashed
+# export. Split each `(opts)` group on commas and require a whole-token match.
+_opts="$(docker exec "$NFS_CONTAINER" sh -c 'grep -o "([^)]*)" /etc/exports' 2>/dev/null || true)"
+_groups=0
+_unsquashed=0
+while IFS= read -r _group; do
+  [ -z "$_group" ] && continue
+  _groups=$((_groups + 1))
+  printf '%s' "$_group" | tr -d '()' | tr ',' '\n' | grep -qx 'root_squash' \
+    || _unsquashed=$((_unsquashed + 1))
+done <<< "$_opts"
+if [ "$_groups" -eq 0 ]; then
+  bad "no export option groups readable in $NFS_CONTAINER:/etc/exports"
+elif [ "$_unsquashed" -ne 0 ]; then
+  bad "$_unsquashed of $_groups export group(s) lack an exact root_squash option: $(printf '%s' "$_opts" | tr '\n' ' ')"
+else
+  ok "all $_groups export group(s) carry exact root_squash: $(printf '%s' "$_opts" | tr '\n' ' ')"
+fi
 
 # ── 3. Worker mounts the export ────────────────────────────────────────────
 echo
@@ -106,21 +120,52 @@ probe() { # probe <shell test> -> rc of the worker-side container
 # ── 4. Compatibility: the existing populated cache is readable ─────────────
 echo
 echo "== 4. compatibility: existing cache readable through the squash =="
+
+# The serve loads snapshots/<revision>/, never a config.json at the model
+# root. Resolve the selected revision on the head the same way: explicit
+# DSPARK_REVISION pin, else refs/main (prepare writes it), else the first
+# snapshot carrying config.json (the compose encoder glob order).
+_head_config() {
+  local root="$HF_CACHE_DIR/$MODEL_REL" rev c
+  rev="${DSPARK_REVISION:-}"
+  if [ -z "$rev" ] && [ -f "$root/refs/main" ]; then
+    rev="$(tr -d '[:space:]' < "$root/refs/main")"
+  fi
+  if [ -n "$rev" ]; then
+    printf '%s\n' "$root/snapshots/$rev/config.json"
+    return 0
+  fi
+  for c in "$root"/snapshots/*/config.json; do
+    [ -f "$c" ] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+
 if probe "test -d /hf/$MODEL_REL"; then
   ok "model directory visible: /$MODEL_REL"
 else
   bad "model directory NOT visible: /$MODEL_REL — worker loads would fail"
 fi
-if probe "test -r /hf/$MODEL_REL/config.json"; then
-  ok "model file readable: config.json (world-readable blobs pass the squash)"
+HEAD_CONFIG="$(_head_config || true)"
+if [ -z "$HEAD_CONFIG" ]; then
+  bad "no snapshots/<revision>/config.json under $HF_CACHE_DIR/$MODEL_REL — the head cache is not a populated HF hub snapshot"
+elif [ ! -f "$HEAD_CONFIG" ]; then
+  bad "selected revision is absent from the head cache: ${HEAD_CONFIG#"$HF_CACHE_DIR"/} — fix DSPARK_REVISION or run prepare"
 else
-  bad "model file NOT readable: config.json — cache files are not world-readable; chmod a+r the cache (or pin NFS_OPTS without root_squash) before serving"
+  CONFIG_REL="${HEAD_CONFIG#"$HF_CACHE_DIR"/}"
+  if probe "test -r /hf/$CONFIG_REL"; then
+    ok "revision config readable through the export: /$CONFIG_REL"
+  else
+    bad "present on head but NOT readable through the export: /$CONFIG_REL — root_squash maps the worker to nobody, so the file itself must be other-readable; also confirm $NFS_VOLUME mounts ${NFS_SERVER_IP:-$IFACE}:/"
+  fi
 fi
 
 # ── 5. Security: the token file is NOT readable ────────────────────────────
 echo
 echo "== 5. security: HF token not readable through the squash =="
-_mode="$(stat -c %a "$HF_CACHE_DIR/$WORKER_API_KEY_TOKEN_REL" 2>/dev/null || echo '')"
+_mode="$(stat -c %a "$HF_CACHE_DIR/$WORKER_API_KEY_TOKEN_REL" 2>/dev/null \
+       || stat -f %Lp "$HF_CACHE_DIR/$WORKER_API_KEY_TOKEN_REL" 2>/dev/null \
+       || echo '')"
 if [ -z "$_mode" ]; then
   info "no $HF_CACHE_DIR/$WORKER_API_KEY_TOKEN_REL present — nothing to prove"
 elif probe "test -r /hf/$WORKER_API_KEY_TOKEN_REL"; then
