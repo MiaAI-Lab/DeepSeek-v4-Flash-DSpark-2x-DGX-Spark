@@ -278,7 +278,14 @@ hostnames, LAN addresses, cache paths, or raw private logs. See
 ## Credits and license
 
 See [`CREDITS.md`](CREDITS.md) for DeepSeek, vLLM, Anemll, FlashInfer, NVIDIA,
-Fraser Price, Rafael Caricio, Keys/drowzeys, and prior integration credits.
+Fraser Price, Rafael Caricio, Keys/drowzeys, and MiaAI-Lab (MiaAI_Lab).
+
+The two-node DGX Spark packaging and launch lineage in this fork come from
+[MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark)
+([MiaAI_Lab](https://x.com/MiaAI_lab)). That work is MIT licensed. Copies and
+substantial portions must keep the upstream copyright notice and permission
+notice with the software.
+
 Repository scripts/docs are MIT licensed; upstream-derived vLLM code retains
 its Apache-2.0 lineage. Model weights, images, CUDA, NCCL, FlashInfer, and other
 upstream artifacts keep their own terms.

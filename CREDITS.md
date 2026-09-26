@@ -37,10 +37,21 @@ this recipe:
 - https://huggingface.co/fraserprice/DeepSeek-V4-Flash-DSpark
 - https://github.com/fraserprice/dspark-vllm
 
+## Two-Node DGX Spark Packaging
+
+MiaAI-Lab (MiaAI_Lab) published the two-node DGX Spark packaging and launch
+lineage this repository still carries. That work is MIT licensed. Copies and
+substantial portions must keep the upstream copyright notice and permission
+notice with the software.
+
+- https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark
+- https://x.com/MiaAI_lab
+
 ## DSpark-r0b0tlab Model Implementation
 
-This repository now carries the DSpark-r0b0tlab model implementation, draft-head
-runtime path, two-node DGX Spark launch flow, and publication artifacts.
+This repository adds the DSpark-r0b0tlab model implementation, draft-head
+runtime path, and publication artifacts on top of the MiaAI-Lab two-node
+launch lineage above.
 
 ## Production vLLM 0.25 Runtime
 
@@ -66,16 +77,24 @@ This work also relies on:
 - DeepSeek V4 Flash
 - DeepSeek-AI DeepSpec / DSpark speculative decoding research
 
-## Repository Contribution
+## MiaAI-Lab Contribution
 
-This repo contributes the validated 2x DGX Spark NVFP4-KV recipe, Stage A/B/C
-runtime packaging, sanitized two-node launch flow, application of Keys'
-concurrency patch to the NVFP4 profile, and benchmark artifacts from the
-validated runs.
+MiaAI-Lab (MiaAI_Lab) contributed the validated 2x DGX Spark NVFP4-KV recipe,
+Stage A/B/C runtime packaging, sanitized two-node launch flow, application of
+Keys' concurrency patch to the NVFP4 profile, and benchmark artifacts from the
+validated runs:
+
+- https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark
+- https://x.com/MiaAI_lab
 
 ## License Notes
 
-Repo-local scripts and docs are MIT licensed via `LICENSE`.
+Repo-local scripts and docs are MIT licensed via `LICENSE`. The copyright
+notice and permission notice in that file must stay with every copy or
+substantial portion of the software, including the MiaAI-Lab (MiaAI_Lab)
+packaging this fork retains:
+
+- https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark
 
 The vLLM overlay files and `patches/keys-concurrency.patch` are vLLM/DSpark
 derived and retain their Apache-2.0 lineage from the upstream sources and
