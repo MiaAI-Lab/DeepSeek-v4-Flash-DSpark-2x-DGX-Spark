@@ -22,7 +22,7 @@ dspark_docker_build_tag() {
 if [ "${1:-}" = "--tag-selftest" ]; then
   _fail=0
   _got="$(dspark_docker_build_tag \
-    'ghcr.io/anemll/dspark-vllm-gx10:0.1.1@sha256:deadbeef' \
+    'dgx34-vllm:0.28.0' \
     "$DEFAULT_STAGE_C_IMAGE")"
   [ "$_got" = "$DEFAULT_STAGE_C_IMAGE" ] || _fail=1
   _got="$(dspark_docker_build_tag "$DEFAULT_STAGE_C_IMAGE" "$DEFAULT_STAGE_C_IMAGE")"

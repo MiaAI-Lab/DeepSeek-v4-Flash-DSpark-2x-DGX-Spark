@@ -1,3 +1,9 @@
+## 2026-09-29
+
+### Upgrade
+- **Default deployment upgraded vLLM 0.25.2.dev0 -> 0.28.0**: image `dgx34-vllm:0.28.0` built from the official `vllm/vllm-openai:v0.28.0` base plus the FlashInfer 0.6.18 stack (python/cubin/jit-cache). MTP `dspark` k=5 speculative decoding, `fp8_ds_mla` KV cache (block 256), `deepseek_v4` tokenizer / tool-call / reasoning parsers and the 1M `--max-model-len` ceiling are all preserved. Build, cutover, validation and rollback scripts live in `vllm-028/`.
+- **Validated on 2x DGX Spark (GB10, TP=2, RoCE)**: both nodes run the same image ID; 24K/108K-token functional checks pass (108K completed in 62.34s with 23,808 prefix-cache hits); GPU KV cache 1,757,420 tokens; zero FlashInfer `tactic=-1` autotune cliffs after cutover; production gateway ledger clean (16/16 succeeded incl. a 231,956-token request). The legacy `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` (vLLM 0.25.2) image is retained for rollback.
+
 ## 2026-09-08
 
 ### Security

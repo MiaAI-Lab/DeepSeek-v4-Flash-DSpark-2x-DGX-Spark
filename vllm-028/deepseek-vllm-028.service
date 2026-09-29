@@ -1,0 +1,22 @@
+[Unit]
+Description=DeepSeek V4 Flash vLLM 0.28 two-node DGX3/4
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=dgx4
+Group=dgx4
+Environment=HOME=/home/dgx4
+WorkingDirectory=/home/dgx4/vllm-upgrade-028
+ExecStart=/home/dgx4/vllm-upgrade-028/start.sh
+ExecStop=/home/dgx4/vllm-upgrade-028/stop.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30s
+TimeoutStartSec=35min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target
