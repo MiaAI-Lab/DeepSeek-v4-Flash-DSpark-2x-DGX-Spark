@@ -1,6 +1,6 @@
 services:
   vllm-dspark:
-    image: ${DSPARK_VLLM_IMAGE:-ghcr.io/anemll/dspark-vllm-gx10:0.1.1}
+    image: ${DSPARK_VLLM_IMAGE:-dgx34-vllm:0.28.0}
     pull_policy: if_not_present
     entrypoint: []
     network_mode: host
