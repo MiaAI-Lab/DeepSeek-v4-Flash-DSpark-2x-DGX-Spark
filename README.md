@@ -14,7 +14,7 @@ from the Vision-Exp checkpoint, OpenAI `image_url` / `<image>path</image>`).
 There is **no video encoder** in the official weights; GIF is a still frame.
 The old Qwen3-VL sidecar / MCP path is removed.
 
-**Default image:** [`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`](https://github.com/Anemll/dspark-vllm-gx10)
+**Default image:** `dgx34-vllm:0.28.0` (vLLM 0.28.0, built from [`vllm-028/Dockerfile`](vllm-028/Dockerfile); the legacy `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` image, vLLM 0.25.2, remains available for rollback)
 
 **Numbers:** [results/RESULTS-2026-08-14.md](results/RESULTS-2026-08-14.md) (dated
 tables, method, historical lanes). Checkpoint / encoder:
@@ -54,7 +54,7 @@ Qwen3.8-Flash-vLLM).
    WORKER_VLLM_HOST_IP=10.0.0.2
    NCCL_IB_HCA=rocep1s0f1
    NCCL_SOCKET_IFNAME=enp1s0f1np1
-   DSPARK_VLLM_IMAGE=ghcr.io/anemll/dspark-vllm-gx10:0.1.1
+   DSPARK_VLLM_IMAGE=dgx34-vllm:0.28.0
    ```
 
    Leave serving knobs at the defaults unless you mean to change them.
@@ -64,7 +64,7 @@ Qwen3.8-Flash-vLLM).
 2. **Image on both nodes**
 
    ```bash
-   docker pull ghcr.io/anemll/dspark-vllm-gx10:0.1.1
+   docker build -t dgx34-vllm:0.28.0 vllm-028/   # base image: docker.m.daocloud.io/vllm/vllm-openai:v0.28.0 (or docker.io/vllm/vllm-openai:v0.28.0)
    ```
 
    Repeat on the worker (or pull there via ssh). Start refuses to launch if
@@ -132,7 +132,7 @@ hosts or it can kill vLLM under deep-context load.
 
 | Knob | Default |
 | --- | --- |
-| Image | `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` |
+| Image | `dgx34-vllm:0.28.0` (vLLM 0.28.0) |
 | Checkpoint | official Vision-Exp @ `86f746b36186f0e567729a5c06a8c918caba82a9` (`ABLITERATED=0`) |
 | Served name | `deepseek-v4-flash-vision-exp` |
 | Context ceiling | `MAX_MODEL_LEN=1048576` (1M) |
