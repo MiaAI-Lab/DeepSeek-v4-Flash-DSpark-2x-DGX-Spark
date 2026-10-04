@@ -14,6 +14,8 @@ from the Vision-Exp checkpoint, OpenAI `image_url` / `<image>path</image>`).
 There is **no video encoder** in the official weights; GIF is a still frame.
 The old Qwen3-VL sidecar / MCP path is removed.
 
+The files added in [`7f1217f`](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/commit/7f1217f236ac96ec034c1645acc08a643492b09d), including the files under `recipe/overlay/`, came from **Tony D** ([tonyd2wild](https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark)). He is the author of that work.
+
 **Default image:** [`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`](https://github.com/Anemll/dspark-vllm-gx10)
 
 **Numbers:** [results/RESULTS-2026-08-14.md](results/RESULTS-2026-08-14.md) (dated
