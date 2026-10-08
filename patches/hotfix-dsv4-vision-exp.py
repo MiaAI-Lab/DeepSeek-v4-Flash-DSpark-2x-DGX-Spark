@@ -25,11 +25,22 @@ startup patch:
 Video is not wired: the official weights, ``encoding/``, and ``inference/``
 have no video encoder. GIF is decoded as a still RGB frame.
 
+A text-only checkpoint copies an encoder that has no ``IMAGE_PLACEHOLDER``.
+That used to exit ``drift:no-image-placeholder`` and the rank never started.
+When the resolved checkpoint's ``config.json`` is readable and has no vision
+tower (``vision_n_layers`` <= 0, including a DeepSeek config that omits the
+key), the encoding half is skipped and the image-side patches still apply.
+A missing config, or a config that still declares a vision tower, keeps the
+fail-closed drift: a Vision-Exp encoder that lost the placeholder must not
+boot as if it were text-only.
+
 Usage (inside the container, after the encoder copy):
   python3 hotfix-dsv4-vision-exp.py
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -177,7 +188,7 @@ def _encoding_role_complete(source: str) -> bool:
     )
 
 
-def patch_encoding_text(source: str) -> tuple[str, str]:
+def patch_encoding_text(source: str, *, text_only: bool = False) -> tuple[str, str]:
     if (
         ENC_MARK in source
         and _encoding_role_complete(source)
@@ -185,6 +196,8 @@ def patch_encoding_text(source: str) -> tuple[str, str]:
     ):
         return source, "skipped"
     if "IMAGE_PLACEHOLDER" not in source:
+        if text_only:
+            return source, "skipped:text-only"
         return source, "drift:no-image-placeholder"
     if ENC_MARK not in source:
         missing = []
@@ -220,12 +233,127 @@ def patch_dspark_text(source: str) -> tuple[str, str]:
     return updated, "applied"
 
 
+def _is_skip(status: str) -> bool:
+    return status == "skipped" or status.startswith("skipped:")
+
+
 def _write(path: Path, original: str, updated: str, status: str) -> None:
     if status == "applied":
         path.write_text(updated)
-    elif status != "skipped":
+    elif not _is_skip(status):
         raise SystemExit(f"FATAL: {path} {status}")
     print(f"vision-exp hotfix {path.name:40s}: {status}")
+
+
+def _as_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lstrip("-").isdigit():
+            return int(text)
+    return None
+
+
+def vision_layers_from_mapping(data: object) -> int | None:
+    """Return the checkpoint's vision tower depth, or None if it is not a known shape.
+
+    ``vision_n_layers`` <= 0, and a DeepSeek config that omits the key, are
+    text-only. Any other shape stays unknown so the encoding patch fails closed.
+    """
+    if not isinstance(data, dict):
+        return None
+    if "vision_n_layers" in data:
+        return _as_int(data["vision_n_layers"])
+    for key in ("vision_config", "vision"):
+        nested = data.get(key)
+        if isinstance(nested, dict) and "vision_n_layers" in nested:
+            return _as_int(nested["vision_n_layers"])
+    model_type = data.get("model_type")
+    if isinstance(model_type, str) and model_type.startswith("deepseek"):
+        return 0
+    return None
+
+
+def _safe_component(value: str) -> bool:
+    if not value or value in {".", ".."}:
+        return False
+    return "/" not in value and "\\" not in value and ".." not in value
+
+
+def checkpoint_config_path() -> Path | None:
+    """Locate ``config.json`` for ``DSPARK_MODEL`` under the HF cache.
+
+    Returns None when the id, the revision, or the cache cannot be resolved.
+    Callers then keep the encoding patch fail-closed.
+    """
+    model = os.environ.get("DSPARK_MODEL", "").strip()
+    if model.count("/") != 1:
+        return None
+    org, name = model.split("/", 1)
+    if not _safe_component(org) or not _safe_component(name):
+        return None
+    revision = os.environ.get("DSPARK_REVISION", "").strip()
+    if revision and not _safe_component(revision):
+        return None
+    roots: list[Path] = []
+    for key in ("HF_HOME", "HF_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        raw = os.environ.get(key, "").strip()
+        if raw:
+            roots.append(Path(raw))
+    repo = f"models--{org}--{name}"
+    seen: set[Path] = set()
+    for root in roots:
+        hubs = [root]
+        hub = root / "hub"
+        if hub.is_dir():
+            hubs.insert(0, hub)
+        for base in hubs:
+            try:
+                resolved = base.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            snap_root = base / repo / "snapshots"
+            if not snap_root.is_dir():
+                continue
+            if revision:
+                candidate = snap_root / revision / "config.json"
+                if candidate.is_file():
+                    return candidate
+                continue
+            ref = base / repo / "refs" / "main"
+            if ref.is_file():
+                try:
+                    tip = ref.read_text().strip()
+                except OSError:
+                    tip = ""
+                if _safe_component(tip):
+                    candidate = snap_root / tip / "config.json"
+                    if candidate.is_file():
+                        return candidate
+            snaps = sorted(
+                path for path in snap_root.iterdir() if (path / "config.json").is_file()
+            )
+            if len(snaps) == 1:
+                return snaps[0] / "config.json"
+    return None
+
+
+def encoding_is_text_only_checkpoint() -> bool:
+    path = checkpoint_config_path()
+    if path is None:
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    layers = vision_layers_from_mapping(data)
+    return layers is not None and layers <= 0
 
 
 def main() -> int:
@@ -281,7 +409,10 @@ def main() -> int:
     _write(model_path, model_src, model_new, model_status)
 
     enc_src = encoding_path.read_text()
-    enc_new, enc_status = patch_encoding_text(enc_src)
+    text_only = (
+        "IMAGE_PLACEHOLDER" not in enc_src and encoding_is_text_only_checkpoint()
+    )
+    enc_new, enc_status = patch_encoding_text(enc_src, text_only=text_only)
     _write(encoding_path, enc_src, enc_new, enc_status)
 
     dspark_src = dspark_path.read_text()
