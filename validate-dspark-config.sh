@@ -24,10 +24,21 @@ set +a
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION_TEXT:-0.835}"
 export GPU_MEMORY_UTILIZATION
 
-DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
 DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4Flash-Vision-EXP-ablit}"
 DEFAULT_OFFICIAL_REVISION="86f746b36186f0e567729a5c06a8c918caba82a9"
+# DSPARK_MODEL resolution (begin)
+# DSPARK_MODEL is the resolved checkpoint id, not a switch. The switch is
+# DSPARK_MODEL_OFFICIAL (README: do not set DSPARK_MODEL by hand). A value
+# that disagrees used to be overwritten with no message, so the server came
+# up on the official checkpoint while the operator believed another was loaded.
+DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
+if [ -n "${DSPARK_MODEL+x}" ] && [ -n "$DSPARK_MODEL" ] && [ "$DSPARK_MODEL" != "$DSPARK_MODEL_OFFICIAL" ]; then
+  echo "error: DSPARK_MODEL='${DSPARK_MODEL}' disagrees with DSPARK_MODEL_OFFICIAL='${DSPARK_MODEL_OFFICIAL}'." >&2
+  echo "DSPARK_MODEL is not a switch. Remove it and set DSPARK_MODEL_OFFICIAL to the repo id you want." >&2
+  exit 2
+fi
 DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+# DSPARK_MODEL resolution (end)
 if [ -z "${DSPARK_REVISION+x}" ]; then
   DSPARK_REVISION="$DEFAULT_OFFICIAL_REVISION"
 fi

@@ -66,8 +66,20 @@ if [ -n "${THIS_NODE_HF_CACHE:-}" ]; then
   HF_CACHE="$THIS_NODE_HF_CACHE"
 fi
 
-DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
 DSPARK_MODEL_ABLITERATED="${DSPARK_MODEL_ABLITERATED:-drowzeys/keys-DeepSeekV4Flash-Vision-EXP-ablit}"
+# DSPARK_MODEL resolution (begin)
+# DSPARK_MODEL is the resolved checkpoint id, not a switch. The switch is
+# DSPARK_MODEL_OFFICIAL (README: do not set DSPARK_MODEL by hand). A value
+# that disagrees used to be overwritten with no message, so the server came
+# up on the official checkpoint while the operator believed another was loaded.
+DSPARK_MODEL_OFFICIAL="${DSPARK_MODEL_OFFICIAL:-deepseek-ai/DeepSeek-V4-Flash-Vision-Exp}"
+if [ -n "${DSPARK_MODEL+x}" ] && [ -n "$DSPARK_MODEL" ] && [ "$DSPARK_MODEL" != "$DSPARK_MODEL_OFFICIAL" ]; then
+  echo "error: DSPARK_MODEL='${DSPARK_MODEL}' disagrees with DSPARK_MODEL_OFFICIAL='${DSPARK_MODEL_OFFICIAL}'." >&2
+  echo "DSPARK_MODEL is not a switch. Remove it and set DSPARK_MODEL_OFFICIAL to the repo id you want." >&2
+  exit 2
+fi
+DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"
+# DSPARK_MODEL resolution (end)
 # Official tested pin. Override with DSPARK_REVISION=<sha> or clear with
 # DSPARK_REVISION= to follow tip of main. Abliterated uses DSPARK_REVISION_ABLITERATED
 # (default empty = tip of that repo).
