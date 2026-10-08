@@ -1,3 +1,8 @@
+## 2026-10-08
+
+### Fixed
+- **Vision-Exp encoding hotfix no longer aborts a text-only checkpoint**: `patches/hotfix-dsv4-vision-exp.py` treats an encoder with no `IMAGE_PLACEHOLDER` as drift and the entrypoint runs it on every boot, so a text-only checkpoint (0731 and the same family) exited before the engine started. When `DSPARK_MODEL` / `DSPARK_REVISION` resolve to a readable `config.json` with no vision tower (`vision_n_layers` <= 0, or a DeepSeek config that omits the key), the encoding half is now `skipped:text-only` and left byte-identical. The model hook and the `bias_vl` remap still apply. A missing config, a revision that is not a single cache path component, or a config that still declares a vision tower keeps `FATAL: ... drift:no-image-placeholder`. The default Vision-Exp lane is unchanged: its encoder contains the placeholder, so the config is not consulted. CPU coverage is in `scripts/test-dsv4-vision-exp-hotfix.py`.
+
 ## 2026-09-08
 
 ### Security

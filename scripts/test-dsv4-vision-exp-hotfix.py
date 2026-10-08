@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -53,6 +57,7 @@ patch_encoding_text = _mod.patch_encoding_text
 patch_model_text = _mod.patch_model_text
 patch_dspark_text = _mod.patch_dspark_text
 ENC_MARK = _mod.ENC_MARK
+vision_layers_from_mapping = _mod.vision_layers_from_mapping
 ENC_ROLE_MARK = _mod.ENC_ROLE_MARK
 ENC_ROLE_PAIRED_MARK = _mod.ENC_ROLE_PAIRED_MARK
 ENC_ROLE_TOOL_MARK = _mod.ENC_ROLE_TOOL_MARK
@@ -681,6 +686,208 @@ class DSparkDeepseekV4ForCausalLM:
         self.assertEqual(updated, skipped)
         _, drift = patch_dspark_text("def load_weights(self, weights): pass\n")
         self.assertTrue(drift.startswith("drift"))
+
+
+TEXT_ENCODING = "def render():\n    return 1\n"
+MODEL_STUB = (
+    "class DeepseekV4MoE:\n    pass\n\n"
+    "class DeepseekV4ForCausalLM:\n    pass\n"
+)
+
+
+class VisionExpTextOnlyEncodingTest(unittest.TestCase):
+    def test_missing_placeholder_stays_drift_unless_text_only(self):
+        _, status = patch_encoding_text(TEXT_ENCODING)
+        self.assertEqual(status, "drift:no-image-placeholder")
+        updated, skipped = patch_encoding_text(TEXT_ENCODING, text_only=True)
+        self.assertEqual(skipped, "skipped:text-only")
+        self.assertEqual(updated, TEXT_ENCODING)
+
+    def test_text_only_flag_does_not_skip_a_vision_encoder(self):
+        src = 'IMAGE_PLACEHOLDER = "<｜deepseek_image｜>"\n'
+        _, status = patch_encoding_text(src, text_only=True)
+        self.assertNotEqual(status, "skipped:text-only")
+        self.assertTrue(status.startswith("drift") or status == "applied")
+
+    def test_vision_layers_from_mapping(self):
+        self.assertEqual(vision_layers_from_mapping({"vision_n_layers": 32}), 32)
+        self.assertEqual(vision_layers_from_mapping({"vision_n_layers": 0}), 0)
+        self.assertEqual(vision_layers_from_mapping({"vision_n_layers": "0"}), 0)
+        self.assertEqual(
+            vision_layers_from_mapping({"vision_config": {"vision_n_layers": 8}}),
+            8,
+        )
+        self.assertEqual(
+            vision_layers_from_mapping({"model_type": "deepseek_v3"}),
+            0,
+        )
+        # Real 0731 / NVFP4 configs are deepseek_v4 and omit the key.
+        # Real Vision-Exp is the same model_type with vision_n_layers=32;
+        # the tower key wins, so a missing placeholder stays fail-closed.
+        self.assertEqual(
+            vision_layers_from_mapping({"model_type": "deepseek_v4"}),
+            0,
+        )
+        self.assertEqual(
+            vision_layers_from_mapping(
+                {"model_type": "deepseek_v4", "vision_n_layers": 32}
+            ),
+            32,
+        )
+        self.assertIsNone(vision_layers_from_mapping({"model_type": "llama"}))
+        self.assertIsNone(vision_layers_from_mapping({"vision_n_layers": "nope"}))
+        self.assertIsNone(vision_layers_from_mapping([]))
+
+    def _run_main(self, root: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+        patches = root / "patches"
+        patches.mkdir()
+        (patches / "apply.py").write_text("# overlay\n")
+        (patches / "vision.py").write_text("# overlay\n")
+        model = root / "model.py"
+        model.write_text(MODEL_STUB)
+        encoding = root / "encoding.py"
+        encoding.write_text(TEXT_ENCODING)
+        dspark = root / "dspark.py"
+        dspark.write_text(
+            "class DSparkDeepseekV4ForCausalLM:\n"
+            "    def load_weights(self, weights):\n"
+            "        params_dict = {}\n"
+            "        for name, loaded_weight in weights:\n"
+            "            if False:\n"
+            "                pass\n"
+            "            else:\n"
+            + _mod.DSPARK_GATE_BIAS_OLD
+            + "\n"
+        )
+        merged = os.environ.copy()
+        for key in ("HF_HOME", "HF_CACHE", "HUGGINGFACE_HUB_CACHE", "DSPARK_MODEL", "DSPARK_REVISION"):
+            merged.pop(key, None)
+        merged.update(env)
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "patches" / "hotfix-dsv4-vision-exp.py"),
+                str(patches),
+                str(model),
+                str(encoding),
+                str(dspark),
+            ],
+            capture_output=True,
+            text=True,
+            env=merged,
+        )
+
+    def _write_config(self, root: Path, model_id: str, revision: str, payload: dict) -> None:
+        org, name = model_id.split("/", 1)
+        dest = (
+            root
+            / "hf"
+            / "hub"
+            / f"models--{org}--{name}"
+            / "snapshots"
+            / revision
+        )
+        dest.mkdir(parents=True)
+        (dest / "config.json").write_text(json.dumps(payload))
+
+    def test_main_skips_encoding_on_a_text_only_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = "abc123"
+            model_id = "org/text-only"
+            self._write_config(
+                root, model_id, revision, {"model_type": "deepseek_v4"}
+            )
+            proc = self._run_main(
+                root,
+                {
+                    "DSPARK_MODEL": model_id,
+                    "DSPARK_REVISION": revision,
+                    "HF_HOME": str(root / "hf"),
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("skipped:text-only", proc.stdout)
+            self.assertEqual((root / "encoding.py").read_text(), TEXT_ENCODING)
+            self.assertIn(MODEL_MARK, (root / "model.py").read_text())
+            self.assertIn(DSPARK_MARK, (root / "dspark.py").read_text())
+
+    def test_main_still_fails_closed_when_the_config_declares_vision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = "abc123"
+            model_id = "org/vision"
+            self._write_config(
+                root,
+                model_id,
+                revision,
+                {"model_type": "deepseek_v4", "vision_n_layers": 32},
+            )
+            proc = self._run_main(
+                root,
+                {
+                    "DSPARK_MODEL": model_id,
+                    "DSPARK_REVISION": revision,
+                    "HF_HOME": str(root / "hf"),
+                },
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("drift:no-image-placeholder", proc.stderr)
+            self.assertEqual((root / "encoding.py").read_text(), TEXT_ENCODING)
+
+    def test_main_still_fails_closed_when_the_config_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proc = self._run_main(root, {"DSPARK_MODEL": "org/missing", "DSPARK_REVISION": "abc"})
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("drift:no-image-placeholder", proc.stderr)
+            self.assertEqual((root / "encoding.py").read_text(), TEXT_ENCODING)
+
+    def test_main_ignores_a_revision_that_leaves_the_snapshot_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_id = "org/text-only"
+            self._write_config(
+                root, model_id, "abc123", {"model_type": "deepseek_v3"}
+            )
+            proc = self._run_main(
+                root,
+                {
+                    "DSPARK_MODEL": model_id,
+                    "DSPARK_REVISION": "../abc123",
+                    "HF_HOME": str(root / "hf"),
+                },
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("drift:no-image-placeholder", proc.stderr)
+
+    def test_main_follows_refs_main_when_revision_is_unset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_id = "org/text-only"
+            self._write_config(
+                root, model_id, "tipsha", {"vision_n_layers": 0}
+            )
+            ref = root / "hf" / "hub" / "models--org--text-only" / "refs"
+            ref.mkdir(parents=True)
+            (ref / "main").write_text("tipsha\n")
+            # A second snapshot must not be guessed when refs/main names one.
+            extra = (
+                root
+                / "hf"
+                / "hub"
+                / "models--org--text-only"
+                / "snapshots"
+                / "other"
+            )
+            extra.mkdir()
+            (extra / "config.json").write_text('{"vision_n_layers": 32}')
+            proc = self._run_main(
+                root,
+                {"DSPARK_MODEL": model_id, "HF_HOME": str(root / "hf")},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertIn("skipped:text-only", proc.stdout)
 
 
 class VisionExpComposeWiringTest(unittest.TestCase):
