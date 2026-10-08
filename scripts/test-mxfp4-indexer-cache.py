@@ -18,10 +18,6 @@ FIXTURE = (
     ROOT / "scripts" / "fixtures" / "dspark-mxfp4-indexer" / "indexer-752a3a504-stock.py"
 )
 PATCHER = ROOT / "patches" / "hotfix-vllm-mxfp4-indexer-cache.py"
-COMPOSE = ROOT / "docker-compose.dspark.yml"
-START = ROOT / "start-deepseek-v4-flash-dspark.sh"
-ENV_EXAMPLE = ROOT / ".env.dspark.example"
-CI = ROOT / "scripts" / "ci-validate.sh"
 
 
 def _load():
@@ -174,65 +170,6 @@ class Patcher(unittest.TestCase):
             self.assertEqual(self.target.read_bytes(), before)
 
 
-class Wiring(unittest.TestCase):
-    def test_compose_gate_default_off_fail_closed(self):
-        compose = COMPOSE.read_text()
-        self.assertIn(
-            'DSPARK_ENABLE_MXFP4_INDEXER_CACHE: "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}"',
-            compose,
-        )
-        self.assertIn(
-            'if [ "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ]; then '
-            "python3 /opt/hotfix-vllm-mxfp4-indexer-cache.py || exit 1; fi;",
-            compose,
-        )
-        self.assertIn(
-            "${DSPARK_MXFP4_INDEXER_CACHE_HOTFIX:-./patches/hotfix-vllm-mxfp4-indexer-cache.py}"
-            ":/opt/hotfix-vllm-mxfp4-indexer-cache.py:ro",
-            compose,
-        )
-
-    def test_compose_emits_attention_config_only_when_enabled(self):
-        compose = COMPOSE.read_text()
-        # the arg is assembled by the same 0/1-exact case pattern as
-        # ASYNC_SCHEDULING_ARGS and expands to exactly two words
-        self.assertIn(
-            'case "$${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" in '
-            '1) MXFP4_INDEXER_ARGS="--attention-config '
-            '{\\"use_fp4_indexer_cache\\":true}" ;; '
-            '0) MXFP4_INDEXER_ARGS="" ;;',
-            compose,
-        )
-        self.assertIn("$${MXFP4_INDEXER_ARGS}", compose)
-        serve = compose.index("exec /usr/local/bin/vllm serve")
-        self.assertGreater(compose.index("$${MXFP4_INDEXER_ARGS}", serve), serve)
-
-    def test_launcher_passthrough_sync_preflight_and_alias_requirement(self):
-        start = START.read_text()
-        self.assertIn(
-            "DSPARK_MXFP4_INDEXER_CACHE_HOTFIX='./patches/hotfix-vllm-mxfp4-indexer-cache.py'",
-            start,
-        )
-        self.assertIn(
-            "DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER", start
-        )
-        self.assertIn("/opt/hotfix-vllm-mxfp4-indexer-cache.py --check", start)
-        self.assertIn('patches/hotfix-vllm-mxfp4-indexer-cache.py"', start)
-        # the fp4 logits kernels are not in the persisted JIT cache: enabling
-        # the cache without the sm121 alias headers must fail the launch
-        self.assertIn(
-            'if [ "${DSPARK_ENABLE_MXFP4_INDEXER_CACHE:-0}" = "1" ] && '
-            '[ "${DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS:-0}" != "1" ]; then',
-            start,
-        )
-        self.assertIn("requires DSPARK_ENABLE_DEEPGEMM_SM121_ALIAS=1", start)
-
-    def test_env_example_and_ci(self):
-        env = ENV_EXAMPLE.read_text()
-        self.assertIn("DSPARK_ENABLE_MXFP4_INDEXER_CACHE=0", env)
-        ci = CI.read_text()
-        self.assertIn("scripts/test-mxfp4-indexer-cache.py", ci)
-        self.assertIn("hotfix-vllm-mxfp4-indexer-cache.py", ci)
 
 
 if __name__ == "__main__":

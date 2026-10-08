@@ -31,6 +31,7 @@ for f in \
   scripts/test-nccl-ib-hca-gid-resolve.sh \
   scripts/boot-shape-warmup.sh \
   scripts/test-boot-shape-warmup.sh \
+  scripts/test-runtime-cache-ownership.sh \
   scripts/validate_tp3.sh \
   scripts/bench-patches.sh \
   lmcache/run-lmcache-server.sh \
@@ -221,6 +222,8 @@ bash scripts/test-boot-shape-warmup.sh -q
 ok "test-boot-shape-warmup"
 bash scripts/test-nccl-ib-hca-gid-resolve.sh -q
 ok "test-nccl-ib-hca-gid-resolve"
+bash scripts/test-runtime-cache-ownership.sh -q
+ok "test-runtime-cache-ownership"
 bash scripts/test-lmcache-compose-gate.sh -q
 ok "test-lmcache-compose-gate"
 
@@ -477,6 +480,36 @@ if grep -q 'restart: ${DSPARK_RESTART_POLICY:-unless-stopped}' docker-compose.ds
   ok "compose restart unless-stopped"
 else
   bad "compose missing restart: unless-stopped"
+fi
+if grep -A2 '^    cap_drop:$' docker-compose.dspark.yml | grep -Fq -- '- ALL' \
+  && grep -A4 '^    cap_add:$' docker-compose.dspark.yml | grep -Fq -- '- SETUID' \
+  && grep -A4 '^    cap_add:$' docker-compose.dspark.yml | grep -Fq -- '- SETGID' \
+  && grep -A4 '^    cap_add:$' docker-compose.dspark.yml | grep -Fq -- '- SETPCAP' \
+  && grep -A2 '^    security_opt:$' docker-compose.dspark.yml | grep -Fq -- '- no-new-privileges:true' \
+  && grep -A2 '^    group_add:$' docker-compose.dspark.yml | grep -Fq -- '${DSPARK_CACHE_READ_GID:-100}' \
+  && grep -Fq 'exec "$${RUNTIME_PRIVDROP[@]}" /usr/local/bin/vllm serve' docker-compose.dspark.yml \
+  && grep -Fq 'export USER=dspark LOGNAME=dspark;' docker-compose.dspark.yml \
+  && grep -Fq -- '--bounding-set=-all --no-new-privs' docker-compose.dspark.yml; then
+  ok "compose uses boot-only transition caps and executes vLLM non-root with an empty bounding set"
+else
+  bad "compose must cap-drop ALL, use only transition caps, and exec vLLM non-root with no capabilities"
+fi
+if grep -Fq '${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface:ro' docker-compose.dspark.yml \
+  && grep -Fq '${HF_CACHE:-${HOME}/.cache/huggingface}/hub:/cache/huggingface/hub:ro' docker-compose.dspark.yml \
+  && [ "$(grep -Ec '^      - \$\{HF_CACHE:-\$\{HOME\}/\.cache/huggingface\}/(runtime-home|flashinfer|tilelang-cache|triton-cache|b12x-cute-cache|vllm-cache|nccl-fr):/cache/huggingface/[^:]+:rw$' docker-compose.dspark.yml)" -eq 7 ] \
+  && grep -Fq '${VLLM_GB10_PATCH_DIR:-./vllm_patch_gb10}:/opt/vllm-gb10-hybrid-nvfp4:ro' docker-compose.dspark.yml \
+  && grep -Fq 'for _immutable_dir in /cache/huggingface /cache/huggingface/hub' docker-compose.dspark.yml; then
+  ok "compose makes the cache root/checkpoints/patches read-only and exposes seven named writable cache binds"
+else
+  bad "compose must make the cache root/checkpoints/patches read-only and expose only the named writable cache binds"
+fi
+if [ "$(grep -Fc -- '--user "${DSPARK_RUNTIME_UID}:${DSPARK_RUNTIME_GID}"' prepare-dspark-model-cache.sh)" -eq 2 ] \
+  && grep -Fq 'Run prepare as the configured runtime identity' prepare-dspark-model-cache.sh \
+  && grep -Fq '"$HF_CACHE/runtime-home"' prepare-dspark-model-cache.sh \
+  && grep -Fq '"$DSPARK_TMP_HOST"' prepare-dspark-model-cache.sh; then
+  ok "model preparation preserves the non-root cache ownership contract"
+else
+  bad "model preparation must run downloads/verifications as the runtime UID and prepare writable runtime paths"
 fi
 if grep -q 'exit 3' start-deepseek-v4-flash-dspark.sh \
   && grep -q 'SuccessExitStatus=3' start-deepseek-v4-flash-dspark.sh \
