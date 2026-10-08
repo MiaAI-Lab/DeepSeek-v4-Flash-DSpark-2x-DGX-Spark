@@ -177,6 +177,7 @@ docker compose --env-file .env.dspark \
 | `DSPARK_MODEL`, `DSPARK_REVISION`, `DSPARK_VLLM_IMAGE`, `ENABLE_VLLM_GB10_PATCH`, … | Launcher / compose only |
 | `DSPARK_RESTART_POLICY` | Compose `restart:` (default `unless-stopped`, issue #38). After a reboot, dockerd restores the ranks, so `./start-…` exits **3** (already running) rather than 1. Supervising the launcher: set systemd `SuccessExitStatus=3` + `RemainAfterExit=yes`, or set `DSPARK_RESTART_POLICY=no` if the unit owns start/stop. Exit 3 does **not** prove the TP group is healthy (head-only reboot can leave a stale worker). |
 | `DSPARK_STOP_GRACE` | Compose `stop_grace_period` (default `10s`; do not use 180s — hangs stop) |
+| `DSPARK_ENABLE_LMCACHE` | LMCache overlay only (`lmcache/README.md`). Not in the stock compose file. Exactly `1` takes the connector branch. The launcher copies the head's value into every worker `docker compose` (ssh does not forward a shell export). Unset or empty is forwarded as `0`. |
 
 
 ---
