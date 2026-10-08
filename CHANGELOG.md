@@ -1,3 +1,8 @@
+## 2026-10-08
+
+### Fixed
+- **An explicit `DSPARK_MODEL` that disagrees with `DSPARK_MODEL_OFFICIAL` is refused**: `start-deepseek-v4-flash-dspark.sh`, `validate-dspark-config.sh`, and `prepare-dspark-model-cache.sh` assigned `DSPARK_MODEL="$DSPARK_MODEL_OFFICIAL"` unconditionally. The checkpoint id is `DSPARK_MODEL_OFFICIAL` (README: do not set `DSPARK_MODEL` by hand), but a shell export or a stale `.env.dspark` line was discarded with no message, so the server came up on the official checkpoint while the operator believed another was loaded. A non-empty `DSPARK_MODEL` that differs now exits 2 and names both values; unset, empty, or equal to the resolved official id keeps the previous result. The same block is in all three scripts. CPU suite `scripts/test-model-id-resolution.py`.
+
 ## 2026-09-08
 
 ### Security

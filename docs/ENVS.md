@@ -174,7 +174,7 @@ docker compose --env-file .env.dspark \
 | `B12X_W4A16_TC_DECODE` | Non-`VLLM_` package/debug knob |
 | `VLLM_HOST` / `VLLM_PORT` | Used by **compose command substitution** / start scripts, not as in-process vLLM config envs in the same way as registry keys |
 | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | **Prepare only.** Forwarded into the download container (`-e`) on head and worker. Not passed to `vllm serve`. Prefer a shell export; a value in `.env.dspark` is scp'd to the worker. |
-| `DSPARK_MODEL`, `DSPARK_REVISION`, `DSPARK_VLLM_IMAGE`, `ENABLE_VLLM_GB10_PATCH`, … | Launcher / compose only |
+| `DSPARK_MODEL`, `DSPARK_REVISION`, `DSPARK_VLLM_IMAGE`, `ENABLE_VLLM_GB10_PATCH`, … | Launcher / compose only. `DSPARK_MODEL` is resolved from `DSPARK_MODEL_OFFICIAL`; an explicit value that disagrees is refused (exit 2) by start, validate, and prepare |
 | `DSPARK_RESTART_POLICY` | Compose `restart:` (default `unless-stopped`, issue #38). After a reboot, dockerd restores the ranks, so `./start-…` exits **3** (already running) rather than 1. Supervising the launcher: set systemd `SuccessExitStatus=3` + `RemainAfterExit=yes`, or set `DSPARK_RESTART_POLICY=no` if the unit owns start/stop. Exit 3 does **not** prove the TP group is healthy (head-only reboot can leave a stale worker). |
 | `DSPARK_STOP_GRACE` | Compose `stop_grace_period` (default `10s`; do not use 180s — hangs stop) |
 

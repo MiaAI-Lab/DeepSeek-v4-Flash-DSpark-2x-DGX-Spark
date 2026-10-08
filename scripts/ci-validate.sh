@@ -70,6 +70,7 @@ py_files+=(
   scripts/test-spec-acceptance.py
   scripts/test-ruler-lite-pad.py
   scripts/test-env-normalisation.py
+  scripts/test-model-id-resolution.py
   scripts/test-served-model-alias.py
   scripts/test-dspark-api-keys.py
   scripts/test-redact-api-key-log.py
@@ -139,6 +140,8 @@ python3 scripts/test-bench-patches-prompt.py -q
 ok "test-bench-patches-prompt"
 python3 scripts/test-env-normalisation.py -q
 ok "test-env-normalisation"
+python3 scripts/test-model-id-resolution.py -q
+ok "test-model-id-resolution"
 python3 scripts/test-stop-name-filter.py -q
 ok "test-stop-name-filter"
 python3 scripts/test-served-model-alias.py -q

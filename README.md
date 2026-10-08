@@ -168,6 +168,9 @@ GPU_MEMORY_UTILIZATION_TEXT=0.87
 Copy [`.env.dspark.example`](.env.dspark.example) → `.env.dspark`. Start syncs
 it to the worker. **Restart both ranks** after a flip (`./stop-…` then
 `./start-…`). Do not set `DSPARK_MODEL` or `GPU_MEMORY_UTILIZATION` by hand.
+`DSPARK_MODEL` is filled from `DSPARK_MODEL_OFFICIAL`. If you set it anyway
+and the two values differ, `start`, `validate`, and `prepare` exit 2 and name
+both, instead of serving the official checkpoint with no message.
 
 NCCL/RoCE, CUDA arch, and compile knobs stay in the example file — they are
 cluster wiring, not product switches. Full Anemll vs Stage-C matrix:
