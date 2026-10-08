@@ -171,6 +171,12 @@ export DSPARK_ENABLE_LMCACHE=1
 COMPOSE_FILE=$PWD/docker-compose.lmcache.yml ./start-deepseek-v4-flash-dspark.sh
 ```
 
+The launcher copies that value into every worker `docker compose`, including
+`up -d`. A worker ssh session does not see a shell export on its own. Putting
+`DSPARK_ENABLE_LMCACHE=1` in `.env.dspark` also works: start sources the file
+before it builds the worker command. Unset or empty is sent as `0`. The gate
+still opens only when the value is exactly `1`.
+
 Knobs on `run-lmcache-server.sh`: `LMCACHE_DISK_DIR`, `LMCACHE_L1_GB`,
 `LMCACHE_PORT`, `LMCACHE_OOM_SCORE_ADJ` (default `0`), and
 `LMCACHE_FORCE_REPLACE=1` to override the guard against re-creating a

@@ -100,6 +100,7 @@ py_files+=(
   tests/test_dspark_stacked_mapping.py
   tests/test_issue133_triton_specialization.py
   lmcache/patch-compose-lmcache.py
+  scripts/test-lmcache-remote-env.py
 )
 python3 -m py_compile "${py_files[@]}"
 ok "py_compile ${#py_files[@]} files"
@@ -223,6 +224,8 @@ bash scripts/test-nccl-ib-hca-gid-resolve.sh -q
 ok "test-nccl-ib-hca-gid-resolve"
 bash scripts/test-lmcache-compose-gate.sh -q
 ok "test-lmcache-compose-gate"
+python3 scripts/test-lmcache-remote-env.py -q
+ok "test-lmcache-remote-env"
 
 echo "== recipe guards (do not re-ship known regressions) =="
 
@@ -710,10 +713,11 @@ for fn in remote_compose remote_compose2; do
     && grep -Fq 'DSPARK_ENABLE_DSPARK_SWA_PREFIX=$REMOTE_DSPARK_SWA_PREFIX' <<<"$body" \
     && grep -Fq 'DSPARK_ENABLE_DSML_RECOVERY=$REMOTE_DSML_RECOVERY' <<<"$body" \
     && grep -Fq 'DSPARK_ENABLE_MXFP4_INDEXER_CACHE=$REMOTE_MXFP4_INDEXER' <<<"$body" \
-    && grep -Fq 'DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN' <<<"$body"; then
+    && grep -Fq 'DSPARK_ENABLE_ISSUE144_EFFORT_ALIGN=$REMOTE_ISSUE144_EFFORT_ALIGN' <<<"$body" \
+    && grep -Fq 'DSPARK_ENABLE_LMCACHE=$REMOTE_LMCACHE' <<<"$body"; then
     ok "$fn carries the full passthrough set exactly once"
   else
-    bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery/mxfp4-indexer/issue144 passthroughs"
+    bad "$fn must be defined exactly once and carry issue191/async/block-k + rope-swa/swa-prefix/dsml-recovery/mxfp4-indexer/issue144/lmcache passthroughs"
   fi
 done
 echo "CI validate passed (CPU recipe gates only)."

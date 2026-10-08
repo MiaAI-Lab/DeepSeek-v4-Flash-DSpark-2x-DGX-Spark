@@ -1,3 +1,8 @@
+## 2026-10-08
+
+### Fixed
+- **`DSPARK_ENABLE_LMCACHE` reaches every worker compose**: `export DSPARK_ENABLE_LMCACHE=1` was visible to the head (`compose_base` inherits the shell) and absent on the worker. `remote_compose` / `remote_compose2` run over ssh, which does not forward the export, and the worker env file is the sourced `.env.dspark`, not the shell. Both functions now pass `DSPARK_ENABLE_LMCACHE` in the `env` prefix, quoted with `printf %q`. Unset or empty is `0`. The overlay still enables the connector only when the value is exactly `1`. CPU suite `scripts/test-lmcache-remote-env.py`.
+
 ## 2026-09-08
 
 ### Security
