@@ -130,7 +130,7 @@ Enable/`--check`/`--status` semantics and exit codes, the launcher's
 worker/head preflight order, the required live closure gate, and the
 two-node stop/removal rollback rule (a process or Docker restart is **not**
 rollback) are documented in
-[`PATCHES.md`](PATCHES.md#issue-136--xgrammar-accepts-speculative-tokens-after-termination).
+[`PATCHES.md`](PATCHES.md#issues-136--210--xgrammar-termination-and-post-reasoning-fsm-chain).
 
 ### B. Stage-C / overlay-registered only (warn + no-op on Anemll 0.1.1)
 

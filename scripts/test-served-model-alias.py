@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""CPU regressions for model selection in startup probes and warmup."""
+"""CPU regressions for model selection in startup probes, warmup and smoke."""
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,9 +18,30 @@ SOURCE = LAUNCHER.read_text(encoding="utf-8")
 SELECTION_BEGIN = "# Probe/warmup model selection (begin)."
 SELECTION_END = "# Probe/warmup model selection (end)."
 SMOKE = ROOT / "smoke-deepseek-v4-flash-dspark.sh"
-SMOKE_SOURCE = SMOKE.read_text(encoding="utf-8")
-SMOKE_SELECTION_BEGIN = "# Smoke model selection (begin)"
-SMOKE_SELECTION_END = "# Smoke model selection (end)"
+
+# Transport stand-in for the smoke CLI: records the request body it was handed
+# and answers with the minimal response shape the CLI accepts. Nothing leaves
+# the process — no endpoint, key or server is involved.
+CURL_STUB = """#!/usr/bin/env bash
+set -euo pipefail
+body=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d)
+      body="$2"
+      shift 2
+      ;;
+    --max-time|-H)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+printf '%s' "$body" >"${SMOKE_CAPTURE_DIR:?}/request.$$.$RANDOM.json"
+printf '{"choices":[{"message":{"role":"assistant","content":"OK"}}]}'
+"""
 
 
 def extract_selection() -> str:
@@ -74,38 +97,64 @@ class SelectionBehaviorTest(unittest.TestCase):
         self.assert_selection("  alias-a\t alias-b  ", "alias-a")
 
 
-class LauncherWiringTest(unittest.TestCase):
-    def test_every_ready_probe_uses_selected_alias(self) -> None:
-        start = SOURCE.index(SELECTION_BEGIN)
-        ready_block = SOURCE[start : SOURCE.index("    exit 0", start)]
-        after_selection = ready_block[ready_block.index(SELECTION_END) :]
+class SmokeRequestModelTest(unittest.TestCase):
+    """Run the shipped smoke CLI and read the model it puts in the request.
 
-        self.assertNotIn("${SERVED_MODEL_NAME", after_selection)
+    The no-env fallback is the lane this repo serves: `.env.dspark.example`
+    publishes SERVED_MODEL_NAME=deepseek-v4-flash-vision-exp, so the smoke CLI
+    fallback is that contract rather than an arbitrary default.
+    """
+
+    def run_smoke(self, served_model: str | None) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            shim = work / "bin"
+            shim.mkdir()
+            curl = shim / "curl"
+            curl.write_text(CURL_STUB, encoding="utf-8")
+            curl.chmod(0o755)
+            requests = work / "requests"
+            requests.mkdir()
+            env_file = work / "env.dspark"
+            env_file.write_text("", encoding="utf-8")
+
+            env = {
+                "PATH": f"{shim}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+                "HOME": os.environ.get("HOME", str(work)),
+                "ENV_FILE": str(env_file),
+                "CHAT_URL": "http://smoke.invalid/v1/chat/completions",
+                "CONCURRENCY": "1",
+                "SMOKE_CAPTURE_DIR": str(requests),
+            }
+            if served_model is not None:
+                env["SERVED_MODEL_NAME"] = served_model
+
+            result = subprocess.run(
+                ["bash", str(SMOKE)],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            captured = sorted(requests.glob("*.json"))
+            self.assertEqual(
+                len(captured), 1, "the smoke CLI must send exactly one request"
+            )
+            return json.loads(captured[0].read_text(encoding="utf-8"))
+
+    def test_unset_env_sends_the_served_vision_exp_alias(self) -> None:
         self.assertEqual(
-            ready_block.count("'\"${PROBE_MODEL}\"'"),
-            2,
-            "both startup chat payloads must use the selected alias",
-        )
-        self.assertIn(
-            '"${CHAT_URL%/v1/chat/completions}" "$PROBE_MODEL"',
-            ready_block,
+            self.run_smoke(None)["model"],
+            "deepseek-v4-flash-vision-exp",
         )
 
-    def test_smoke_uses_selected_alias(self) -> None:
-        start = SMOKE_SOURCE.index(SMOKE_SELECTION_BEGIN)
-        after_selection = SMOKE_SOURCE[
-            SMOKE_SOURCE.index(SMOKE_SELECTION_END, start)
-        :]
+    def test_explicit_alias_reaches_the_request(self) -> None:
+        self.assertEqual(self.run_smoke("alias-a")["model"], "alias-a")
 
-        self.assertIn(
-            'read -r MODEL _ <<< "${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}"',
-            SMOKE_SOURCE[start : SMOKE_SOURCE.index(SMOKE_SELECTION_END, start)],
-        )
-        self.assertNotIn("${SERVED_MODEL_NAME", after_selection)
-        self.assertIn(
-            '''-d '{"model":"'"$MODEL"'","messages":''',
-            after_selection,
-        )
+    def test_first_of_several_aliases_reaches_the_request(self) -> None:
+        self.assertEqual(self.run_smoke("alias-a alias-b")["model"], "alias-a")
 
 
 if __name__ == "__main__":

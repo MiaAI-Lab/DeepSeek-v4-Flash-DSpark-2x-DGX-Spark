@@ -52,10 +52,10 @@ EXPECTED_VLLM_VERSION = "0.25.2.dev0+g752a3a504.d20260714"
 PRISTINE_SHA256 = "6239fae503211193942d0e2037f7b0edcf71ed70271604701283bfc0453d202b"
 PRISTINE_SIZE = 49_931
 # Post-issue55 bytes (issue #55 hotfix is unconditional in Compose).
-STOCK_SHA256 = "08ddb5f3b6cd8dd465208e787a7cdb45da308ffeb4e7bc5f8d40ccdec8e15f77"
-STOCK_SIZE = 51_928
-PATCHED_SHA256 = "bfeccebf2f304e4e018198ea785c94a39e782dda4d6feada548b15eddf7a4916"
-PATCHED_SIZE = 63087
+STOCK_SHA256 = "4024243c259058c09f4d9340d42f410e68e160b96fcd5c09b1a68467b04f4f3a"
+STOCK_SIZE = 51_912
+PATCHED_SHA256 = "abedfadbd28207801736f5bd4ec7cbcec8fc318e00ee2a1c762243975204a128"
+PATCHED_SIZE = 63_071
 MARK = "# [issue191-hotfix] fail-closed named/required tool_choice contract"
 ISSUE55_MARK = "# [issue55-hotfix] tool-call truncation safety"
 

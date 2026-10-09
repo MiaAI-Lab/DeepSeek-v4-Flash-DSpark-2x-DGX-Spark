@@ -14,6 +14,8 @@ from the Vision-Exp checkpoint, OpenAI `image_url` / `<image>path</image>`).
 There is **no video encoder** in the official weights; GIF is a still frame.
 The old Qwen3-VL sidecar / MCP path is removed.
 
+The files added in [`7f1217f`](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/commit/7f1217f236ac96ec034c1645acc08a643492b09d), including the files under `recipe/overlay/`, came from **Tony D** ([tonyd2wild](https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark)). He is the author of that work.
+
 **Default image:** [`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`](https://github.com/Anemll/dspark-vllm-gx10)
 
 **Numbers:** [results/RESULTS-2026-08-14.md](results/RESULTS-2026-08-14.md) (dated
@@ -138,7 +140,7 @@ hosts or it can kill vLLM under deep-context load.
 | Context ceiling | `MAX_MODEL_LEN=1048576` (1M) |
 | Concurrent seqs | `MAX_NUM_SEQS=6` |
 | Batch tokens | `MAX_NUM_BATCHED_TOKENS=8192` |
-| KV | `nvfp4_ds_mla`, **17.04 GiB / 2,331,430 tokens** on this cluster (util 0.83; Vision-Exp ViT takes more weight RAM than 0731) |
+| KV | `nvfp4_ds_mla`, **17.04 GiB / 2,331,430 tokens** on this cluster (util 0.835; Vision-Exp ViT takes more weight RAM than 0731) |
 | Spec | `MTP_NUM_TOKENS=6` (≥ `dspark_block_size` 5 and divisible by Vision-Exp `n_predict=3`) |
 | Thinking | `DEFAULT_THINKING=low` (`off` / `low` / `high` / `max`) |
 | Graphs | `VLLM_USE_BREAKABLE_CUDAGRAPH=0` (keep this; unset is slower) |
@@ -339,7 +341,7 @@ On the **default Anemll 1M/6** stack:
 
 | **Three Sparks (TP=3, `./start-tp3.sh`, 16 slots)** | Decode ≈ +4–13 % per stream and **≈ 200 tok/s aggregate at 16 streams**; prefill 4–13 % slower to 64K and ≈ 22 % slower at 128K–256K (5.0 / 18.6 / 91 / 202 s TTFT at 8K / 32K / 128K / 256K vs 4.4 / 18.0 / 75 / 165 s on two nodes). See [Optional: three Sparks (TP=3)](#optional-three-sparks-tp3). |
 
-That ~170–190 c=6 number is **six streams generating**, not six huge prefills.
+That ~160–190 c=6 number is **six streams generating**, not six huge prefills.
 Live 2026-08-14 on this cluster: 256 × c=6 = **162** agg; 128K × c=1 still
 **75 tok/s** / **80 s** TTFT.
 
@@ -494,7 +496,7 @@ yet supported by the V2 model runner` — so keep the capability `false` unless
 
 | Knob | Meaning | This build |
 | --- | --- | --- |
-| KV pool | Shared blocks after weights load | 2,331,430 tokens / 17.04 GiB @ util 0.83 |
+| KV pool | Shared blocks after weights load | 2,331,430 tokens / 17.04 GiB @ util 0.835 |
 | `max_model_len` | Per-request **ceiling** | 1,048,576 |
 | `max_num_seqs` | Max **active** sequences | 6 |
 
@@ -516,7 +518,7 @@ Validate **direct** `:8888` first, then the agent harness.
 
 1. Same image digest on both nodes (`docker image inspect $DSPARK_VLLM_IMAGE`).
    Compose must use `/usr/local/bin/vllm` (Anemll), not Stage-C `/opt/env`.
-2. Full 0731 hub snapshot on **head and worker**, including
+2. Full Vision-Exp hub snapshot on **head and worker**, including
    `encoding/encoding_dsv4.py`.
 3. Send `temperature: 0` for deterministic curls. Clear harness fallback lists
    so another model cannot poison the transcript.

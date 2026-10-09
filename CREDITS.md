@@ -1,5 +1,7 @@
 # Credits
 
+The files added in [`7f1217f`](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/commit/7f1217f236ac96ec034c1645acc08a643492b09d), including the files under `recipe/overlay/`, came from **Tony D** ([tonyd2wild](https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark)). He is the author of that work.
+
 This repo combines several public efforts. Please credit the upstream authors
 when reusing the recipe, the patch, or benchmark numbers.
 
@@ -83,13 +85,9 @@ This work also relies on:
 - DeepSeek V4 Flash
 - DeepSeek-AI DeepSpec / DSpark speculative decoding research
 
-## TonyD2Wild NVFP4 Recipe Lineage
+## Tony D (tonyd2wild)
 
-TonyD2Wild's public NVFP4 recipe work informed this fork's garble-fix launcher
-defaults, runtime documentation, and the non-uniform batch guard merged into the
-bind-mounted `dspark_proposer.py`.
-
-- https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark
+The files added in [`7f1217f`](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/commit/7f1217f236ac96ec034c1645acc08a643492b09d), including the files under `recipe/overlay/`, came from Tony D ([tonyd2wild](https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark)). He is the author of that work.
 
 ## MiaAI-Lab Contribution
 

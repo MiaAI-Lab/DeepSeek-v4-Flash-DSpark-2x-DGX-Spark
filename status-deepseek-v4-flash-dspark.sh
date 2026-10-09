@@ -7,7 +7,6 @@ COMPOSE_FILE="${COMPOSE_FILE:-$SCRIPT_DIR/docker-compose.dspark.yml}"
 PROJECT_NAME="${PROJECT_NAME:-deepseek-v4-flash}"
 LEGACY_PROJECT_NAME="${LEGACY_PROJECT_NAME:-$(basename "$SCRIPT_DIR" | tr '[:upper:]' '[:lower:]')}"
 API_URL="${API_URL:-}"
-PORT="${PORT:-8888}"
 
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -15,6 +14,20 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
   set +a
 fi
+
+# The listening port is VLLM_PORT (the compose knob); PORT is a legacy alias a
+# few operators export. Resolve once, after the env file is sourced, so the ss
+# listing below and the API probe watch the same port the server bound.
+: "${VLLM_PORT:=${PORT:-8888}}"
+
+# Every probe below stays best-effort for human diagnostics (all output is
+# still printed), but failures are counted and surfaced in the exit code so a
+# supervisor or runbook can trust `./status-…` as a health signal.
+STATUS_FAILURES=0
+note_failure() {
+  echo "WARN: $*" >&2
+  STATUS_FAILURES=$((STATUS_FAILURES + 1))
+}
 
 # DSPARK_API_KEYS auth (begin)
 AUTH_HEADER_ARGS=()
@@ -74,14 +87,17 @@ WORKER2_DIR="${WORKER2_SCRIPT_DIR:-${WORKER2_DIR:-$WORKER_DIR}}"
 show_compose() {
   local project="$1"
   echo "== head compose: $project =="
-  COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$project" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps || true
+  COMPOSE_DISABLE_ENV_FILE=1 docker compose -p "$project" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps \
+    || note_failure "head compose ps failed (project $project)"
   echo
   echo "== worker compose: $project =="
-  ssh "$WORKER_HOST" "cd '$WORKER_DIR' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml ps" || true
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "cd '$WORKER_DIR' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml ps" \
+    || note_failure "worker compose ps failed ($WORKER_HOST)"
   echo
   if [ -n "${WORKER2_HOST:-}" ]; then
     echo "== worker2 compose: $project =="
-    ssh "$WORKER2_HOST" "cd '${WORKER2_DIR:-$WORKER_DIR}' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml ps" || true
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER2_HOST" "cd '${WORKER2_DIR:-$WORKER_DIR}' && COMPOSE_DISABLE_ENV_FILE=1 docker compose -p '$project' --env-file .env.dspark -f docker-compose.dspark.yml ps" \
+      || note_failure "worker2 compose ps failed ($WORKER2_HOST)"
     echo
   fi
 }
@@ -95,23 +111,32 @@ echo "== head matching containers =="
 docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true
 echo
 echo "== worker matching containers =="
-ssh "$WORKER_HOST" "docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true" || true
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true" || true
 echo
 if [ -n "${WORKER2_HOST:-}" ]; then
   echo "== worker2 matching containers =="
-  ssh "$WORKER2_HOST" "docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true" || true
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER2_HOST" "docker ps -a --format '{{.Names}} {{.Status}} {{.Image}}' | grep -E 'deepseek|dspark|vllm' || true" || true
   echo
 fi
 echo "== images =="
-docker image inspect "$DSPARK_VLLM_IMAGE" --format "head $DSPARK_VLLM_IMAGE {{.Id}}" || true
-ssh "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' --format 'worker $DSPARK_VLLM_IMAGE {{.Id}}'" || true
+docker image inspect "$DSPARK_VLLM_IMAGE" --format "head $DSPARK_VLLM_IMAGE {{.Id}}" \
+  || note_failure "head image inspect failed ($DSPARK_VLLM_IMAGE)"
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' --format 'worker $DSPARK_VLLM_IMAGE {{.Id}}'" \
+  || note_failure "worker image inspect failed ($WORKER_HOST)"
 if [ -n "${WORKER2_HOST:-}" ]; then
-  ssh "$WORKER2_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' --format 'worker2 $DSPARK_VLLM_IMAGE {{.Id}}'" || true
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$WORKER2_HOST" "docker image inspect '$DSPARK_VLLM_IMAGE' --format 'worker2 $DSPARK_VLLM_IMAGE {{.Id}}'" \
+    || note_failure "worker2 image inspect failed ($WORKER2_HOST)"
 fi
 echo
 echo "== port/API =="
 if command -v ss >/dev/null 2>&1; then
-  ss -ltn "( sport = :$PORT )" || true
+  ss -ltn "( sport = :$VLLM_PORT )" || true
 fi
-curl -fsS --max-time 5 "${AUTH_HEADER_ARGS[@]}" "$API_URL" || true
+curl -fsS --max-time 5 "${AUTH_HEADER_ARGS[@]}" "$API_URL" \
+  || note_failure "API probe failed ($API_URL)"
 echo
+
+if [ "$STATUS_FAILURES" -gt 0 ]; then
+  echo "status: $STATUS_FAILURES probe(s) failed — cluster is not fully healthy" >&2
+  exit 1
+fi

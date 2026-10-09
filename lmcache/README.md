@@ -5,10 +5,11 @@ Persistent KV cache across engine restarts: a ~107K-token context that costs
 GB10 pair, `nvfp4_ds_mla`). KV is held by per-node `lmcache server` processes
 (L1 CPU + filesystem L2 on the local NVMe) that survive engine restarts.
 
-**Status: experimental.** Serving-path verified (boot, store, warm hits,
-reload) across repeated trials; the *failure paths* upstream are still being
-hardened — see Operational risk and Known issues. Do not enable on a pair you
-cannot restart.
+**Status: experimental.** The measurements above describe earlier serving-path
+trials, not qualification of the fallback repair described below. A subsequent
+fallback-path capture failed store/reload qualification. The repaired stack
+has not completed a native retest. Failure paths also remain under hardening —
+see Operational risk and Known issues. Do not enable on a pair you cannot restart.
 
 ## Operational risk — owner decision required
 
@@ -82,17 +83,40 @@ the upstream heartbeat fix lands.
 
 ## Requirements baked into a derived image (the pinned Anemll image lacks them)
 
-```
+Historical dependency baseline below; **not a qualified retest installation**:
+
+```sh
 pip install --no-deps lmcache==0.5.4
 pip install sortedcontainers aiofile aiofiles cupy-cuda13x
 ```
-`cupy` matters: without it the server *silently* fails GPU-context creation
-and every engine registration kills the vLLM head (LMCache #4759 covers the
-fail-fast ask). The lmcache wheel's bundled `cuda_ops` is ABI-mismatched
-against this image's torch — it soft-falls back to torch ops (works; slower
-stores). Building it from source against the image's torch works
-(`TORCH_CUDA_ARCH_LIST=12.1a`; the image's CUDA toolkit is header-trimmed —
-fill cusparse/cusolver/cufft headers from the `nvidia-*-cu13` pip wheels).
+`cupy` matters: without it the server can fail GPU-context creation and
+engine registration can kill the vLLM head (LMCache #4759 covers the fail-fast
+ask). The captured wheel was built against torch 2.13 while the image used
+2.11. This version mismatch is a plausible explanation for the native
+`cuda_ops` load failure, **not a confirmed ABI diagnosis**: the original
+loader exception was not captured. A missing fallback warning alone does not
+prove correct transfers.
+
+**Do not rely on the unpatched torch fallback for this model.** The examined
+fallback through LMCache 0.5.5 ignores the padded block stride of shared KV
+pages and reconstructs `indexer.k_cache` (`NL_X_NB_BSV_BSS`) with the wrong
+rank. Offline reproduction confirms incorrect store layout and the 3-D/5-D
+`index_copy_` reload failure. The repair must also repack values/scales and
+preserve write-through aliases for device-resident chunk pointers.
+
+Separately, LMCache 0.5.4 lacks failed-retrieve invalidation corrected upstream
+by `23cca67908e17b193eb8fab08ba1beb0115881cd` (included in 0.5.5).
+A layout-only backport to 0.5.4 is therefore **not sufficient for retesting**.
+Malformed output appeared in the failed capture, but its precise causal chain
+has not been independently isolated; cache-hit accounting is not proof that
+reload completed successfully.
+
+Before a live retest, select an exact reviewed LMCache revision containing
+both the fallback repair and failed-retrieve invalidation. Record the runtime
+and extension build identities, and capture the actual loader exception if
+native loading fails. Qualification requires successful store/reload completion,
+the strict cache-hit gate, and correct output on the intended native stack.
+Offline CPU checks do not provide that qualification.
 
 ## Non-negotiable configuration
 

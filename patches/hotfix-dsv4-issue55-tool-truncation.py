@@ -24,6 +24,8 @@ serving path (both in
 
 The fix is gated entirely on the engine's own ``FinishReason.LENGTH`` signal
 so a normal model-terminated tool call is unchanged.
+Filtered tool-call collections stay lists: vLLM's message serializers call
+``len(tool_calls)`` and omit empty lists; assigning ``None`` raises instead.
 
 Usage (inside the container, after vLLM source is on disk):
   python3 hotfix-dsv4-issue55-tool-truncation.py
@@ -94,7 +96,10 @@ STREAMING_NEW = (
     "                                if getattr(tc, \"function\", None)\n"
     "                                and _dsml_issue55_json_ok(tc.function.arguments)\n"
     "                            ]\n"
-    "                            delta_message.tool_calls = _kept or None"
+    "                            delta_message.tool_calls = _kept"
+)
+STREAMING_PREVIOUS = STREAMING_NEW.replace(
+    "delta_message.tool_calls = _kept", "delta_message.tool_calls = _kept or None"
 )
 
 # --- Non-streaming edit ---
@@ -122,7 +127,7 @@ NOSTREAM_NEW = (
     "                        for tc in message.tool_calls\n"
     "                        if getattr(tc, \"function\", None)\n"
     "                        and _dsml_issue55_json_ok(tc.function.arguments)\n"
-    "                    ] or None\n"
+    "                    ]\n"
     "            choice_data = ChatCompletionResponseChoice(\n"
     "                index=output.index,\n"
     "                message=message,\n"
@@ -133,15 +138,23 @@ NOSTREAM_NEW = (
     "                if output.finish_reason\n"
     "                else \"stop\","
 )
+NOSTREAM_PREVIOUS = NOSTREAM_NEW.replace(
+    "                    ]\n", "                    ] or None\n"
+)
 
 
-def _patch_file(path: Path, old: str, new: str, what: str) -> str:
+def _patch_file(path: Path, old: str, new: str, what: str, previous: str | None = None) -> str:
     """Apply `new` over `old` once; idempotent. Returns applied|skipped|missing."""
     source = path.read_text(encoding="utf-8")
     if new in source:
-        return "skipped"
+        # The streaming replacement is a prefix of the previous buggy line.
+        if not previous or previous not in source:
+            return "skipped"
     if old not in source:
-        return "missing"
+        if previous and previous in source:
+            old = previous
+        else:
+            return "missing"
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
     return "applied"
 
@@ -159,12 +172,12 @@ def main() -> int:
         print(f"[FAIL] serving file not found: {path}", file=sys.stderr)
         return 1
     print(f"[issue55-hotfix] patching {path}")
-    for name, old, new in [
-        ("module helper", HELPER_ANCHOR, HELPER_NEW),
-        ("streaming final chunk", STREAMING_OLD, STREAMING_NEW),
-        ("non-streaming final choice", NOSTREAM_OLD, NOSTREAM_NEW),
+    for name, old, new, previous in [
+        ("module helper", HELPER_ANCHOR, HELPER_NEW, None),
+        ("streaming final chunk", STREAMING_OLD, STREAMING_NEW, STREAMING_PREVIOUS),
+        ("non-streaming final choice", NOSTREAM_OLD, NOSTREAM_NEW, NOSTREAM_PREVIOUS),
     ]:
-        status = _patch_file(path, old, new, name)
+        status = _patch_file(path, old, new, name, previous)
         if status == "missing":
             print(f"[FAIL] {name}: anchor not found in {path.name}")
             return 1

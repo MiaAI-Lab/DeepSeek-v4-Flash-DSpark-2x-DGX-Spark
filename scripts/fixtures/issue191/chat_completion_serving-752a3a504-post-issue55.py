@@ -727,7 +727,7 @@ class OpenAIServingChat(GenerateBaseServing):
                                 if getattr(tc, "function", None)
                                 and _dsml_issue55_json_ok(tc.function.arguments)
                             ]
-                            delta_message.tool_calls = _kept or None
+                            delta_message.tool_calls = _kept
                         choice_data = ChatCompletionResponseStreamChoice(
                             index=i,
                             delta=delta_message,
@@ -1012,7 +1012,7 @@ class OpenAIServingChat(GenerateBaseServing):
                         for tc in message.tool_calls
                         if getattr(tc, "function", None)
                         and _dsml_issue55_json_ok(tc.function.arguments)
-                    ] or None
+                    ]
             choice_data = ChatCompletionResponseChoice(
                 index=output.index,
                 message=message,

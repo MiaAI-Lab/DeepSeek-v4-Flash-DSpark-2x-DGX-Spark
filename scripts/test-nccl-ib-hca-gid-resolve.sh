@@ -54,6 +54,11 @@ else
 fi
 eval "$(awk '/^resolve_rocev2_gid_index\(\) \{$/,/^\}$/' "$START")"
 eval "$(awk '/^resolve_nccl_gid_indexes\(\) \{$/,/^\}$/' "$START")"
+# The resolver routes its remote probe through the launcher's dssh wrapper;
+# define the shipped one, with a plain-ssh fallback so pre-wrapper heads still
+# exercise the resolver logic.
+eval "$(awk '/^dssh\(\) \{/,/^\}$/' "$START")"
+declare -F dssh >/dev/null 2>&1 || dssh() { ssh "$@"; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -82,6 +87,12 @@ STUB
 # remote login banner without changing the resolver's successful exit status.
 cat >"$stub/ssh" <<'STUB'
 #!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    *) break ;;
+  esac
+done
 if [ "$#" -ne 2 ] || [ "$1" != "${SSH_EXPECT_TARGET:-}" ] || [ "$2" != "bash -s" ]; then
   printf 'ssh stub: unexpected argv\n' >&2
   exit 64

@@ -21,8 +21,12 @@ def extract_before(start: str, end: str) -> str:
 ENV_BLOCK = extract_before("_dspark_env_clean=", "# GPU util comes from GPU_MEMORY_UTILIZATION_TEXT")
 PUBLISH_BLOCK = extract_before(
     "# Stream into a private sibling",
-    'ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"',
+    'dssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"',
 )
+
+# The launcher routes ssh through dssh() (BatchMode + ConnectTimeout); the
+# publish block calls it, so the harness needs the shipped definition.
+DSSH_DEF = next(ln for ln in SOURCE.splitlines() if ln.startswith("dssh() {"))
 
 
 def run_env(content: bytes, extra: str = "") -> subprocess.CompletedProcess:
@@ -129,6 +133,12 @@ class WorkerPublishTest(unittest.TestCase):
 
         write_executable(bindir / "ssh", """#!/usr/bin/env bash
 set -euo pipefail
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    *) break ;;
+  esac
+done
 shift
 exec bash -c "$*"
 """)
@@ -153,6 +163,7 @@ PATH={shlex.quote(str(bindir))}:/usr/bin:/bin
 WORKER_HOST=worker
 REMOTE_ENV_FILE="$(printf %q {shlex.quote(str(final))})"
 COMPOSE_ENV_FILE={shlex.quote(str(source))}
+{DSSH_DEF}
 {PUBLISH_BLOCK}
 echo OK
 """

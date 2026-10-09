@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """CPU regression tests for the issue #55 tool-call truncation hotfix.
 
-These are CPU-only gates: they verify the patch file's anchors match a known
-stock ``serving.py`` shape, that apply is atomic and idempotent, that the
-patch keeps Python-parseable, and that the helper behaves sensibly.
+These are CPU-only gates: they verify stock and previously patched source
+upgrades, idempotence, the JSON helper, and the injected truncation branches
+against vLLM's list-valued tool-call serialization contract.
 
 Live behavior (finish_reason=length on truncation, no invalid-JSON args) is
 verified separately against a running serve; this gate just guards the
@@ -15,8 +15,10 @@ import importlib.util
 import json
 import shutil
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 HOTFIX = ROOT / "patches" / "hotfix-dsv4-issue55-tool-truncation.py"
@@ -125,6 +127,64 @@ class Issue55HotfixTest(unittest.TestCase):
             # ensure file size doesn't keep growing
             n = path.read_text(encoding="utf-8").count(self.hf.MARK)
             self.assertEqual(n, 3)  # one mark per applied edit
+
+    def test_upgrade_previous_hotfix_is_idempotent(self):
+        # Include mixed old/new installs and the streaming prefix-match trap.
+        for old_stream, old_chat in [(True, True), (True, False), (False, True)]:
+            with self.subTest(stream=old_stream, chat=old_chat), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                path = root / self.hf.SERVING
+                path.parent.mkdir(parents=True)
+                source = self.stock.replace(self.hf.HELPER_ANCHOR, self.hf.HELPER_NEW)
+                source = source.replace(self.hf.STREAMING_OLD,
+                    self.hf.STREAMING_PREVIOUS if old_stream else self.hf.STREAMING_NEW)
+                source = source.replace(self.hf.NOSTREAM_OLD,
+                    self.hf.NOSTREAM_PREVIOUS if old_chat else self.hf.NOSTREAM_NEW)
+                path.write_text(source, encoding="utf-8")
+                import sys
+                from unittest.mock import patch
+                with patch.object(sys, "argv", ["hf", str(root)]):
+                    self.assertEqual(self.hf.main(), 0)
+                    upgraded = path.read_text(encoding="utf-8")
+                    self.assertNotIn(self.hf.STREAMING_PREVIOUS, upgraded)
+                    self.assertNotIn(self.hf.NOSTREAM_PREVIOUS, upgraded)
+                    self.assertIn(self.hf.STREAMING_NEW, upgraded)
+                    self.assertIn(self.hf.NOSTREAM_NEW, upgraded)
+                    self.assertEqual(self.hf.main(), 0)
+                    self.assertEqual(path.read_text(encoding="utf-8"), upgraded)
+
+    def test_truncation_preserves_serializable_lists_in_both_response_paths(self):
+        valid = SimpleNamespace(function=SimpleNamespace(arguments='{"ok":true}'))
+        invalid = SimpleNamespace(function=SimpleNamespace(arguments='{"unfinished":'))
+        no_function = SimpleNamespace(function=None)
+        cases = [
+            ("length", [invalid, no_function], []),
+            ("length", [invalid, valid], [valid]),
+            ("length", [valid], [valid]),
+            ("length", [], []),
+            ("stop", [invalid, valid], [invalid, valid]),
+        ]
+        for streaming in (True, False):
+            for reason, calls, expected in cases:
+                with self.subTest(streaming=streaming, reason=reason, calls=calls):
+                    message = SimpleNamespace(tool_calls=list(calls))
+                    ns = dict(output=SimpleNamespace(finish_reason=reason, index=0),
+                        delta_message=message, message=message, tools_streamed=[True], i=0,
+                        tool_choice_function_name=None, is_finish_reason_tool_calls=True,
+                        logprobs=None, ChatCompletionResponseChoice=SimpleNamespace)
+                    exec(self.hf.HELPER_NEW, ns)
+                    code = self.hf.STREAMING_NEW if streaming else self.hf.NOSTREAM_NEW + "\n            )"
+                    exec(textwrap.dedent(code), ns)
+                    self.assertEqual(message.tool_calls, expected)
+                    finish = ns["finish_reason_"] if streaming else ns["choice_data"].finish_reason
+                    self.assertEqual(finish, "length" if reason == "length" else "tool_calls")
+                    # ChatMessage and DeltaMessage serializers in the pinned vLLM
+                    # both use this len(...) check before dropping empty lists.
+                    data = {"tool_calls": message.tool_calls}
+                    if len(data.get("tool_calls", [])) == 0:
+                        data.pop("tool_calls", None)
+                    encoded = json.dumps(data, default=vars)
+                    self.assertNotIn('"tool_calls": null', encoded)
 
     def test_helper_json_ok(self):
         # We can't import the inserted helper directly; re-execute its body

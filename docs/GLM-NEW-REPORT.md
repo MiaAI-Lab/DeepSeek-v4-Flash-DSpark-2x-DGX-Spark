@@ -2,7 +2,7 @@
 
 > Scope: this report was produced by reading this repository
 > (`DeepSeek-v4-Flash-DSpark-2x-DGX-Spark`) at `HEAD` (commit `b131b2a`).
-> It targets **only** the default DeepSeek-V4-Flash-0731 DSpark lane (Anemll
+> It targets **only** the then-default DeepSeek-V4-Flash-0731 DSpark lane as of that commit (Anemll
 > image, NVFP4 DS-MLA KV, MTP-5 probabilistic spec decode, `deepseek_v4`
 > tokenizer + tool/reasoning parser). It does **not** cover the experimental
 > GLM-5.2 lane under `vLLM-Moet/`. No new benchmarks were run; the findings
@@ -301,13 +301,13 @@ tool-turn reasoning retention after every encoder install.
 
 ## 4. Measurement discipline (applies to every lever above)
 
-The repo's own benchmark methodology lives in `benchmarks/bench_decode_only.py`
+The repo's own benchmark methodology lived in `benchmarks/bench_decode_only.py` (not in this checkout; the in-repo equivalent is `scripts/benchmark-0731.py`)
 and `scripts/benchmark-0731.py`. The non-negotiable rules for trusting any
 DeepSeek-V4-Flash-0731 number:
 
 1. **Measure tokens via API `usage.completion_tokens`, not SSE chunk counts.**
    MTP emits multi-token chunks; chunk counts skew the rate
-   (`benchmarks/bench_decode_only.py`).
+   (`benchmarks/bench_decode_only.py`, not in this checkout).
 2. **Use the decode-only window.** Per-stream decode tok/s =
    `(completion_tokens − 1) / (t_last − t_first)`; aggregate =
    `sum(completion_tokens − 1) / (max t_last − min t_first)` — prefill and the
@@ -378,7 +378,7 @@ DeepSeek-V4-Flash-0731 number:
 | 200K/16 high-concurrency profile | `README.md` (“Optional: Stage-C / 200K-16”), `results/RESULTS-2026-08-14.md` |
 | Big-prompt lane, KV math | `README.md` (default profile + “How the KV cache works”) |
 | Published 0731 sweep medians | `results/deepseek-v4-flash-0731-2x-dgx-spark.json`, `results/RESULTS-2026-08-14.md` |
-| Benchmark methodology (decode-only) | `benchmarks/bench_decode_only.py`, `scripts/benchmark-0731.py` |
+| Benchmark methodology (decode-only) | `scripts/benchmark-0731.py` (`benchmarks/bench_decode_only.py` not in this checkout) |
 | earlyoom host note | `README.md` (Quick start) |
 
 ---
